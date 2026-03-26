@@ -135,66 +135,25 @@ struct StorageTreemapView: View {
             let total = sorted.reduce(Int64(0)) { $0 + $1.size }
             let rects = sliceLayout(items: sorted, totalSize: total, container: CGRect(origin: .zero, size: geo.size))
 
-            ZStack {
+            ZStack(alignment: .topLeading) {
                 ForEach(Array(zip(sorted, rects).enumerated()), id: \.element.0.id) { index, pair in
                     let (item, rect) = pair
                     let pct = total > 0 ? Int(Double(item.size) / Double(total) * 100) : 0
 
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(TreemapItem.colorAt(index).gradient.opacity(hoveredItem == item.id ? 1.0 : 0.75))
-                        .overlay {
-                            VStack(spacing: 2) {
-                                if rect.height > 30 {
-                                    Image(systemName: item.isDirectory ? "folder.fill" : "doc.fill")
-                                        .font(.system(size: cellFontSize(rect, base: 16)))
-                                }
-                                if rect.width > 45 {
-                                    Text(item.name)
-                                        .font(.system(size: cellFontSize(rect, base: 12), weight: .semibold))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                }
-                                if rect.width > 35 && rect.height > 35 {
-                                    Text("\(pct)%")
-                                        .font(.system(size: cellFontSize(rect, base: 11), weight: .bold, design: .rounded))
-                                        .opacity(0.9)
-                                }
-                                if rect.width > 55 && rect.height > 50 {
-                                    Text(item.sizeFormatted)
-                                        .font(.system(size: cellFontSize(rect, base: 10)))
-                                        .opacity(0.7)
-                                }
-                            }
-                            .foregroundStyle(.white)
-                            .padding(3)
-                        }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6)
-                                .stroke(.white.opacity(hoveredItem == item.id ? 0.6 : 0.1), lineWidth: hoveredItem == item.id ? 2 : 0.5)
-                        )
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .onHover { h in
+                    TreemapCellView(
+                        item: item, index: index, pct: pct, rect: rect,
+                        isHovered: hoveredItem == item.id,
+                        onHover: { h in
                             withAnimation(.easeInOut(duration: 0.12)) { hoveredItem = h ? item.id : nil }
-                        }
-                        .onTapGesture {
+                        },
+                        onTap: {
                             if item.isDirectory { drillDown(to: item) }
                             else { revealInFinder(item.path) }
-                        }
-                        .contextMenu {
-                            if item.isDirectory {
-                                Button { drillDown(to: item) } label: {
-                                    Label("하위 폴더 탐색", systemImage: "folder.badge.magnifyingglass")
-                                }
-                            }
-                            Button { revealInFinder(item.path) } label: {
-                                Label("Finder에서 보기", systemImage: "magnifyingglass")
-                            }
-                            Divider()
-                            Button(role: .destructive) { trashItem(item) } label: {
-                                Label("휴지통으로 이동", systemImage: "trash")
-                            }
-                        }
+                        },
+                        onDrillDown: { drillDown(to: item) },
+                        onReveal: { revealInFinder(item.path) },
+                        onTrash: { trashItem(item) }
+                    )
                 }
             }
         }
@@ -204,6 +163,84 @@ struct StorageTreemapView: View {
     private func cellFontSize(_ rect: CGRect, base: CGFloat) -> CGFloat {
         max(8, min(base, min(rect.width, rect.height) / 6))
     }
+}
+
+// MARK: - Treemap Cell View (정확한 클릭 영역)
+
+private struct TreemapCellView: View {
+    let item: TreemapItem
+    let index: Int
+    let pct: Int
+    let rect: CGRect
+    let isHovered: Bool
+    let onHover: (Bool) -> Void
+    let onTap: () -> Void
+    let onDrillDown: () -> Void
+    let onReveal: () -> Void
+    let onTrash: () -> Void
+
+    private func fontSize(_ base: CGFloat) -> CGFloat {
+        max(8, min(base, min(rect.width, rect.height) / 6))
+    }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(TreemapItem.colorAt(index).gradient.opacity(isHovered ? 1.0 : 0.75))
+            .overlay {
+                VStack(spacing: 2) {
+                    if rect.height > 30 {
+                        Image(systemName: item.isDirectory ? "folder.fill" : "doc.fill")
+                            .font(.system(size: fontSize(16)))
+                    }
+                    if rect.width > 45 {
+                        Text(item.name)
+                            .font(.system(size: fontSize(12), weight: .semibold))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if rect.width > 35 && rect.height > 35 {
+                        Text("\(pct)%")
+                            .font(.system(size: fontSize(11), weight: .bold, design: .rounded))
+                            .opacity(0.9)
+                    }
+                    if rect.width > 55 && rect.height > 50 {
+                        Text(item.sizeFormatted)
+                            .font(.system(size: fontSize(10)))
+                            .opacity(0.7)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(3)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(.white.opacity(isHovered ? 0.6 : 0.1), lineWidth: isHovered ? 2 : 0.5)
+            )
+            .frame(width: max(1, rect.width), height: max(1, rect.height))
+            .contentShape(Rectangle())
+            .onHover(perform: onHover)
+            .onTapGesture(perform: onTap)
+            .contextMenu {
+                if item.isDirectory {
+                    Button { onDrillDown() } label: {
+                        Label("하위 폴더 탐색", systemImage: "folder.badge.magnifyingglass")
+                    }
+                }
+                Button { onReveal() } label: {
+                    Label("Finder에서 보기", systemImage: "magnifyingglass")
+                }
+                Divider()
+                Button(role: .destructive) { onTrash() } label: {
+                    Label("휴지통으로 이동", systemImage: "trash")
+                }
+            }
+            .offset(x: rect.minX, y: rect.minY)
+    }
+}
+
+// MARK: - StorageTreemapView extensions
+
+private extension StorageTreemapView {
 
     // MARK: - Ranking List (오른쪽 패널)
 

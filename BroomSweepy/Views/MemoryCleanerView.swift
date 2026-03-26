@@ -99,6 +99,7 @@ struct MemoryCleanerView: View {
     }
 
     private var purgeButton: some View {
+        VStack(spacing: 10) {
         Button(action: purgeMemory) {
             HStack(spacing: 10) {
                 if isPurging {
@@ -118,6 +119,15 @@ struct MemoryCleanerView: View {
         .buttonStyle(.borderedProminent)
         .tint(.accentColor)
         .disabled(isPurging)
+
+        if isPurging {
+            Button("취소") {
+                isPurging = false
+                freedAmount = "작업이 취소되었습니다"
+            }
+            .buttonStyle(.bordered)
+        }
+        } // VStack
     }
 
     private func refreshMemory() {

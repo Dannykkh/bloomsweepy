@@ -39,6 +39,8 @@ struct DuplicateFilesView: View {
                         ProgressView(value: viewModel.scanProgress)
                             .frame(maxWidth: 300)
                     }
+                    Button("취소") { viewModel.cancelCurrentTask() }
+                        .buttonStyle(.bordered)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .transition(.opacity)

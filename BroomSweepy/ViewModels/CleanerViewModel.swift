@@ -7,6 +7,8 @@ final class CleanerViewModel {
     var isScanning = false
     var scanProgress: Double = 0
     var scanMessage = ""
+    var cleanErrors: [String] = []
+    var currentTask: Task<Void, Never>?
 
     // MARK: - Data
     var cacheItems: [CacheItem] = []
@@ -170,6 +172,7 @@ final class CleanerViewModel {
         guard !items.isEmpty else { return }
         isScanning = true
         scanMessage = "캐시 정리 중..."
+        cleanErrors = []
 
         let result = await Task.detached { [engine] in
             engine.cleanCache(items: items)
@@ -177,12 +180,26 @@ final class CleanerViewModel {
 
         selectedCacheIDs.removeAll()
         isScanning = false
+        cleanErrors = result.errors
+
         if result.errors.isEmpty {
             toastMessage = "정리 완료! \(formatSize(result.freed)) 확보"
+        } else if result.freed > 0 {
+            toastMessage = "\(formatSize(result.freed)) 확보 (\(result.errors.count)개 항목 권한 부족)"
         } else {
-            toastMessage = "\(formatSize(result.freed)) 확보 (일부 항목 권한 부족)"
+            toastMessage = "삭제 권한이 없습니다. 터미널에서 직접 삭제하세요."
         }
         await scanCache()
+    }
+
+    /// 진행 중인 작업 취소
+    @MainActor
+    func cancelCurrentTask() {
+        currentTask?.cancel()
+        currentTask = nil
+        isScanning = false
+        scanMessage = ""
+        toastMessage = "작업이 취소되었습니다"
     }
 
     @MainActor

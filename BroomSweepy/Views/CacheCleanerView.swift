@@ -65,6 +65,49 @@ struct CacheCleanerView: View {
                     }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
+
+                // 삭제 실패 안내
+                if !viewModel.cleanErrors.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            Text("\(viewModel.cleanErrors.count)개 항목을 삭제할 수 없습니다")
+                                .font(.callout.bold())
+                                .foregroundStyle(.orange)
+                        }
+                        Text("샌드박스 권한 제한으로 일부 캐시를 직접 삭제할 수 없습니다.\n터미널에서 아래 명령으로 삭제할 수 있습니다:")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack {
+                            Text("npm cache clean --force")
+                                .font(.system(size: 12, design: .monospaced))
+                                .padding(8)
+                                .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString("npm cache clean --force", forType: .string)
+                                viewModel.toastMessage = "클립보드에 복사됨"
+                            } label: {
+                                Image(systemName: "doc.on.doc")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help("명령어 복사")
+                        }
+                    }
+                    .padding(16)
+                    .background(.orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.orange.opacity(0.15), lineWidth: 1)
+                    )
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 12)
+                }
             }
         }
         .alert("캐시 정리", isPresented: $showConfirm) {
@@ -87,6 +130,10 @@ struct CacheCleanerView: View {
                 ProgressView(value: viewModel.scanProgress)
                     .frame(maxWidth: 300)
             }
+            Button("취소") {
+                viewModel.cancelCurrentTask()
+            }
+            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
