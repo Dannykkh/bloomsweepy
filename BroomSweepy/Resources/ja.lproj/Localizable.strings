@@ -1,0 +1,131 @@
+/* Navigation */
+"dashboard" = "ダッシュボード";
+"space_cleanup" = "ストレージ";
+"speed_optimization" = "高速化";
+"security" = "セキュリティ";
+"privacy" = "プライバシー";
+"file_management" = "ファイル";
+"settings" = "設定";
+
+/* Space Category Tabs */
+"cache" = "キャッシュ";
+"large_files" = "大容量";
+"duplicates" = "重複";
+"storage_map" = "ストレージマップ";
+"cleanup_tools" = "ツール";
+
+/* Speed Category Tabs */
+"memory" = "メモリ";
+"running_apps" = "実行中のアプリ";
+"startup_programs" = "スタートアップ";
+"system_monitor" = "モニター";
+
+/* Security Tabs */
+"malware_scan" = "マルウェアスキャン";
+"app_permissions" = "アプリ権限";
+
+/* Files Tabs */
+"file_organizer" = "整理";
+"rule_builder" = "ルール";
+"app_manager" = "アプリ管理";
+
+/* Category Descriptions */
+"space_desc" = "キャッシュ、大容量、重複ファイル";
+"speed_desc" = "メモリ、スタートアップ";
+"security_desc" = "マルウェア、アプリ権限";
+"privacy_desc" = "ブラウザ、クラウド";
+"files_desc" = "整理、ルール、アプリ管理";
+"settings_desc" = "スキャン設定、自動管理";
+
+/* Dashboard */
+"mac_clean" = "Macをきれいに保つ";
+"full_scan_start" = "フルスキャン";
+"one_click_optimize" = "ワンクリック最適化";
+"daily_briefing_morning" = "おはようございます";
+"daily_briefing_afternoon" = "こんにちは";
+"daily_briefing_evening" = "こんばんは";
+
+/* Health Score */
+"health_excellent" = "最高";
+"health_good" = "良好";
+"health_fair" = "普通";
+"health_caution" = "注意";
+"health_danger" = "危険";
+
+/* Scan States */
+"scanning" = "スキャン中...";
+"scan_complete" = "スキャン完了！";
+"cleaning" = "クリーニング中...";
+"all_clean" = "きれいです！";
+"no_cache_files" = "クリーニングするキャッシュはありません";
+"no_large_files" = "50MB以上の大容量ファイルはありません";
+"no_duplicates" = "重複ファイルは見つかりませんでした";
+"click_to_scan_cache" = "クリックしてキャッシュをスキャン";
+"click_to_scan_large" = "クリックして大容量ファイルをスキャン";
+"click_to_scan_dupes" = "クリックして重複ファイルをスキャン";
+"click_to_analyze_storage" = "クリックしてストレージを分析";
+
+/* Descriptions */
+"cache_desc" = "アプリが高速化のために一時保存するデータです。\n削除してもアプリが自動的に再作成するため安全です。";
+"cache_safe" = "✅ 削除してもアプリに影響なし";
+"large_desc" = "50MB以上の大きなファイルを見つけます。\n古いインストーラー、アーカイブ、動画などを確認。";
+"large_safe" = "✅ ゴミ箱に移動 — 復元可能";
+"dupe_desc" = "同じ内容のファイルが複数箇所にあるか確認します。\nオリジナルを保護し、コピーのみ削除できます。";
+"dupe_safe" = "✅ オリジナル自動保護 — コピーのみ削除";
+"storage_desc" = "フォルダを選択すると、ファイル・フォルダのサイズを\nカラーブロックで一目で表示します。";
+
+/* Buttons */
+"rescan" = "再スキャン";
+"clean_selected" = "選択項目をクリーン";
+"delete_selected" = "選択項目を削除";
+"select_all" = "すべて選択";
+"cancel" = "キャンセル";
+"delete" = "削除";
+"clean" = "クリーン";
+"refresh" = "更新";
+"back_to_dashboard" = "ダッシュボードに戻る";
+"reveal_in_finder" = "Finderで表示";
+"move_to_trash" = "ゴミ箱に移動";
+"explore_subfolder" = "サブフォルダを探索";
+"add_folder" = "フォルダを追加";
+
+/* Smart Clean */
+"smart_clean_title" = "ワンクリックスマートクリーン";
+"analyzing_mac" = "Macを分析中...";
+"safe_items_only" = "安全な項目のみ選択";
+"safe" = "安全";
+"review" = "確認";
+"caution" = "注意";
+"clean_complete" = "クリーニング完了！";
+"selected_safe" = "安全な項目が選択中";
+"selected_total" = "合計選択中";
+"next_recommendation" = "次のおすすめ";
+
+/* Menu Bar */
+"open_app" = "BroomSweepyを開く";
+"quit" = "終了";
+"disk_free" = "空き";
+
+/* Settings */
+"scan_settings" = "スキャン設定";
+"auto_management" = "自動管理";
+"excluded_folders" = "除外フォルダ";
+"menu_bar_settings" = "メニューバー";
+"clean_history" = "クリーニング履歴";
+"app_info" = "アプリ情報";
+"total_freed" = "合計確保容量";
+"this_month" = "今月";
+"large_file_threshold" = "大容量ファイル基準";
+"auto_clean_notification" = "自動クリーンリマインダー";
+"notification_interval" = "リマインダー間隔";
+"show_memory_percent" = "メモリ使用量を表示";
+
+/* Onboarding */
+"welcome_title" = "BroomSweepyへようこそ";
+"welcome_subtitle" = "Macをきれいで高速に保ちます";
+"permission_needed" = "フォルダアクセス権限が必要です";
+"allow_folder_access" = "フォルダアクセスを許可";
+"ready_title" = "準備完了！";
+"start_using" = "始める";
+"next" = "次へ";
+"previous" = "戻る";

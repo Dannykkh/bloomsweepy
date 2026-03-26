@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension Notification.Name {
+    static let navigateTo = Notification.Name("navigateTo")
+}
+
 @main
 struct BroomSweepyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -13,11 +17,61 @@ struct BroomSweepyApp: App {
         .windowStyle(.titleBar)
         .defaultSize(width: 1100, height: 750)
         .commands {
+            // BroomSweepy 메뉴
             CommandGroup(after: .appInfo) {
+                Divider()
                 Button("설정...") {
-                    // 설정은 사이드바에서 접근
+                    NotificationCenter.default.post(name: .navigateTo, object: "settings")
                 }
                 .keyboardShortcut(",")
+            }
+
+            // 파일 메뉴 대체
+            CommandGroup(replacing: .newItem) {
+                Button("전체 스캔") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "scan")
+                }
+                .keyboardShortcut("r")
+
+                Button("원클릭 최적화") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "smartclean")
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                Divider()
+            }
+
+            // 이동 메뉴
+            CommandMenu("이동") {
+                Button("대시보드") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "dashboard")
+                }
+                .keyboardShortcut("1")
+
+                Button("공간 정리") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "space")
+                }
+                .keyboardShortcut("2")
+
+                Button("속도 최적화") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "speed")
+                }
+                .keyboardShortcut("3")
+
+                Button("보안") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "security")
+                }
+                .keyboardShortcut("4")
+
+                Button("개인정보") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "privacy")
+                }
+                .keyboardShortcut("5")
+
+                Button("파일 관리") {
+                    NotificationCenter.default.post(name: .navigateTo, object: "files")
+                }
+                .keyboardShortcut("6")
             }
         }
 
@@ -54,6 +108,12 @@ struct BroomSweepyApp: App {
 // MARK: - AppDelegate (창 닫아도 상주)
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // 알림 권한 요청 + 스케줄 시작
+        HealthMonitor.shared.requestNotificationPermission()
+        HealthMonitor.shared.startScheduleIfEnabled()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false  // 창 닫아도 메뉴바에 상주
     }

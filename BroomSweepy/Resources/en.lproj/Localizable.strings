@@ -1,0 +1,131 @@
+/* Navigation */
+"dashboard" = "Dashboard";
+"space_cleanup" = "Space";
+"speed_optimization" = "Speed";
+"security" = "Security";
+"privacy" = "Privacy";
+"file_management" = "Files";
+"settings" = "Settings";
+
+/* Space Category Tabs */
+"cache" = "Cache";
+"large_files" = "Large Files";
+"duplicates" = "Duplicates";
+"storage_map" = "Storage Map";
+"cleanup_tools" = "Tools";
+
+/* Speed Category Tabs */
+"memory" = "Memory";
+"running_apps" = "Running Apps";
+"startup_programs" = "Startup";
+"system_monitor" = "Monitor";
+
+/* Security Tabs */
+"malware_scan" = "Malware Scan";
+"app_permissions" = "Permissions";
+
+/* Files Tabs */
+"file_organizer" = "Organize";
+"rule_builder" = "Rules";
+"app_manager" = "Apps";
+
+/* Category Descriptions */
+"space_desc" = "Cache, large files, duplicates";
+"speed_desc" = "Memory, startup programs";
+"security_desc" = "Malware, app permissions";
+"privacy_desc" = "Browser, cloud";
+"files_desc" = "Organize, rules, app manager";
+"settings_desc" = "Scan settings, auto clean";
+
+/* Dashboard */
+"mac_clean" = "Keep your Mac clean";
+"full_scan_start" = "Full Scan";
+"one_click_optimize" = "Smart Clean";
+"daily_briefing_morning" = "Good morning";
+"daily_briefing_afternoon" = "Good afternoon";
+"daily_briefing_evening" = "Good evening";
+
+/* Health Score */
+"health_excellent" = "Excellent";
+"health_good" = "Good";
+"health_fair" = "Fair";
+"health_caution" = "Caution";
+"health_danger" = "Critical";
+
+/* Scan States */
+"scanning" = "Scanning...";
+"scan_complete" = "Scan Complete!";
+"cleaning" = "Cleaning...";
+"all_clean" = "All Clean!";
+"no_cache_files" = "No cache files to clean";
+"no_large_files" = "No large files (50MB+) found";
+"no_duplicates" = "No duplicate files found";
+"click_to_scan_cache" = "Click to scan cache";
+"click_to_scan_large" = "Click to scan large files";
+"click_to_scan_dupes" = "Click to scan duplicates";
+"click_to_analyze_storage" = "Click to analyze storage";
+
+/* Descriptions */
+"cache_desc" = "Temporary data stored by apps for faster loading.\nSafe to delete — apps will recreate them automatically.";
+"cache_safe" = "✅ Safe to delete — no impact on app functionality";
+"large_desc" = "Find files larger than 50MB.\nOld installers, archives, videos that take up space.";
+"large_safe" = "✅ Moved to Trash — recoverable if needed";
+"dupe_desc" = "Find identical files in multiple locations.\nOriginals are protected, only copies can be removed.";
+"dupe_safe" = "✅ Originals protected — only copies are removed";
+"storage_desc" = "Select a folder to visualize file and folder sizes\nas colored blocks at a glance.";
+
+/* Buttons */
+"rescan" = "Rescan";
+"clean_selected" = "Clean Selected";
+"delete_selected" = "Delete Selected";
+"select_all" = "Select All";
+"cancel" = "Cancel";
+"delete" = "Delete";
+"clean" = "Clean";
+"refresh" = "Refresh";
+"back_to_dashboard" = "Back to Dashboard";
+"reveal_in_finder" = "Reveal in Finder";
+"move_to_trash" = "Move to Trash";
+"explore_subfolder" = "Explore Subfolder";
+"add_folder" = "Add Folder";
+
+/* Smart Clean */
+"smart_clean_title" = "One-Click Smart Clean";
+"analyzing_mac" = "Analyzing your Mac...";
+"safe_items_only" = "Select Safe Items Only";
+"safe" = "Safe";
+"review" = "Review";
+"caution" = "Caution";
+"clean_complete" = "Cleanup Complete!";
+"selected_safe" = "Safe items selected";
+"selected_total" = "Total selected";
+"next_recommendation" = "Up Next";
+
+/* Menu Bar */
+"open_app" = "Open BroomSweepy";
+"quit" = "Quit";
+"disk_free" = "Free";
+
+/* Settings */
+"scan_settings" = "Scan Settings";
+"auto_management" = "Auto Management";
+"excluded_folders" = "Excluded Folders";
+"menu_bar_settings" = "Menu Bar";
+"clean_history" = "Clean History";
+"app_info" = "About";
+"total_freed" = "Total Freed";
+"this_month" = "This Month";
+"large_file_threshold" = "Large File Threshold";
+"auto_clean_notification" = "Auto Clean Reminder";
+"notification_interval" = "Reminder Interval";
+"show_memory_percent" = "Show Memory Usage";
+
+/* Onboarding */
+"welcome_title" = "Welcome to BroomSweepy";
+"welcome_subtitle" = "Keep your Mac clean and fast";
+"permission_needed" = "Folder access is required";
+"allow_folder_access" = "Allow Folder Access";
+"ready_title" = "All Set!";
+"start_using" = "Get Started";
+"next" = "Next";
+"previous" = "Back";

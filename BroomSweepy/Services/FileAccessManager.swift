@@ -7,7 +7,10 @@ final class FileAccessManager {
 
     private let bookmarkKey = "com.broomsweepy.bookmarks"
 
-    /// 사용자에게 폴더 선택 다이얼로그 표시 (샌드박스 환경에서 폴더 접근 권한 획득)
+    /// 현재 접근 중인 URL을 thread-safe하게 저장
+    private nonisolated(unsafe) var _activeURL: URL?
+
+    /// 사용자에게 폴더 선택 다이얼로그 표시
     func requestFolderAccess(message: String = "스캔할 폴더를 선택하세요") -> URL? {
         let panel = NSOpenPanel()
         panel.message = message
@@ -21,10 +24,11 @@ final class FileAccessManager {
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
 
         saveBookmark(for: url)
+        _activeURL = url
         return url
     }
 
-    /// 홈 폴더 접근 요청 (기본 스캔 경로)
+    /// 홈 폴더 접근 요청
     func requestHomeAccess() -> URL? {
         if let url = loadBookmark() {
             return url
@@ -40,11 +44,13 @@ final class FileAccessManager {
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         ) else { return }
-
         UserDefaults.standard.set(data, forKey: bookmarkKey)
     }
 
     nonisolated func loadBookmark() -> URL? {
+        // 이미 접근 중이면 반환
+        if let active = _activeURL { return active }
+
         guard let data = UserDefaults.standard.data(forKey: bookmarkKey) else { return nil }
 
         var isStale = false
@@ -56,19 +62,18 @@ final class FileAccessManager {
         ) else { return nil }
 
         if isStale {
-            guard let freshData = try? url.bookmarkData(
+            if let freshData = try? url.bookmarkData(
                 options: .withSecurityScope,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
-            ) else { return nil }
-            UserDefaults.standard.set(freshData, forKey: bookmarkKey)
+            ) {
+                UserDefaults.standard.set(freshData, forKey: bookmarkKey)
+            }
         }
 
-        guard url.startAccessingSecurityScopedResource() else { return nil }
+        // 접근 시작 (앱 수명 동안 유지)
+        _ = url.startAccessingSecurityScopedResource()
+        _activeURL = url
         return url
-    }
-
-    nonisolated func stopAccess(to url: URL) {
-        url.stopAccessingSecurityScopedResource()
     }
 }

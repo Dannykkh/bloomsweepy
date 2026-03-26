@@ -199,6 +199,17 @@ struct LargeFileRow: View {
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture { onToggle() }
+        .contextMenu {
+            Button { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) } label: {
+                Label("Finder에서 보기", systemImage: "magnifyingglass")
+            }
+            Divider()
+            Button(role: .destructive) {
+                try? FileManager.default.trashItem(at: URL(fileURLWithPath: file.path), resultingItemURL: nil)
+            } label: {
+                Label("휴지통으로 이동", systemImage: "trash")
+            }
+        }
     }
 
     private func shortenPath(_ path: String) -> String {

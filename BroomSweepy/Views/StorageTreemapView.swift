@@ -315,19 +315,31 @@ struct StorageTreemapView: View {
     // MARK: - States
 
     private var emptyState: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "square.grid.3x3.topleft.filled")
-                .font(.system(size: 56))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(.blue)
-            VStack(spacing: 8) {
-                Text("저장공간 시각화")
-                    .font(.title3.bold())
-                Text("폴더를 선택하면 파일/폴더 크기를\n색상 블록으로 한눈에 보여드립니다")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+        Button {
+            Task { await scanFolder() }
+        } label: {
+            VStack(spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(.blue.opacity(0.1))
+                        .frame(width: 88, height: 88)
+                    Image(systemName: "square.grid.3x3.topleft.filled")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.blue)
+                }
+                VStack(spacing: 8) {
+                    Text("클릭하여 저장공간 분석")
+                        .font(.title3.bold())
+                    Text("폴더를 선택하면 파일/폴더 크기를\n색상 블록으로 한눈에 보여드립니다")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
+        }
+        .buttonStyle(.plain)
+        .onHover { h in
+            if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

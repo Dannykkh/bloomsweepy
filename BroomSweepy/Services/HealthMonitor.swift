@@ -129,6 +129,57 @@ final class HealthMonitor {
         UserDefaults.standard.set(Date(), forKey: "lastCleanDate")
     }
 
+    // MARK: - 스케줄 자동 정리
+
+    private var scheduleTimer: Timer?
+
+    /// 앱 시작 시 호출 — 설정에 따라 주기적 체크 타이머 등록
+    func startScheduleIfEnabled() {
+        scheduleTimer?.invalidate()
+
+        guard UserDefaults.standard.bool(forKey: "autoCleanEnabled") else { return }
+        let intervalDays = UserDefaults.standard.integer(forKey: "autoCleanInterval")
+        guard intervalDays > 0 else { return }
+
+        // 마지막 정리 시점 확인
+        let lastClean = UserDefaults.standard.object(forKey: "lastCleanDate") as? Date ?? .distantPast
+        let daysSinceClean = Date().timeIntervalSince(lastClean) / (24 * 3600)
+
+        if daysSinceClean >= Double(intervalDays) {
+            // 바로 알림
+            sendCleanReminder()
+        }
+
+        // 6시간마다 체크 (앱이 실행 중인 동안)
+        scheduleTimer = Timer.scheduledTimer(withTimeInterval: 6 * 3600, repeats: true) { [weak self] _ in
+            self?.checkSchedule()
+        }
+    }
+
+    private func checkSchedule() {
+        guard UserDefaults.standard.bool(forKey: "autoCleanEnabled") else { return }
+        let intervalDays = UserDefaults.standard.integer(forKey: "autoCleanInterval")
+        let lastClean = UserDefaults.standard.object(forKey: "lastCleanDate") as? Date ?? .distantPast
+        let daysSinceClean = Date().timeIntervalSince(lastClean) / (24 * 3600)
+
+        if daysSinceClean >= Double(intervalDays) {
+            sendCleanReminder()
+        }
+    }
+
+    private func sendCleanReminder() {
+        guard UserDefaults.standard.bool(forKey: "notificationsEnabled") else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "BroomSweepy"
+        content.body = "정리할 시간이에요! Mac을 쾌적하게 유지하세요."
+        content.sound = .default
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(identifier: "schedule-clean", content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
+
     /// macOS 알림 발송
     func sendNotificationIfNeeded() {
         guard let b = briefing, b.healthScore < 70 else { return }

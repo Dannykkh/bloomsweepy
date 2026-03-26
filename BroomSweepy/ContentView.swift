@@ -17,15 +17,27 @@ struct RootView: View {
 // MARK: - Main Category (5 + 대시보드)
 
 enum MainCategory: String, CaseIterable, Identifiable {
-    case dashboard = "대시보드"
-    case space = "공간 정리"
-    case speed = "속도 최적화"
-    case security = "보안"
-    case privacy = "개인정보"
-    case files = "파일 관리"
-    case settings = "설정"
+    case dashboard
+    case space
+    case speed
+    case security
+    case privacy
+    case files
+    case settings
 
-    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .dashboard: return String(localized: "dashboard")
+        case .space: return String(localized: "space_cleanup")
+        case .speed: return String(localized: "speed_optimization")
+        case .security: return String(localized: "security")
+        case .privacy: return String(localized: "privacy")
+        case .files: return String(localized: "file_management")
+        case .settings: return String(localized: "settings")
+        }
+    }
+
+    var id: String { String(describing: self) }
 
     var icon: String {
         switch self {
@@ -111,6 +123,22 @@ struct ContentView: View {
         .onChange(of: selection) { _, _ in
             bounceValue += 1
             showSmartClean = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .navigateTo)) { notif in
+            guard let target = notif.object as? String else { return }
+            switch target {
+            case "dashboard": selection = .dashboard
+            case "space": selection = .space
+            case "speed": selection = .speed
+            case "security": selection = .security
+            case "privacy": selection = .privacy
+            case "files": selection = .files
+            case "settings": selection = .settings
+            case "smartclean": selection = .dashboard; showSmartClean = true
+            case "scan": selection = .dashboard
+                // scanAll은 DashboardView에서 처리
+            default: break
+            }
         }
     }
 
@@ -216,11 +244,11 @@ private struct SidebarCategoryRow: View {
             }
 
             if category == .dashboard {
-                Text(category.rawValue)
+                Text(category.label)
                     .font(.system(size: 13, weight: .medium))
             } else {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(category.rawValue)
+                    Text(category.label)
                         .font(.system(size: 13, weight: .medium))
                     Text(category.description)
                         .font(.system(size: 10))
@@ -237,7 +265,7 @@ private struct SidebarCategoryRow: View {
         .onChange(of: isSelected) { _, newValue in
             if newValue { bounceCount += 1 }
         }
-        .help(category.description.isEmpty ? category.rawValue : category.description)
+        .help(category.description.isEmpty ? category.label : category.description)
     }
 
     @ViewBuilder

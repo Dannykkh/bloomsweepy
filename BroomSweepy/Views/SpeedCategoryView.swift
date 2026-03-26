@@ -6,6 +6,7 @@ struct SpeedCategoryView: View {
 
     enum Tab: String, CaseIterable, Identifiable {
         case memory = "메모리"
+        case performance = "실행 중인 앱"
         case startup = "시작프로그램"
         case monitor = "시스템 모니터"
         var id: String { rawValue }
@@ -18,6 +19,8 @@ struct SpeedCategoryView: View {
             switch selectedTab {
             case .memory:
                 MemoryCleanerView(viewModel: viewModel)
+            case .performance:
+                PerformanceView()
             case .startup:
                 StartupManagerView(viewModel: viewModel)
             case .monitor:

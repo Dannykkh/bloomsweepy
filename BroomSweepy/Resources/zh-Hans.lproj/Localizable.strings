@@ -1,0 +1,131 @@
+/* Navigation */
+"dashboard" = "仪表盘";
+"space_cleanup" = "空间清理";
+"speed_optimization" = "速度优化";
+"security" = "安全";
+"privacy" = "隐私";
+"file_management" = "文件管理";
+"settings" = "设置";
+
+/* Space Category Tabs */
+"cache" = "缓存";
+"large_files" = "大文件";
+"duplicates" = "重复";
+"storage_map" = "存储地图";
+"cleanup_tools" = "工具";
+
+/* Speed Category Tabs */
+"memory" = "内存";
+"running_apps" = "运行中的应用";
+"startup_programs" = "启动项";
+"system_monitor" = "监控";
+
+/* Security Tabs */
+"malware_scan" = "恶意软件扫描";
+"app_permissions" = "应用权限";
+
+/* Files Tabs */
+"file_organizer" = "整理";
+"rule_builder" = "规则";
+"app_manager" = "应用管理";
+
+/* Category Descriptions */
+"space_desc" = "缓存、大文件、重复文件";
+"speed_desc" = "内存、启动程序";
+"security_desc" = "恶意软件、应用权限";
+"privacy_desc" = "浏览器、云存储";
+"files_desc" = "整理、规则、应用管理";
+"settings_desc" = "扫描设置、自动管理";
+
+/* Dashboard */
+"mac_clean" = "保持Mac清洁";
+"full_scan_start" = "全面扫描";
+"one_click_optimize" = "一键优化";
+"daily_briefing_morning" = "早上好";
+"daily_briefing_afternoon" = "下午好";
+"daily_briefing_evening" = "晚上好";
+
+/* Health Score */
+"health_excellent" = "优秀";
+"health_good" = "良好";
+"health_fair" = "一般";
+"health_caution" = "注意";
+"health_danger" = "危险";
+
+/* Scan States */
+"scanning" = "扫描中...";
+"scan_complete" = "扫描完成！";
+"cleaning" = "清理中...";
+"all_clean" = "非常干净！";
+"no_cache_files" = "没有需要清理的缓存文件";
+"no_large_files" = "没有50MB以上的大文件";
+"no_duplicates" = "没有发现重复文件";
+"click_to_scan_cache" = "点击扫描缓存";
+"click_to_scan_large" = "点击扫描大文件";
+"click_to_scan_dupes" = "点击扫描重复文件";
+"click_to_analyze_storage" = "点击分析存储空间";
+
+/* Descriptions */
+"cache_desc" = "应用为加速运行而临时存储的数据。\n删除后应用会自动重建，安全无忧。";
+"cache_safe" = "✅ 删除不影响应用功能";
+"large_desc" = "查找50MB以上的大文件。\n旧安装包、压缩文件、视频等占用空间。";
+"large_safe" = "✅ 移至废纸篓 — 可随时恢复";
+"dupe_desc" = "查找多个位置的相同文件。\n保护原件，仅删除副本。";
+"dupe_safe" = "✅ 自动保护原件 — 仅删除副本";
+"storage_desc" = "选择文件夹后，以彩色方块直观显示\n文件和文件夹的大小。";
+
+/* Buttons */
+"rescan" = "重新扫描";
+"clean_selected" = "清理所选";
+"delete_selected" = "删除所选";
+"select_all" = "全选";
+"cancel" = "取消";
+"delete" = "删除";
+"clean" = "清理";
+"refresh" = "刷新";
+"back_to_dashboard" = "返回仪表盘";
+"reveal_in_finder" = "在Finder中显示";
+"move_to_trash" = "移至废纸篓";
+"explore_subfolder" = "浏览子文件夹";
+"add_folder" = "添加文件夹";
+
+/* Smart Clean */
+"smart_clean_title" = "一键智能清理";
+"analyzing_mac" = "正在分析您的Mac...";
+"safe_items_only" = "仅选择安全项目";
+"safe" = "安全";
+"review" = "待查";
+"caution" = "谨慎";
+"clean_complete" = "清理完成！";
+"selected_safe" = "已选安全项目";
+"selected_total" = "已选总计";
+"next_recommendation" = "下一步推荐";
+
+/* Menu Bar */
+"open_app" = "打开BroomSweepy";
+"quit" = "退出";
+"disk_free" = "可用";
+
+/* Settings */
+"scan_settings" = "扫描设置";
+"auto_management" = "自动管理";
+"excluded_folders" = "排除文件夹";
+"menu_bar_settings" = "菜单栏";
+"clean_history" = "清理记录";
+"app_info" = "关于";
+"total_freed" = "累计释放";
+"this_month" = "本月";
+"large_file_threshold" = "大文件标准";
+"auto_clean_notification" = "自动清理提醒";
+"notification_interval" = "提醒周期";
+"show_memory_percent" = "显示内存使用率";
+
+/* Onboarding */
+"welcome_title" = "欢迎使用BroomSweepy";
+"welcome_subtitle" = "保持Mac清洁快速";
+"permission_needed" = "需要文件夹访问权限";
+"allow_folder_access" = "允许文件夹访问";
+"ready_title" = "准备就绪！";
+"start_using" = "开始使用";
+"next" = "下一步";
+"previous" = "上一步";
