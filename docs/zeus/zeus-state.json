@@ -1,0 +1,44 @@
+{
+  "projectName": "BroomSweepy",
+  "currentPhase": "completed",
+  "startedAt": "2026-03-24T16:30:00+09:00",
+  "description": "BroomSweepy - macOS 네이티브 클리너 앱 (Swift/SwiftUI). App Store 배포 목표.",
+  "parsed": {
+    "industry": "utility",
+    "projectType": "macos-native-app",
+    "techStack": {
+      "language": "Swift 5.9+",
+      "ui": "SwiftUI",
+      "platform": "macOS 13.0+",
+      "ai": "Claude API (Anthropic SDK)",
+      "build": "Xcode 16 + xcodegen"
+    },
+    "features": [
+      "캐시/임시파일 정리",
+      "대용량 파일 탐색",
+      "중복 파일 탐색 (해시 기반)",
+      "디스크 사용량 시각화",
+      "파일 자동정리 (날짜 접두어, EXIF 분류, 폴더 자동생성)",
+      "LLM 스마트 파일 분류 (Claude API)",
+      "안전등급 시스템 (Safe/Review/Caution)",
+      "커스텀 규칙 빌더"
+    ],
+    "differentiation": [
+      "시각화 + 정리 통합 (DaisyDisk급 시각화 + CleanMyMac급 정리)",
+      "개발자 캐시 특화 (Xcode, Docker, npm, pip)",
+      "AI 파일 분류 (Claude API)",
+      "안전 우선 설계 (휴지통 이동, 안전등급)",
+      "Hazel 스타일 커스텀 규칙 빌더"
+    ],
+    "sandbox": "App Store (Security-Scoped Bookmarks)"
+  },
+  "phases": {
+    "phase0": { "status": "completed" },
+    "phase1": { "status": "pending" },
+    "phase2": { "status": "pending" },
+    "phase3": { "status": "pending" },
+    "phase4": { "status": "pending" },
+    "phase5": { "status": "pending" },
+    "phase6": { "status": "pending" }
+  }
+}

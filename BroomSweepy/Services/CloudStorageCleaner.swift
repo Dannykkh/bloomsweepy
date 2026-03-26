@@ -1,0 +1,174 @@
+import Foundation
+
+// MARK: - Cloud Models
+
+struct CloudProvider: Identifiable {
+    let id = UUID()
+    let name: String
+    let icon: String
+    let path: String
+    let totalSize: Int64
+    let fileCount: Int
+    var files: [CloudFile]
+
+    var totalSizeFormatted: String { ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file) }
+}
+
+struct CloudFile: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let path: String
+    let size: Int64
+    let modified: Date
+    let isOld: Bool // older than 6 months
+
+    var sizeFormatted: String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
+
+    var ageDays: Int {
+        Calendar.current.dateComponents([.day], from: modified, to: Date()).day ?? 0
+    }
+}
+
+// MARK: - CloudStorageCleaner
+
+final class CloudStorageCleaner {
+    static let shared = CloudStorageCleaner()
+    private let fm = FileManager.default
+
+    private init() {}
+
+    // MARK: - Scan
+
+    func scan(homeURL: URL? = nil, progressCallback: ((String, Double) -> Void)? = nil) -> [CloudProvider] {
+        let home = homeURL?.path ?? ("/Users/" + NSUserName())
+        var providers: [CloudProvider] = []
+
+        let cloudTargets: [(name: String, icon: String, paths: [String])] = [
+            ("iCloud Drive", "icloud", [
+                "\(home)/Library/Mobile Documents/com~apple~CloudDocs",
+            ]),
+            ("Google Drive", "externaldrive.badge.icloud", [
+                "\(home)/Google Drive",
+                "\(home)/Library/CloudStorage/GoogleDrive-*",
+            ]),
+            ("OneDrive", "cloud", [
+                "\(home)/Library/CloudStorage/OneDrive-*",
+                "\(home)/OneDrive",
+            ]),
+            ("Dropbox", "shippingbox", [
+                "\(home)/Dropbox",
+                "\(home)/Library/CloudStorage/Dropbox",
+            ]),
+        ]
+
+        for (i, target) in cloudTargets.enumerated() {
+            let progress = Double(i) / Double(cloudTargets.count)
+            progressCallback?("\(target.name) 스캔 중...", progress)
+
+            let resolvedPaths = target.paths.flatMap { resolvePath($0) }
+
+            for resolvedPath in resolvedPaths {
+                guard fm.fileExists(atPath: resolvedPath) else { continue }
+
+                let (files, totalSize, fileCount) = scanCloudDirectory(resolvedPath)
+
+                if fileCount > 0 {
+                    providers.append(CloudProvider(
+                        name: target.name,
+                        icon: target.icon,
+                        path: resolvedPath,
+                        totalSize: totalSize,
+                        fileCount: fileCount,
+                        files: files
+                    ))
+                }
+                break // Only take the first found path for each provider
+            }
+        }
+
+        progressCallback?("스캔 완료", 1.0)
+        return providers.sorted { $0.totalSize > $1.totalSize }
+    }
+
+    // MARK: - Delete Local Only
+
+    /// Delete local copy only — the cloud provider should keep the remote copy.
+    /// Works by removing the local file; cloud sync clients typically re-create a placeholder.
+    func deleteLocalOnly(paths: [String]) -> (freed: Int64, errors: [String]) {
+        var totalFreed: Int64 = 0
+        var errors: [String] = []
+
+        for path in paths {
+            do {
+                let attrs = try fm.attributesOfItem(atPath: path)
+                let size = (attrs[.size] as? Int64) ?? 0
+                try fm.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+                totalFreed += size
+            } catch {
+                errors.append("\(path): \(error.localizedDescription)")
+            }
+        }
+
+        return (totalFreed, errors)
+    }
+
+    // MARK: - Private
+
+    /// Resolve glob patterns like GoogleDrive-* to actual paths
+    private func resolvePath(_ pattern: String) -> [String] {
+        guard pattern.contains("*") else { return [pattern] }
+
+        let dir = (pattern as NSString).deletingLastPathComponent
+        let prefix = (pattern as NSString).lastPathComponent.replacingOccurrences(of: "*", with: "")
+
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { return [] }
+
+        return contents
+            .filter { $0.hasPrefix(prefix) }
+            .map { "\(dir)/\($0)" }
+    }
+
+    private func scanCloudDirectory(_ path: String) -> (files: [CloudFile], totalSize: Int64, fileCount: Int) {
+        let sixMonthsAgo = Calendar.current.date(byAdding: .month, value: -6, to: Date()) ?? Date()
+        var files: [CloudFile] = []
+        var totalSize: Int64 = 0
+        var fileCount = 0
+        let minSizeForListing: Int64 = 1024 * 1024 // 1 MB
+
+        let enumerator = fm.enumerator(
+            at: URL(fileURLWithPath: path),
+            includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) { _, _ in true }
+
+        while let url = enumerator?.nextObject() as? URL {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey, .contentModificationDateKey]),
+                  values.isDirectory == false,
+                  let fileSize = values.fileSize else { continue }
+
+            let size = Int64(fileSize)
+            totalSize += size
+            fileCount += 1
+
+            let modified = values.contentModificationDate ?? Date()
+            let isOld = modified < sixMonthsAgo
+
+            // Only add files >= 1MB to the listing to keep UI manageable
+            if size >= minSizeForListing {
+                files.append(CloudFile(
+                    name: url.lastPathComponent,
+                    path: url.path,
+                    size: size,
+                    modified: modified,
+                    isOld: isOld
+                ))
+            }
+        }
+
+        // Sort by size descending, limit to top 200
+        files.sort { $0.size > $1.size }
+        if files.count > 200 { files = Array(files.prefix(200)) }
+
+        return (files, totalSize, fileCount)
+    }
+}
