@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/bloomsweepy-core",
+  "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/dannykkh/bloomsweepy"
+
+[workspace.dependencies]
+blake3 = "1.8"
+dirs = "6"
+encoding_rs = "0.8"
+jwalk = "0.8"
+rayon = "1.11"
+quick-xml = "0.41"
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+zip = { version = "8.1", default-features = false, features = ["deflate"] }

@@ -13,9 +13,21 @@ DerivedData/
 
 # Build
 build/
+/target/
 
 # Claude Code
 .claude/
+
+# Local agent state
+/.termsnap/
+/MEMORY.md
+/memory/
+/conversations/
+/docs/ui-audit/screenshots/
+/codemap/LINT_REPORT.md
+
+# Windows
+Thumbs.db
 
 # Generated (xcodegen recreates)
 BroomSweepy.xcodeproj/
