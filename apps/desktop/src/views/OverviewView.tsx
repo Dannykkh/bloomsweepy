@@ -161,10 +161,10 @@ export function OverviewView({
         <div className="scan-stage glass-panel">
           <StorageRing volume={volume} report={report} scanning={scanning} />
           <div className="scan-stage__copy">
-            <p className="eyebrow">FULL CONTENT VERIFICATION</p>
+            <p className="eyebrow">파일 내용까지 확인</p>
             <h2>{root ? "선택한 범위를 정밀하게 확인합니다" : "먼저 분석할 폴더를 선택하세요"}</h2>
             <p>
-              큰 파일은 크기순으로 정렬하고, 중복 후보는 부분 해시 뒤 전체 해시와 바이트 비교를 거칩니다.
+              큰 파일은 크기순으로 정렬하고, 중복 후보는 일부 내용을 먼저 확인한 뒤 전체 내용을 끝까지 비교합니다.
             </p>
           </div>
 
@@ -255,7 +255,7 @@ export function OverviewView({
       <section className="results-section">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">LARGEST ITEMS</p>
+            <p className="eyebrow">가장 큰 파일</p>
             <h2>가장 큰 파일</h2>
           </div>
           {report ? (

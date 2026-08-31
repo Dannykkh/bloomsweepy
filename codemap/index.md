@@ -1,7 +1,7 @@
 ﻿# Code Map
 
 > AI CLI 코드 탐색용 자동 생성 인덱스. 수동 편집 불필요.
-> generated_at: 2026-08-31T13:19:02+09:00
+> generated_at: 2026-08-31T15:25:11+09:00
 
 ## Start Here
 

@@ -93,7 +93,7 @@ export function SafetyActionDialog({
         <header>
           <span aria-hidden="true"><Trash2 size={20} /></span>
           <div>
-            <p className="eyebrow">RECOVERABLE ACTION</p>
+            <p className="eyebrow">되돌릴 수 있는 작업</p>
             <h2 id="safety-dialog-title">{title}</h2>
           </div>
           <button
@@ -109,7 +109,7 @@ export function SafetyActionDialog({
 
         <div className="safety-dialog__summary" id="safety-dialog-description">
           <div><span>대상</span><strong>{formatCount(itemCount)}개</strong></div>
-          <div><span>논리 용량</span><strong>{formatBytes(logicalBytes)}</strong></div>
+          <div><span>선택한 파일 크기</span><strong>{formatBytes(logicalBytes)}</strong></div>
           <div><span>복구 위치</span><strong>운영체제 휴지통</strong></div>
         </div>
 
@@ -130,7 +130,7 @@ export function SafetyActionDialog({
               onChange={(event) => setReviewAcknowledged(event.currentTarget.checked)}
             />
             <span>
-              검토 필요 AppData {formatCount(reviewCount)}개에는 계정·설정 데이터가 포함될 수 있음을 확인했습니다.
+              한 번 더 확인할 프로그램 설정 {formatCount(reviewCount)}개에는 계정이나 설정 데이터가 포함될 수 있음을 확인했습니다.
             </span>
           </label>
         ) : null}

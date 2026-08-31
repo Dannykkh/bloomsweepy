@@ -41,7 +41,7 @@
 - **component** `DuplicatesView` (L35) — `apps/desktop/src/views/DuplicatesView.tsx:35`
 
 ## apps/desktop/src/views/FastFileSearchView.tsx
-- **component** `IndexMetric` (L548) — `apps/desktop/src/views/FastFileSearchView.tsx:548`
+- **component** `IndexMetric` (L557) — `apps/desktop/src/views/FastFileSearchView.tsx:557`
 
 ## apps/desktop/src/views/LargeFilesView.tsx
 - **component** `LargeFilesView` (L12) — `apps/desktop/src/views/LargeFilesView.tsx:12`

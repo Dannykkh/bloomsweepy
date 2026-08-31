@@ -538,7 +538,7 @@ fn parse_hash(value: &str) -> Result<[u8; 32], ActionValidationError> {
         .map(|hash| *hash.as_bytes())
         .map_err(|_| {
             ActionValidationError::InvalidSelection(
-                "중복 결과의 콘텐츠 해시가 올바르지 않습니다".to_owned(),
+                "중복 파일의 내용 확인 번호가 올바르지 않습니다".to_owned(),
             )
         })
 }

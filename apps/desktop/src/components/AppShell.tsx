@@ -53,7 +53,7 @@ const navigation: Array<{
   {
     id: "files",
     label: "빠른 파일 찾기",
-    description: "파일명과 경로",
+    description: "이름과 위치로 찾기",
     icon: Search,
   },
   {
@@ -65,7 +65,7 @@ const navigation: Array<{
   {
     id: "cleanup",
     label: "정리 후보",
-    description: "Temp·AppData·잔여물",
+    description: "임시 파일·프로그램 흔적",
     icon: ListChecks,
   },
   {
@@ -95,7 +95,7 @@ const titles: Record<ViewId, { title: string; description: string }> = {
   },
   files: {
     title: "빠른 파일 찾기",
-    description: "파일을 열지 않고 이름과 경로를 즉시 검색합니다.",
+    description: "파일을 열지 않고 이름이나 폴더 위치로 찾습니다.",
   },
   "large-files": {
     title: "큰 파일",
@@ -103,7 +103,7 @@ const titles: Record<ViewId, { title: string; description: string }> = {
   },
   documents: {
     title: "문서 검색",
-    description: "선택한 폴더의 문서 내용을 로컬 색인에서 빠르게 찾습니다.",
+    description: "선택한 폴더의 문서를 미리 읽어 내용으로 빠르게 찾습니다.",
   },
   cleanup: {
     title: "정리 후보",
@@ -111,7 +111,7 @@ const titles: Record<ViewId, { title: string; description: string }> = {
   },
   duplicates: {
     title: "중복 파일",
-    description: "전체 해시와 바이트 비교를 통과한 결과만 표시합니다.",
+    description: "파일 내용을 끝까지 비교해 실제로 같은 결과만 표시합니다.",
   },
   settings: {
     title: "스캔 설정",
@@ -269,7 +269,7 @@ export function AppShell({
           >
             <FolderOpen size={17} aria-hidden="true" />
             <span>
-              <small>스캔 범위</small>
+              <small>{activeView === "files" ? "찾을 위치" : "스캔 범위"}</small>
               <strong title={root ?? undefined}>{root ?? "폴더 선택"}</strong>
             </span>
           </button>

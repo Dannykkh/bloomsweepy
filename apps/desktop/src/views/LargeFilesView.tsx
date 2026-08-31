@@ -63,7 +63,7 @@ export function LargeFilesView({ report, scanning, onStartScan }: LargeFilesView
       <section className="results-section results-section--page">
         <div className="section-heading">
           <div>
-            <p className="eyebrow">SORTED BY LOGICAL SIZE</p>
+            <p className="eyebrow">큰 파일부터 보기</p>
             <h2>크기순 파일 목록</h2>
           </div>
           <span>삭제 기능 없이 분석만 수행합니다</span>

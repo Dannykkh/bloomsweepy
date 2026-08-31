@@ -248,21 +248,21 @@ pub struct FileCatalogSearchReport {
 
 #[derive(Debug, Error)]
 pub enum FileCatalogError {
-    #[error("file catalog path does not exist: {0}")]
+    #[error("선택한 위치가 없습니다: {0}")]
     MissingPath(String),
-    #[error("file catalog path is not a directory: {0}")]
+    #[error("선택한 위치가 폴더가 아닙니다: {0}")]
     NotDirectory(String),
-    #[error("file catalog build was cancelled")]
+    #[error("파일 목록 만들기를 취소했습니다")]
     Cancelled,
-    #[error("enter at least one search character")]
+    #[error("검색어를 한 글자 이상 입력하세요")]
     EmptyQuery,
-    #[error("search query is longer than {MAX_QUERY_CHARS} characters")]
+    #[error("검색어는 {MAX_QUERY_CHARS}자보다 짧게 입력하세요")]
     QueryTooLong,
-    #[error("invalid file search query: {0}")]
+    #[error("검색 조건이 올바르지 않습니다: {0}")]
     InvalidQuery(String),
-    #[error("no completed file catalog is available")]
+    #[error("먼저 파일 목록을 만들어 주세요")]
     IndexUnavailable,
-    #[error("failed to access the file catalog: {0}")]
+    #[error("파일 목록을 열지 못했습니다: {0}")]
     Index(String),
 }
 
@@ -409,7 +409,7 @@ where
                     &mut initial_issues,
                     config.max_issues,
                     Some(root_string.clone()),
-                    format!("USN 변경분을 적용하지 못해 전체 MFT를 다시 읽습니다: {error}"),
+                    format!("바뀐 파일만 확인하지 못해 드라이브 전체를 다시 읽습니다: {error}"),
                 );
             }
         }
@@ -452,11 +452,9 @@ where
         phase: FileCatalogPhase::Discovering,
         message: match provider {
             FileCatalogProvider::WindowsNtfs => {
-                "NTFS MFT에서 파일명과 경로 메타데이터를 읽고 있습니다".to_owned()
+                "Windows 빠른 방식으로 파일 이름과 위치를 읽고 있습니다…".to_owned()
             }
-            FileCatalogProvider::PortableWalk => {
-                "파일명과 경로 메타데이터를 확인하고 있습니다".to_owned()
-            }
+            FileCatalogProvider::PortableWalk => "파일 이름과 위치를 확인하고 있습니다…".to_owned(),
         },
         scanned_entries: 0,
         indexed_entries: 0,
@@ -491,8 +489,10 @@ where
         config.max_issues,
         FileCatalogPhase::Discovering,
         match provider {
-            FileCatalogProvider::WindowsNtfs => "NTFS MFT 항목을 검색 카탈로그에 저장하고 있습니다",
-            FileCatalogProvider::PortableWalk => "파일명과 경로 메타데이터를 색인하고 있습니다",
+            FileCatalogProvider::WindowsNtfs => {
+                "Windows 빠른 방식으로 파일 목록을 만들고 있습니다…"
+            }
+            FileCatalogProvider::PortableWalk => "파일 이름과 위치를 검색 목록에 넣고 있습니다…",
         },
         on_progress,
         initial_issues,
@@ -512,7 +512,7 @@ where
                         writer.issue(
                             None,
                             format!(
-                                "검증에 실패한 MFT 레코드 {}개를 건너뛰었습니다",
+                                "파일 정보가 손상된 항목 {}개를 건너뛰었습니다",
                                 stats.malformed_records
                             ),
                         );
@@ -523,7 +523,7 @@ where
                 }
                 Err(error) => {
                     return Err(FileCatalogError::Index(format!(
-                        "NTFS MFT 카탈로그를 만들지 못했습니다: {error}"
+                        "Windows 빠른 방식으로 파일 목록을 만들지 못했습니다: {error}"
                     )));
                 }
             }
@@ -536,7 +536,7 @@ where
     }
     on_progress(FileCatalogProgress {
         phase: FileCatalogPhase::Finalizing,
-        message: "사라진 항목을 제외하고 검색 색인을 확정하고 있습니다".to_owned(),
+        message: "사라진 파일을 목록에서 빼고 마무리하고 있습니다…".to_owned(),
         scanned_entries: stats.scanned_entries,
         indexed_entries: stats.indexed_entries,
         indexed_files: stats.indexed_files,
@@ -1031,7 +1031,7 @@ where
         }
         if change.directory_hint || indexed_kind.as_deref() == Some("directory") {
             return Ok(IncrementalBuild::FullRequired(
-                "선택 범위 안의 폴더 구조가 바뀌어 전체 MFT 경로를 다시 계산합니다".to_owned(),
+                "선택한 위치의 폴더 구조가 바뀌어 전체 경로를 다시 확인합니다".to_owned(),
             ));
         }
         relevant.push(change);
@@ -1040,13 +1040,13 @@ where
 
     if relevant.len() > config.max_entries {
         return Ok(IncrementalBuild::FullRequired(
-            "선택 범위의 변경 항목이 카탈로그 상한보다 많아 전체 MFT를 다시 읽습니다".to_owned(),
+            "바뀐 파일이 너무 많아 선택한 위치 전체를 다시 읽습니다".to_owned(),
         ));
     }
 
     on_progress(FileCatalogProgress {
         phase: FileCatalogPhase::ApplyingChanges,
-        message: "USN Journal 변경분만 검색 카탈로그에 반영하고 있습니다".to_owned(),
+        message: "바뀐 파일만 검색 목록에 반영하고 있습니다…".to_owned(),
         scanned_entries: 0,
         indexed_entries: 0,
         indexed_files: 0,
@@ -1085,7 +1085,7 @@ where
         config.max_entries,
         config.max_issues,
         FileCatalogPhase::ApplyingChanges,
-        "USN 변경 파일의 최신 MFT 메타데이터를 저장하고 있습니다",
+        "바뀐 파일의 최신 이름과 위치를 저장하고 있습니다…",
         on_progress,
         Vec::new(),
     );
@@ -1103,7 +1103,7 @@ where
                 writer.issue(
                     None,
                     format!(
-                        "검증에 실패한 변경 MFT 레코드 {}개를 건너뛰었습니다",
+                        "바뀐 파일 중 정보가 손상된 항목 {}개를 건너뛰었습니다",
                         stats.malformed_records
                     ),
                 );
@@ -1117,7 +1117,7 @@ where
         }
         Err(error) => {
             return Ok(IncrementalBuild::FullRequired(format!(
-                "USN 변경 파일을 읽지 못해 전체 MFT를 다시 읽습니다: {error}"
+                "바뀐 파일을 확인하지 못해 드라이브 전체를 다시 읽습니다: {error}"
             )));
         }
     }
@@ -1136,12 +1136,12 @@ where
     let totals = catalog_totals(&transaction)?;
     if totals.indexed_entries > config.max_entries as u64 {
         return Ok(IncrementalBuild::FullRequired(
-            "증분 반영 결과가 카탈로그 상한을 넘어 전체 범위를 다시 확인합니다".to_owned(),
+            "파일 수가 한도를 넘어 선택한 위치 전체를 다시 확인합니다".to_owned(),
         ));
     }
     on_progress(FileCatalogProgress {
         phase: FileCatalogPhase::Finalizing,
-        message: "USN 변경분과 검색 색인을 확정하고 있습니다".to_owned(),
+        message: "바뀐 파일을 반영하고 검색 목록을 마무리하고 있습니다…".to_owned(),
         scanned_entries: relevant.len() as u64,
         indexed_entries: write_stats.indexed_entries,
         indexed_files: write_stats.indexed_files,
@@ -1666,7 +1666,7 @@ fn ensure_existing_schema(connection: &Connection) -> Result<(), FileCatalogErro
         INDEX_SCHEMA_VERSION => Ok(()),
         0 | 1 => initialize_schema(connection),
         _ => Err(FileCatalogError::Index(format!(
-            "unsupported file catalog schema version {schema_version}"
+            "이 버전에서 읽을 수 없는 파일 목록입니다 (형식 {schema_version}). 파일 목록을 지우고 다시 만들어 주세요"
         ))),
     }
 }
@@ -1677,7 +1677,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
         .map_err(index_error)?;
     if !(0..=INDEX_SCHEMA_VERSION).contains(&schema_version) {
         return Err(FileCatalogError::Index(format!(
-            "unsupported file catalog schema version {schema_version}"
+            "이 버전에서 읽을 수 없는 파일 목록입니다 (형식 {schema_version}). 파일 목록을 지우고 다시 만들어 주세요"
         )));
     }
     if schema_version == 1 {

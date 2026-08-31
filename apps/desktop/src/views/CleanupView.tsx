@@ -55,11 +55,11 @@ const cleanupPresentation: Record<
   { label: string; description: string }
 > = {
   temporaryEntry: {
-    label: "오래된 Temp",
+    label: "오래된 임시 파일",
     description: "최근 사용 흔적이 없는 사용자 임시 항목",
   },
   appDataDirectory: {
-    label: "AppData 검토",
+    label: "프로그램 설정 폴더",
     description: "설치 앱과 이름이 맞지 않는 오래된 데이터",
   },
   cacheDirectory: {
@@ -193,7 +193,7 @@ export function CleanupView({
                 : report
                   ? `${formatDuration(report.durationMs)} 동안 ${formatCount(report.processedEntries)}개 항목을 확인했습니다.`
                   : platform === "windows"
-                    ? "Temp, Local·Roaming AppData, 제거 프로그램 레지스트리를 읽기 전용으로 대조합니다."
+                    ? "Windows 임시 폴더, 프로그램 설정 폴더, 설치 기록을 바꾸지 않고 서로 비교합니다."
                     : "임시 파일과 오래된 캐시를 읽기 전용으로 확인합니다."}
           </p>
         </div>
@@ -241,19 +241,19 @@ export function CleanupView({
             <CleanupMetric
               label="정리 가능성 높음"
               value={`${formatCount(likelySafeCount)}개`}
-              detail="오래된 Temp·캐시"
+              detail="오래된 임시 파일·캐시"
               icon={<Clock3 size={18} />}
             />
             <CleanupMetric
               label="검토 필요"
               value={`${formatCount(reviewCount)}개`}
-              detail="AppData·레지스트리"
+              detail="프로그램 설정 폴더·설치 기록"
               icon={<ShieldAlert size={18} />}
             />
             <CleanupMetric
               label="후보 용량"
               value={formatBytes(report.candidateBytes)}
-              detail="레지스트리 항목 제외"
+              detail="Windows 설치 기록 제외"
               icon={<HardDrive size={18} />}
             />
           </section>
@@ -262,7 +262,7 @@ export function CleanupView({
             <ShieldAlert size={19} aria-hidden="true" />
             <div>
               <strong>선택한 파일 후보만 운영체제 휴지통으로 이동합니다</strong>
-              <p>이동 직전 구조와 변경 흔적을 재검사하고 작업 기록을 남깁니다. AppData는 별도 확인이 필요하며 레지스트리는 계속 읽기 전용입니다.</p>
+              <p>옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 하며 Windows 설치 정보는 바꾸지 않습니다.</p>
             </div>
           </section>
 
@@ -271,8 +271,8 @@ export function CleanupView({
               {(
                 [
                   ["all", "전체"],
-                  ["temporaryEntry", "Temp"],
-                  ["appDataDirectory", "AppData"],
+                  ["temporaryEntry", "임시 파일"],
+                  ["appDataDirectory", "프로그램 설정"],
                   ["cacheDirectory", "캐시"],
                 ] as const
               ).map(([value, label]) => (
@@ -297,7 +297,7 @@ export function CleanupView({
                 <strong>{formatCount(selectedPaths.size)}개 · {formatBytes(selectedBytes)}</strong>
                 <small>
                   {selectedReviewCount > 0
-                    ? `검토 필요 AppData ${formatCount(selectedReviewCount)}개 포함`
+                    ? `한 번 더 확인할 프로그램 설정 ${formatCount(selectedReviewCount)}개 포함`
                     : "이동 직전 모든 항목을 다시 검사합니다."}
                 </small>
               </div>
@@ -381,7 +381,7 @@ export function CleanupView({
             <section className="registry-residue-panel">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">BROKEN UNINSTALL EVIDENCE</p>
+                  <p className="eyebrow">삭제 후 남은 흔적</p>
                   <h2>깨진 제거 프로그램 정보</h2>
                 </div>
                 <span>{formatCount(report.registryResidues.candidates.length)}개 검토 대상</span>

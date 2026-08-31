@@ -85,25 +85,25 @@ pub(super) enum NtfsAvailability {
 
 #[derive(Debug, Error)]
 pub(super) enum NtfsError {
-    #[error("NTFS catalogue read was cancelled")]
+    #[error("Windows 빠른 파일 읽기를 취소했습니다")]
     Cancelled,
-    #[error("access denied opening {0}")]
+    #[error("다음 드라이브를 빠르게 읽을 권한이 없습니다: {0}")]
     AccessDenied(String),
-    #[error("failed to open volume {volume}: OS error {code}")]
+    #[error("드라이브 {volume}을 열지 못했습니다: Windows 오류 {code}")]
     Open { volume: String, code: u32 },
-    #[error("I/O error reading {volume} at offset {offset}: OS error {code}")]
+    #[error("드라이브 {volume}의 파일 정보를 읽지 못했습니다 (위치 {offset}, Windows 오류 {code})")]
     Read {
         volume: String,
         offset: u64,
         code: u32,
     },
-    #[error("{0} is not an NTFS volume")]
+    #[error("빠른 읽기를 지원하지 않는 드라이브입니다: {0}")]
     NotNtfs(String),
-    #[error("malformed MFT on {volume}: {detail}")]
+    #[error("Windows 파일 목록을 읽는 중 확인할 수 없는 정보가 있습니다 ({volume}: {detail})")]
     Malformed { volume: String, detail: String },
-    #[error("NTFS directory map exceeded the safety limit")]
+    #[error("폴더 수가 안전 한도를 넘어 빠른 읽기를 중단했습니다")]
     DirectoryLimit,
-    #[error("failed to store NTFS catalogue record: {0}")]
+    #[error("읽은 파일 정보를 검색 목록에 저장하지 못했습니다: {0}")]
     Sink(String),
 }
 
@@ -133,30 +133,29 @@ impl NtfsSource {
     pub(super) fn try_open(root: &Path) -> NtfsAvailability {
         let Some(drive) = drive_letter(root) else {
             return NtfsAvailability::Unavailable(
-                "드라이브 문자가 없는 경로여서 NTFS MFT 가속을 사용할 수 없습니다".to_owned(),
+                "빠른 드라이브 읽기를 사용할 수 없는 위치라 일반 방식으로 확인합니다".to_owned(),
             );
         };
         if path_key(root) != format!("{}:", drive.to_ascii_lowercase()) {
             return NtfsAvailability::Unavailable(
-                "선택한 폴더 범위는 드라이브 전체 MFT를 읽는 것보다 직접 순회하는 편이 작고 안전해 공용 폴더 순회를 사용합니다"
-                    .to_owned(),
+                "선택한 폴더는 일반 방식으로 확인하는 편이 더 작고 안전합니다".to_owned(),
             );
         }
         if !is_ntfs(drive) {
             return NtfsAvailability::Unavailable(format!(
-                "{drive}: 볼륨이 NTFS가 아니어서 공용 폴더 순회를 사용합니다"
+                "{drive}: 드라이브에서는 빠른 읽기를 사용할 수 없어 일반 방식으로 확인합니다"
             ));
         }
         let Some((volume_serial, root_record_id)) = path_identity(root) else {
             return NtfsAvailability::Unavailable(
-                "선택한 범위의 NTFS 파일 식별자를 읽지 못해 공용 폴더 순회를 사용합니다".to_owned(),
+                "선택한 위치의 파일 정보를 빠르게 읽을 수 없어 일반 방식으로 확인합니다".to_owned(),
             );
         };
         let reader = match MftReader::open(drive) {
             Ok(reader) => reader,
             Err(error) => {
                 return NtfsAvailability::Unavailable(format!(
-                    "NTFS MFT 읽기 전용 가속을 시작하지 못해 공용 폴더 순회로 전환했습니다: {error}"
+                    "Windows 빠른 읽기를 시작하지 못해 일반 방식으로 바꿨습니다: {error}"
                 ));
             }
         };
@@ -203,7 +202,7 @@ impl NtfsSource {
             || previous.root_record_id != self.root_record_id
         {
             return Ok(JournalDelta::FullRequired(
-                "볼륨 또는 선택 범위의 NTFS 식별자가 바뀌어 전체 MFT를 다시 읽습니다".to_owned(),
+                "드라이브나 선택 위치의 정보가 바뀌어 전체를 다시 읽습니다".to_owned(),
             ));
         }
 
@@ -211,7 +210,7 @@ impl NtfsSource {
             Ok(state) => state,
             Err(code) => {
                 return Ok(JournalDelta::FullRequired(format!(
-                    "USN Journal 상태를 읽지 못해 전체 MFT를 다시 읽습니다: OS error {code}"
+                    "Windows 변경 기록을 읽지 못해 드라이브 전체를 다시 확인합니다: Windows 오류 {code}"
                 )));
             }
         };
@@ -220,7 +219,7 @@ impl NtfsSource {
             || previous.next_usn > state.next_usn
         {
             return Ok(JournalDelta::FullRequired(
-                "USN Journal이 교체되었거나 이전 위치가 만료되어 전체 MFT를 다시 읽습니다"
+                "Windows 변경 기록이 새로 만들어졌거나 이전 기록이 없어 드라이브 전체를 다시 확인합니다"
                     .to_owned(),
             ));
         }
@@ -255,25 +254,26 @@ impl NtfsSource {
                 Ok(value) => value as usize,
                 Err(code) => {
                     return Ok(JournalDelta::FullRequired(format!(
-                        "USN 변경분을 읽지 못해 전체 MFT를 다시 읽습니다: OS error {code}"
+                        "Windows 변경 기록을 읽지 못해 드라이브 전체를 다시 확인합니다: Windows 오류 {code}"
                     )));
                 }
             };
             if returned < 8 {
                 return Ok(JournalDelta::FullRequired(
-                    "USN Journal 응답이 잘려 있어 전체 MFT를 다시 읽습니다".to_owned(),
+                    "Windows 변경 기록이 완전하지 않아 드라이브 전체를 다시 확인합니다".to_owned(),
                 ));
             }
             let next = i64::from_le_bytes(out[0..8].try_into().unwrap_or_default());
             if next <= cursor {
                 return Ok(JournalDelta::FullRequired(
-                    "USN Journal 위치가 전진하지 않아 전체 MFT를 다시 읽습니다".to_owned(),
+                    "Windows 변경 기록의 위치를 확인할 수 없어 드라이브 전체를 다시 확인합니다"
+                        .to_owned(),
                 ));
             }
             parse_journal_records(&out[..returned], &mut changes)?;
             if changes.len() > MAX_JOURNAL_CHANGE_RECORDS {
                 return Ok(JournalDelta::FullRequired(
-                    "누적된 USN 변경 항목이 안전 상한을 넘어 전체 MFT를 다시 읽습니다".to_owned(),
+                    "바뀐 파일이 너무 많아 드라이브 전체를 다시 확인합니다".to_owned(),
                 ));
             }
             cursor = next.min(target);
@@ -399,7 +399,7 @@ impl NtfsSource {
             for record in records {
                 if record.is_dir {
                     return Ok(ChangedRecordsOutcome::FullRequired(
-                        "폴더 구조 변경을 확인해 전체 MFT 경로를 다시 계산합니다".to_owned(),
+                        "폴더 구조가 바뀌어 전체 경로를 다시 확인합니다".to_owned(),
                     ));
                 }
                 let Some(parent) = directory_paths.get(&record.parent_no) else {
@@ -416,8 +416,7 @@ impl NtfsSource {
                     .map_err(NtfsError::Sink)?
                 {
                     return Ok(ChangedRecordsOutcome::FullRequired(
-                        "증분 반영 중 카탈로그 상한에 도달해 전체 범위를 다시 확인합니다"
-                            .to_owned(),
+                        "파일 수가 한도에 도달해 선택한 위치 전체를 다시 확인합니다".to_owned(),
                     ));
                 }
             }
@@ -667,15 +666,15 @@ fn parse_journal_records(
         let length = read_u32(buffer, offset) as usize;
         if length < 60 || offset.saturating_add(length) > buffer.len() {
             return Err(NtfsError::Malformed {
-                volume: "USN Journal".to_owned(),
-                detail: "invalid record length".to_owned(),
+                volume: "Windows 변경 기록".to_owned(),
+                detail: "변경 기록의 길이가 올바르지 않습니다".to_owned(),
             });
         }
         let major = read_u16(buffer, offset + 4);
         if major != 2 {
             return Err(NtfsError::Malformed {
-                volume: "USN Journal".to_owned(),
-                detail: format!("unsupported USN record version {major}"),
+                volume: "Windows 변경 기록".to_owned(),
+                detail: format!("지원하지 않는 Windows 변경 기록 형식 {major}"),
             });
         }
         let record_id = read_u64(buffer, offset + 8) & RECORD_MASK;
@@ -694,8 +693,8 @@ fn parse_journal_records(
     }
     if offset != buffer.len() {
         return Err(NtfsError::Malformed {
-            volume: "USN Journal".to_owned(),
-            detail: "trailing partial record".to_owned(),
+            volume: "Windows 변경 기록".to_owned(),
+            detail: "변경 기록의 마지막 부분이 완전하지 않습니다".to_owned(),
         });
     }
     Ok(())
@@ -873,7 +872,7 @@ impl MftReader {
         if !apply_fixup(&mut record_zero, bytes_per_sector) {
             return Err(NtfsError::Malformed {
                 volume: label,
-                detail: "$MFT record zero has invalid update-sequence fixups".to_owned(),
+                detail: "첫 번째 파일 기록의 복구 정보가 올바르지 않습니다".to_owned(),
             });
         }
         let (runs, data_size) = parse_mft_data_runs(&record_zero, &label)?;
@@ -885,14 +884,14 @@ impl MftReader {
         if covered_bytes.is_none_or(|covered| covered < data_size) {
             return Err(NtfsError::Malformed {
                 volume: label,
-                detail: "$MFT data runs do not cover the declared stream size".to_owned(),
+                detail: "파일 목록 저장 위치가 예상 크기와 맞지 않습니다".to_owned(),
             });
         }
         let record_count = data_size / record_size as u64;
         if record_count == 0 || record_count > MAX_MFT_RECORDS {
             return Err(NtfsError::Malformed {
                 volume: label,
-                detail: format!("implausible MFT record count {record_count}"),
+                detail: format!("파일 기록 수가 비정상적으로 큽니다: {record_count}"),
             });
         }
         Ok(Self {
@@ -1037,8 +1036,8 @@ impl MftReader {
             ParsedRecord::Records(records) => Ok(records),
             ParsedRecord::Skipped => Ok(Vec::new()),
             ParsedRecord::Malformed => Err(NtfsError::Malformed {
-                volume: "live MFT record".to_owned(),
-                detail: format!("record {record_number} failed validation"),
+                volume: "Windows 파일 기록".to_owned(),
+                detail: format!("파일 기록 {record_number}을 확인할 수 없습니다"),
             }),
         }
     }
@@ -1195,7 +1194,7 @@ fn parse_mft_data_runs(record: &[u8], volume: &str) -> Result<(Vec<Run>, u64), N
     if record.len() < 0x30 || &record[..4] != b"FILE" {
         return Err(NtfsError::Malformed {
             volume: volume.to_owned(),
-            detail: "$MFT record zero is not a FILE record".to_owned(),
+            detail: "첫 번째 항목이 올바른 파일 기록이 아닙니다".to_owned(),
         });
     }
     let used = (read_u32(record, 0x18) as usize).min(record.len());
@@ -1224,7 +1223,7 @@ fn parse_mft_data_runs(record: &[u8], volume: &str) -> Result<(Vec<Run>, u64), N
     }
     Err(NtfsError::Malformed {
         volume: volume.to_owned(),
-        detail: "$MFT has no readable non-resident data stream".to_owned(),
+        detail: "읽을 수 있는 파일 목록 저장 영역이 없습니다".to_owned(),
     })
 }
 

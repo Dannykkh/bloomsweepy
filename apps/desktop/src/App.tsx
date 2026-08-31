@@ -650,7 +650,7 @@ function App() {
     setDocumentError(null);
     setDocumentProgress({
       phase: "discovering",
-      message: "문서 색인 저장소를 준비하고 있습니다",
+      message: "문서 검색 목록을 준비하고 있습니다…",
       scannedFiles: 0,
       candidateDocuments: 0,
       indexedDocuments: 0,
@@ -685,7 +685,7 @@ function App() {
       if (cancellationRequested) {
         setDocumentProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "현재 문서를 마친 뒤 색인을 안전하게 중단하고 있습니다",
+          message: "현재 문서 확인을 마친 뒤 안전하게 멈추고 있습니다…",
           scannedFiles: current?.scannedFiles ?? 0,
           candidateDocuments: current?.candidateDocuments ?? 0,
           indexedDocuments: current?.indexedDocuments ?? 0,
@@ -721,7 +721,7 @@ function App() {
     setFileCatalogError(null);
     setFileCatalogProgress({
       phase: "discovering",
-      message: "파일 카탈로그 저장소를 준비하고 있습니다",
+      message: "파일 검색 목록을 준비하고 있습니다…",
       scannedEntries: 0,
       indexedEntries: 0,
       indexedFiles: 0,
@@ -756,7 +756,7 @@ function App() {
       if (cancellationRequested) {
         setFileCatalogProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "현재 항목을 마친 뒤 카탈로그 생성을 안전하게 중단하고 있습니다",
+          message: "현재 파일 확인을 마친 뒤 목록 만들기를 안전하게 멈추고 있습니다…",
           scannedEntries: current?.scannedEntries ?? 0,
           indexedEntries: current?.indexedEntries ?? 0,
           indexedFiles: current?.indexedFiles ?? 0,
@@ -1086,9 +1086,9 @@ function App() {
                 : cleanupScanState === "scanning"
                   ? "정리 후보 분석 중"
                 : documentIndexState === "scanning"
-                  ? "문서 색인 중"
+                  ? "문서 검색 준비 중"
                 : fileCatalogState === "scanning"
-                  ? "파일 카탈로그 생성 중"
+                  ? "파일 목록 만드는 중"
                 : driveScanState === "scanning"
                   ? "드라이브 분석 중"
                   : "스캔 진행 중"}
@@ -1101,7 +1101,7 @@ function App() {
                 : cleanupScanState === "scanning"
                   ? cleanupProgress?.message ?? "남은 파일과 제거 정보를 대조하고 있습니다"
                 : documentIndexState === "scanning"
-                  ? documentProgress?.message ?? "문서 내용을 로컬 색인에 기록하고 있습니다"
+                  ? documentProgress?.message ?? "문서 내용을 검색할 수 있게 정리하고 있습니다…"
                 : fileCatalogState === "scanning"
                   ? fileCatalogProgress?.message ?? "파일 이름과 경로를 수집하고 있습니다"
                 : driveScanState === "scanning"

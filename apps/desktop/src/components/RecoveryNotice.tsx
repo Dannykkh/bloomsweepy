@@ -62,7 +62,7 @@ export function RecoveryNotice({
           {hasWarning ? <AlertTriangle size={22} /> : <ShieldCheck size={22} />}
         </span>
         <div className="recovery-notice__copy">
-          <p className="eyebrow">ACTION RECOVERY</p>
+          <p className="eyebrow">작업 복구</p>
           <h2>
             {attentionCount > 0
               ? "확인이 필요한 이전 휴지통 작업이 있습니다"

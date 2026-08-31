@@ -3787,6 +3787,8 @@ option {
   margin: 0;
   font-size: 16px;
   letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .document-search-stage__heading p:not(.eyebrow),
@@ -4236,6 +4238,7 @@ option {
   font-family: "JetBrains Mono", monospace;
   font-size: 9px;
   color: #a9bbef;
+  font-variant-numeric: tabular-nums;
 }
 
 .document-result__meta time {
@@ -4458,7 +4461,40 @@ option {
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface-strong);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.file-query-help {
+  margin-top: -8px;
+}
+
+.file-query-help summary {
+  width: fit-content;
+  min-height: 28px;
+  padding: 6px 2px;
+  font-size: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.file-query-help summary:hover,
+.file-query-help summary:focus-visible {
+  color: var(--text);
+}
+
+.file-query-help summary:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 5px;
+}
+
+.file-query-help[open] summary {
+  margin-bottom: 7px;
+}
+
+.file-query-help summary::marker {
+  color: var(--accent-blue);
 }
 
 .file-query-syntax {
@@ -4466,14 +4502,25 @@ option {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  margin-top: -8px;
   font-size: 8px;
   color: var(--text-muted);
 }
 
 .file-query-syntax > span {
-  margin-right: 2px;
-  color: var(--text-faint);
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-height: 28px;
+  padding-left: 7px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgb(7 9 16 / 34%);
+}
+
+.file-query-syntax small {
+  font-size: 8px;
+  white-space: nowrap;
 }
 
 .file-query-syntax code {
@@ -4481,8 +4528,8 @@ option {
   font-family: "JetBrains Mono", "Pretendard Variable", monospace;
   font-size: 8px;
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  border-left: 1px solid var(--line);
+  border-radius: 0 6px 6px 0;
   background: var(--surface-strong);
 }
 
@@ -4536,6 +4583,8 @@ option {
 .file-result {
   min-height: 74px;
   align-items: center;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 74px;
 }
 
 .file-result .document-result__body {

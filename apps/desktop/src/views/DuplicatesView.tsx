@@ -125,7 +125,7 @@ export function DuplicatesView({
         <div className="empty-panel empty-panel--page">
           <Copy size={28} aria-hidden="true" />
           <strong>중복 파일을 확인하려면 먼저 스캔하세요</strong>
-          <p>크기, 부분 해시, 전체 BLAKE3 해시, 바이트 비교 순으로 검증합니다.</p>
+          <p>파일 크기로 후보를 줄인 뒤 파일 내용을 처음부터 끝까지 비교합니다.</p>
           <button className="primary-button" type="button" disabled={scanning} onClick={onStartScan}>
             <Copy size={17} aria-hidden="true" />
             스캔 시작
@@ -211,7 +211,7 @@ export function DuplicatesView({
         <div className="empty-panel empty-panel--page">
           <ShieldCheck size={28} aria-hidden="true" />
           <strong>{filter === "photos" ? "내용이 같은 사진이 없습니다" : "검증된 중복 파일이 없습니다"}</strong>
-          <p>{filter === "photos" ? "유사한 구도는 아직 포함하지 않고, 바이트까지 같은 사진만 판정합니다." : "같은 크기만 가진 파일은 중복으로 표시하지 않았습니다."}</p>
+          <p>{filter === "photos" ? "비슷하게 찍힌 사진은 아직 포함하지 않고, 파일 내용이 완전히 같은 사진만 보여줍니다." : "크기만 같고 내용이 다른 파일은 중복으로 표시하지 않았습니다."}</p>
         </div>
       ) : (
         <section className="duplicate-list" aria-label="중복 파일 그룹">
@@ -231,7 +231,7 @@ export function DuplicatesView({
                   <span className="duplicate-group__copy">
                     <strong>{group.files[0]?.name ?? "중복 그룹"}</strong>
                     <small>
-                      {group.contentHash.slice(0, 16)} · 바이트 비교 완료
+                      내용 확인 번호 {group.contentHash.slice(0, 16)} · 전체 내용 비교 완료
                       {directories.length > 1 ? ` · 서로 다른 폴더 ${directories.length}곳` : ""}
                       {groupSelectionCount > 0 ? ` · ${groupSelectionCount}개 선택` : ""}
                     </small>

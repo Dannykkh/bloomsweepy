@@ -27,7 +27,7 @@ export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
         <label className="setting-row">
           <span>
             <strong>큰 파일 최소 크기</strong>
-            <small>결과 목록에 포함할 최소 논리 크기</small>
+            <small>결과 목록에 보여줄 최소 파일 크기</small>
           </span>
           <select
             value={config.minLargeFileBytes}
@@ -44,7 +44,7 @@ export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
         <label className="setting-row">
           <span>
             <strong>중복 검사 최소 크기</strong>
-            <small>작은 파일 해시 비용을 제한합니다</small>
+            <small>작은 파일을 비교하는 작업량을 줄입니다</small>
           </span>
           <select
             value={config.minDuplicateFileBytes}
@@ -104,10 +104,10 @@ export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
           <h2>현재 안전 계약</h2>
           <ul>
             <li>스캔은 파일을 수정하거나 이동하지 않습니다.</li>
-            <li>하드링크는 같은 디스크 할당으로 인식해 중복 낭비에서 제외합니다.</li>
-            <li>부분 해시는 후보 축소에만 쓰고 전체 해시와 바이트 비교로 확정합니다.</li>
+            <li>같은 저장공간을 가리키는 여러 파일 이름은 중복 낭비로 세지 않습니다.</li>
+            <li>일부 내용으로 후보를 줄인 뒤 전체 내용을 끝까지 비교해 중복을 확정합니다.</li>
             <li>선택 항목은 실행 직전 재검증하고 운영체제 휴지통으로만 이동합니다.</li>
-            <li>영구 삭제와 레지스트리 변경은 제공하지 않습니다.</li>
+            <li>영구 삭제와 Windows 설치 정보 변경은 제공하지 않습니다.</li>
           </ul>
         </div>
       </section>

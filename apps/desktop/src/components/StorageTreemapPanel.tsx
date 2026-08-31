@@ -87,9 +87,9 @@ export function StorageTreemapPanel({
     <section className="storage-map" id="storage-map" aria-labelledby="storage-map-title">
       <header className="storage-map__header">
         <div>
-          <p className="eyebrow">STORAGE TREEMAP</p>
+          <p className="eyebrow">폴더별 용량 보기</p>
           <h2 id="storage-map-title">비례사각형 저장공간 맵</h2>
-          <p>사각형 면적은 파일과 폴더의 논리 용량에 비례합니다.</p>
+          <p>사각형이 클수록 파일이나 폴더의 크기가 큽니다.</p>
         </div>
         <div className="storage-map__actions">
           {scanning ? (
@@ -162,7 +162,7 @@ export function StorageTreemapPanel({
 
           {mapItems.length ? (
             <div className="storage-map__workspace">
-              <div className="storage-map__canvas" ref={canvasRef} aria-label="용량 비례 트리맵">
+              <div className="storage-map__canvas" ref={canvasRef} aria-label="파일과 폴더 크기 비교 지도">
                 {layout.map((item) => {
                   const canOpen = item.node?.isDirectory === true;
                   const showName = item.width >= 70 && item.height >= 34;

@@ -96,16 +96,16 @@ const extensionFilters: Array<{
 }> = [
   { id: "all", label: "전체", extensions: [] },
   { id: "text", label: "텍스트·코드", extensions: textExtensions },
-  { id: "office", label: "Office·HWPX", extensions: ["docx", "xlsx", "pptx", "hwpx"] },
+  { id: "office", label: "워드·엑셀·한글", extensions: ["docx", "xlsx", "pptx", "hwpx"] },
   { id: "pdf", label: "PDF", extensions: ["pdf"] },
 ];
 
 const formatLabels: Record<DocumentFormat, string> = {
-  plainText: "TEXT",
+  plainText: "텍스트",
   pdf: "PDF",
-  word: "WORD",
-  spreadsheet: "SHEET",
-  presentation: "SLIDE",
+  word: "문서",
+  spreadsheet: "표",
+  presentation: "발표",
   hwpx: "HWPX",
 };
 
@@ -207,15 +207,15 @@ export function DocumentSearchView({
             <FileSearch size={22} />
           </span>
           <div>
-            <p className="eyebrow">LOCAL FULL-TEXT INDEX</p>
+            <p className="eyebrow">문서 내용에서 찾기</p>
             <h2 id="document-search-title">문서 안의 단어와 문장을 찾습니다</h2>
             <p>
-              파일은 이 컴퓨터에서만 읽고 색인합니다. 검색 내용이나 문서 본문을 외부로 보내지 않습니다.
+              파일은 이 기기 안에서만 읽고 검색하기 좋게 정리합니다. 문서 내용은 외부로 보내지 않습니다.
             </p>
           </div>
           <span className="document-local-badge">
             <ShieldCheck size={14} aria-hidden="true" />
-            로컬 전용
+            이 기기 안에서만 처리
           </span>
         </div>
 
@@ -234,10 +234,10 @@ export function DocumentSearchView({
             autoComplete="off"
             placeholder={
               scopeChanged
-                ? "선택한 폴더의 색인을 먼저 업데이트하세요"
+                ? "선택한 폴더의 문서 목록을 먼저 새로고침하세요…"
                 : index
-                  ? "예: 계약 변경, 오류 코드, 회의 결정"
-                  : "먼저 검색할 폴더의 색인을 만드세요"
+                  ? "예: 계약 변경, 오류 코드, 회의 결정…"
+                  : "먼저 검색할 폴더의 문서를 읽어 두세요…"
             }
             onChange={(event) => setQuery(event.currentTarget.value)}
           />
@@ -251,7 +251,7 @@ export function DocumentSearchView({
             ) : (
               <Search size={16} aria-hidden="true" />
             )}
-            {searchState === "searching" ? "검색 중" : "내용 검색"}
+            {searchState === "searching" ? "검색 중…" : "내용 검색"}
           </button>
         </form>
 
@@ -280,16 +280,16 @@ export function DocumentSearchView({
         <section className="document-scope-warning" role="status">
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
-            <strong>선택한 폴더와 현재 색인의 범위가 다릅니다</strong>
-            <p>이전 폴더의 결과를 섞지 않습니다. 새 범위를 색인한 뒤 검색할 수 있습니다.</p>
+            <strong>선택한 폴더가 지금 읽어 둔 문서 목록과 다릅니다</strong>
+            <p>이전 폴더의 결과와 섞이지 않도록 새 폴더의 문서를 다시 읽어 주세요.</p>
           </div>
           <button type="button" disabled={blocked || state === "scanning"} onClick={onStartIndex}>
-            새 범위 색인
+            새 폴더 다시 읽기
           </button>
         </section>
       ) : null}
 
-      <section className="document-index-console" aria-label="문서 색인 상태">
+      <section className="document-index-console" aria-label="문서 검색 준비 상태">
         <div className="document-index-console__status">
           <span aria-hidden="true">
             <Database size={19} />
@@ -297,17 +297,17 @@ export function DocumentSearchView({
           <div>
             <strong>
               {state === "scanning"
-                ? "문서 색인을 갱신하고 있습니다"
+                ? "문서를 읽고 검색 목록을 새로 만들고 있습니다…"
                 : index
                   ? `${formatCount(index.indexedDocuments)}개 문서를 검색할 수 있습니다`
-                  : "아직 만들어진 문서 색인이 없습니다"}
+                  : "아직 읽어 둔 문서가 없습니다"}
             </strong>
             <p>
               {state === "scanning"
-                ? progress?.message ?? "문서 파일을 확인하고 있습니다"
+                ? progress?.message ?? "문서 파일을 확인하고 있습니다…"
                 : index
-                  ? `${formatDate(index.completedAtUnixMs)} 갱신 · ${formatBytes(index.indexedBytes)} · ${formatDuration(index.durationMs)}`
-                  : "최초 한 번 본문을 읽고, 다음부터 크기와 수정 시각이 바뀐 문서만 다시 처리합니다."}
+                  ? `${formatDate(index.completedAtUnixMs)} 새로고침 · 읽은 문서 ${formatBytes(index.indexedBytes)} · ${formatDuration(index.durationMs)}`
+                  : "처음에는 문서 내용을 읽고, 다음부터는 바뀐 문서만 다시 읽습니다."}
             </p>
           </div>
         </div>
@@ -315,7 +315,7 @@ export function DocumentSearchView({
         {state === "scanning" ? (
           <button className="document-cancel-button" type="button" onClick={onCancelIndex}>
             <X size={15} aria-hidden="true" />
-            색인 취소
+            읽기 취소
           </button>
         ) : (
           <div className="document-index-console__actions">
@@ -332,7 +332,7 @@ export function DocumentSearchView({
               onClick={onStartIndex}
             >
               <RefreshCw size={15} aria-hidden="true" />
-              {index && !scopeChanged ? "색인 업데이트" : "색인 만들기"}
+              {index && !scopeChanged ? "문서 목록 새로고침" : "문서 미리 읽기"}
             </button>
           </div>
         )}
@@ -340,9 +340,9 @@ export function DocumentSearchView({
         {state === "scanning" && showIndexProgress ? (
           <div className="document-index-progress" role="status" aria-live="polite">
             <IndexMetric label="확인한 파일" value={`${formatCount(progress?.scannedFiles ?? 0)}개`} />
-            <IndexMetric label="문서 후보" value={`${formatCount(progress?.candidateDocuments ?? 0)}개`} />
-            <IndexMetric label="색인 완료" value={`${formatCount(progress?.indexedDocuments ?? 0)}개`} />
-            <IndexMetric label="캐시 재사용" value={`${formatCount(progress?.reusedDocuments ?? 0)}개`} />
+            <IndexMetric label="읽을 문서" value={`${formatCount(progress?.candidateDocuments ?? 0)}개`} />
+            <IndexMetric label="검색 준비됨" value={`${formatCount(progress?.indexedDocuments ?? 0)}개`} />
+            <IndexMetric label="다시 안 읽음" value={`${formatCount(progress?.reusedDocuments ?? 0)}개`} />
           </div>
         ) : null}
       </section>
@@ -351,7 +351,7 @@ export function DocumentSearchView({
         <section className="document-error" role="alert">
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
-            <strong>문서 색인을 완료하지 못했습니다</strong>
+            <strong>문서를 검색할 수 있게 준비하지 못했습니다</strong>
             <p>{error}</p>
           </div>
         </section>
@@ -359,7 +359,7 @@ export function DocumentSearchView({
 
       {lastBuild && index?.completedAtUnixMs === lastBuild.completedAtUnixMs ? (
         <>
-          <section className="document-build-evidence" aria-label="최근 색인 근거">
+          <section className="document-build-evidence" aria-label="최근 문서 읽기 결과">
             <span>
               <strong>{formatCount(lastBuild.updatedDocuments)}</strong>
               새로 읽음
@@ -377,15 +377,15 @@ export function DocumentSearchView({
               구형 HWP
             </span>
             <p>
-              PDF는 텍스트 계층만 검색합니다. 이미지형 PDF와 암호 문서는 OCR이나 암호 해제를 시도하지 않습니다.
+              PDF 안에서 마우스로 선택할 수 있는 글자만 찾습니다. 사진처럼 저장된 PDF와 비밀번호가 걸린 문서는 읽지 않습니다.
             </p>
           </section>
           {lastBuild.documentLimitReached ? (
             <section className="document-scope-warning" role="status">
               <AlertTriangle size={18} aria-hidden="true" />
               <div>
-                <strong>문서 색인 상한에 도달했습니다</strong>
-                <p>개별 문서 목록이 완전하지 않습니다. 더 작은 폴더를 선택해 다시 색인하세요.</p>
+                <strong>한 번에 읽을 수 있는 문서 수를 넘었습니다</strong>
+                <p>일부 문서가 빠졌을 수 있습니다. 더 작은 폴더를 선택해 다시 읽어 주세요.</p>
               </div>
             </section>
           ) : null}
@@ -424,7 +424,7 @@ export function DocumentSearchView({
         <section className="document-results" aria-labelledby="document-results-title">
           <header className="document-results__header">
             <div>
-              <p className="eyebrow">MATCHED LOCALLY</p>
+              <p className="eyebrow">이 기기에서 찾은 결과</p>
               <h2 id="document-results-title">“{searchReport.query}” 검색 결과</h2>
               <p>
                 {formatCount(searchReport.searchedDocuments)}개 문서에서 {formatCount(searchReport.totalMatches)}개를 찾았습니다.
@@ -511,7 +511,7 @@ export function DocumentSearchView({
             <strong>첫 버전 검색 범위</strong>
           </div>
           <p>
-            TXT·Markdown·코드·CSV·JSON, DOCX·XLSX·PPTX·HWPX, 텍스트 PDF를 지원합니다. 구형 HWP와 스캔 PDF는 후속 전용 파서·OCR 범위입니다.
+            TXT·Markdown·코드·CSV·JSON, 워드·엑셀·파워포인트·HWPX, 글자를 선택할 수 있는 PDF를 지원합니다. 구형 HWP와 사진으로 된 PDF는 아직 내용 검색을 지원하지 않습니다.
           </p>
         </section>
       ) : null}

@@ -150,7 +150,7 @@ export function DriveStoragePanel({
     <section className="drive-inventory" aria-labelledby="drive-inventory-title">
       <header className="drive-inventory__header">
         <div>
-          <p className="eyebrow">DRIVE INVENTORY</p>
+          <p className="eyebrow">드라이브 용량</p>
           <h2 id="drive-inventory-title">드라이브 사용량</h2>
           <p>
             {volume
@@ -205,7 +205,7 @@ export function DriveStoragePanel({
             : 0;
           const appRegistryDetail =
             category.kind === "applications" && installedApps?.supported
-              ? `${platformLabel} 레지스트리 ${formatCount(installedApps.applications.length)}개 앱 대조`
+              ? `${platformLabel} 설치 기록과 앱 ${formatCount(installedApps.applications.length)}개 대조`
               : null;
 
           return (
@@ -243,14 +243,14 @@ export function DriveStoragePanel({
         <span>
           <HardDrive size={15} aria-hidden="true" />
           {report
-            ? `${formatDuration(report.durationMs)} · 접근 가능한 논리 용량 ${formatBytes(report.totalLogicalBytes)}`
+            ? `${formatDuration(report.durationMs)} · 읽을 수 있는 파일 크기 합계 ${formatBytes(report.totalLogicalBytes)}`
             : "드라이브 분류 단계는 파일을 변경하지 않습니다"}
         </span>
         {report ? (
           <span>
             {formatCount(report.unreadableEntries)}개 접근 제한 · {report.hardLinkDeduplication
               ? `하드링크 ${formatCount(report.hardLinksSkipped)}개 제외`
-              : "논리 크기 기준"}
+              : "파일에 표시된 크기 기준"}
             {report.locationTrackingLimitReached ? " · 위치 목록 안전 상한 도달" : ""}
             {report.hardLinkIdentityLimitReached ? " · 하드링크 집계 상한 도달" : ""}
           </span>

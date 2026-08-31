@@ -19,7 +19,7 @@ export function TrashResultPanel({ result, onRescan }: TrashResultPanelProps) {
           {hasWarning ? <AlertTriangle size={22} /> : <ShieldCheck size={22} />}
         </span>
         <div>
-          <p className="eyebrow">ACTION RESULT</p>
+          <p className="eyebrow">작업 결과</p>
           <h2>
             {result.cancelled
               ? "휴지통 이동을 중단했습니다"
@@ -27,7 +27,7 @@ export function TrashResultPanel({ result, onRescan }: TrashResultPanelProps) {
                 ? "일부 항목만 처리했습니다"
                 : "휴지통 이동을 완료했습니다"}
           </h2>
-          <p>이 결과는 삭제된 용량이 아니라 휴지통으로 이동한 논리 용량입니다.</p>
+          <p>실제로 확보된 공간이 아니라 휴지통으로 옮긴 파일 크기의 합계입니다.</p>
         </div>
       </div>
 

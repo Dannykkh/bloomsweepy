@@ -294,7 +294,7 @@ where
 
     on_progress(DocumentIndexProgress {
         phase: DocumentIndexPhase::Discovering,
-        message: "검색할 문서와 기존 색인을 대조하고 있습니다".to_owned(),
+        message: "검색할 문서와 전에 읽어 둔 목록을 비교하고 있습니다…".to_owned(),
         scanned_files: 0,
         candidate_documents: 0,
         indexed_documents: 0,
@@ -983,7 +983,7 @@ where
     let normalized = normalize_text(&text, config.max_extracted_bytes);
     if normalized.trim().is_empty() {
         let message = if format == DocumentFormat::Pdf {
-            "텍스트 계층이 없는 PDF입니다. OCR은 아직 수행하지 않습니다"
+            "글자를 선택할 수 없는 PDF입니다. 사진 속 글자 읽기는 아직 지원하지 않습니다"
         } else {
             "검색할 수 있는 텍스트가 없습니다"
         };
