@@ -2,14 +2,41 @@ use super::FileCatalogEntryKind;
 
 const MAX_QUERY_TOKENS: usize = 32;
 const MAX_QUERY_EXTENSIONS: usize = 32;
+const MAX_OR_GROUPS: usize = 8;
 const MILLIS_PER_DAY: u64 = 86_400_000;
 
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(super) struct ParsedCatalogQuery {
+pub(super) struct CatalogSelectorGroup {
     pub terms: Vec<String>,
-    pub excluded_terms: Vec<String>,
     pub path_terms: Vec<String>,
+    pub globs: Vec<CatalogGlob>,
+}
+
+impl CatalogSelectorGroup {
+    fn is_empty(&self) -> bool {
+        self.terms.is_empty() && self.path_terms.is_empty() && self.globs.is_empty()
+    }
+
+    fn has_fts_anchor(&self) -> bool {
+        self.terms.iter().any(|term| term.chars().count() >= 3)
+            || self.path_terms.iter().any(|term| term.chars().count() >= 3)
+            || !self.globs.is_empty()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct CatalogGlob {
+    pub pattern: String,
+    pub like_pattern: String,
+    pub literal_terms: Vec<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct ParsedCatalogQuery {
+    pub selector_groups: Vec<CatalogSelectorGroup>,
+    pub excluded_terms: Vec<String>,
     pub excluded_path_terms: Vec<String>,
+    pub excluded_globs: Vec<CatalogGlob>,
     pub extensions: Vec<String>,
     pub excluded_extensions: Vec<String>,
     pub kind: Option<FileCatalogEntryKind>,
@@ -22,8 +49,7 @@ pub(super) struct ParsedCatalogQuery {
 
 impl ParsedCatalogQuery {
     fn has_positive_selector(&self) -> bool {
-        !self.terms.is_empty()
-            || !self.path_terms.is_empty()
+        self.selector_groups.iter().any(|group| !group.is_empty())
             || !self.extensions.is_empty()
             || self.kind.is_some()
             || self.min_bytes.is_some()
@@ -37,6 +63,7 @@ impl ParsedCatalogQuery {
 struct QueryToken {
     value: String,
     excluded: bool,
+    quoted: bool,
 }
 
 pub(super) fn parse_catalog_query(
@@ -46,8 +73,32 @@ pub(super) fn parse_catalog_query(
     if !(-1_440..=1_440).contains(&timezone_offset_minutes) {
         return Err("timezone offset is outside the supported range".to_owned());
     }
-    let mut parsed = ParsedCatalogQuery::default();
+    let mut parsed = ParsedCatalogQuery {
+        selector_groups: vec![CatalogSelectorGroup::default()],
+        ..ParsedCatalogQuery::default()
+    };
+    let mut saw_or = false;
     for token in tokenize(query)? {
+        if !token.excluded && !token.quoted && token.value.eq_ignore_ascii_case("OR") {
+            if parsed
+                .selector_groups
+                .last()
+                .is_none_or(CatalogSelectorGroup::is_empty)
+            {
+                return Err("place OR between two name, path, or glob conditions".to_owned());
+            }
+            if parsed.selector_groups.len() >= MAX_OR_GROUPS {
+                return Err(format!("use at most {MAX_OR_GROUPS} OR branches"));
+            }
+            parsed.selector_groups.push(CatalogSelectorGroup::default());
+            saw_or = true;
+            continue;
+        }
+        if !token.excluded && !token.quoted && matches!(token.value.as_str(), "(" | ")") {
+            return Err(
+                "parentheses are not supported; use OR between flat condition groups".to_owned(),
+            );
+        }
         let Some((prefix, value)) = token.value.split_once(':') else {
             push_text_term(&mut parsed, token);
             continue;
@@ -78,7 +129,25 @@ pub(super) fn parse_catalog_query(
                 if token.excluded {
                     parsed.excluded_path_terms.push(value.to_owned());
                 } else {
-                    parsed.path_terms.push(value.to_owned());
+                    parsed
+                        .selector_groups
+                        .last_mut()
+                        .expect("selector group")
+                        .path_terms
+                        .push(value.to_owned());
+                }
+            }
+            "glob" => {
+                let glob = parse_glob(value, !token.excluded)?;
+                if token.excluded {
+                    parsed.excluded_globs.push(glob);
+                } else {
+                    parsed
+                        .selector_groups
+                        .last_mut()
+                        .expect("selector group")
+                        .globs
+                        .push(glob);
                 }
             }
             "size" => {
@@ -114,6 +183,26 @@ pub(super) fn parse_catalog_query(
                 );
             }
             _ => push_text_term(&mut parsed, token),
+        }
+    }
+
+    if saw_or {
+        if parsed
+            .selector_groups
+            .last()
+            .is_none_or(CatalogSelectorGroup::is_empty)
+        {
+            return Err("place OR between two name, path, or glob conditions".to_owned());
+        }
+        if parsed
+            .selector_groups
+            .iter()
+            .any(|group| !group.has_fts_anchor())
+        {
+            return Err(
+                "each OR branch needs a name, path, or glob literal with at least three characters"
+                    .to_owned(),
+            );
         }
     }
 
@@ -156,17 +245,21 @@ fn tokenize(query: &str) -> Result<Vec<QueryToken>, String> {
     let mut tokens = Vec::new();
     let mut buffer = String::new();
     let mut quoted = false;
+    let mut token_quoted = false;
     let mut characters = query.chars().peekable();
 
     while let Some(character) = characters.next() {
         match character {
-            '"' => quoted = !quoted,
+            '"' => {
+                quoted = !quoted;
+                token_quoted = true;
+            }
             '\\' if quoted && characters.peek() == Some(&'"') => {
                 characters.next();
                 buffer.push('"');
             }
             character if character.is_whitespace() && !quoted => {
-                push_token(&mut tokens, &mut buffer)?;
+                push_token(&mut tokens, &mut buffer, &mut token_quoted)?;
             }
             _ => buffer.push(character),
         }
@@ -175,12 +268,17 @@ fn tokenize(query: &str) -> Result<Vec<QueryToken>, String> {
     if quoted {
         return Err("close the quoted search phrase".to_owned());
     }
-    push_token(&mut tokens, &mut buffer)?;
+    push_token(&mut tokens, &mut buffer, &mut token_quoted)?;
     Ok(tokens)
 }
 
-fn push_token(tokens: &mut Vec<QueryToken>, buffer: &mut String) -> Result<(), String> {
+fn push_token(
+    tokens: &mut Vec<QueryToken>,
+    buffer: &mut String,
+    token_quoted: &mut bool,
+) -> Result<(), String> {
     if buffer.is_empty() {
+        *token_quoted = false;
         return Ok(());
     }
     if tokens.len() >= MAX_QUERY_TOKENS {
@@ -194,6 +292,7 @@ fn push_token(tokens: &mut Vec<QueryToken>, buffer: &mut String) -> Result<(), S
     tokens.push(QueryToken {
         value: value.to_owned(),
         excluded,
+        quoted: std::mem::take(token_quoted),
     });
     Ok(())
 }
@@ -202,7 +301,12 @@ fn push_text_term(parsed: &mut ParsedCatalogQuery, token: QueryToken) {
     if token.excluded {
         parsed.excluded_terms.push(token.value);
     } else {
-        parsed.terms.push(token.value);
+        parsed
+            .selector_groups
+            .last_mut()
+            .expect("selector group")
+            .terms
+            .push(token.value);
     }
 }
 
@@ -238,6 +342,43 @@ fn parse_extensions(value: &str) -> Result<Vec<String>, String> {
         return Err("extensions may contain only letters and numbers".to_owned());
     }
     Ok(extensions)
+}
+
+fn parse_glob(value: &str, require_fts_anchor: bool) -> Result<CatalogGlob, String> {
+    let pattern = non_empty_value("glob", value)?;
+    if pattern
+        .chars()
+        .any(|character| matches!(character, '/' | '\\'))
+    {
+        return Err("glob matches file names only and cannot contain path separators".to_owned());
+    }
+    let literal_terms = pattern
+        .split(['*', '?'])
+        .filter(|literal| literal.chars().count() >= 3)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if require_fts_anchor && literal_terms.is_empty() {
+        return Err("glob needs a literal run of at least three characters".to_owned());
+    }
+
+    let mut like_pattern = String::with_capacity(pattern.len());
+    for character in pattern.chars() {
+        match character {
+            '*' => like_pattern.push('%'),
+            '?' => like_pattern.push('_'),
+            '\\' | '%' | '_' => {
+                like_pattern.push('\\');
+                like_pattern.push(character);
+            }
+            _ => like_pattern.push(character),
+        }
+    }
+
+    Ok(CatalogGlob {
+        pattern: pattern.to_owned(),
+        like_pattern,
+        literal_terms,
+    })
 }
 
 fn parse_kind(value: &str) -> Result<FileCatalogEntryKind, String> {
@@ -412,14 +553,44 @@ mod tests {
         )
         .expect("parse query");
 
-        assert_eq!(parsed.terms, ["annual report"]);
+        assert_eq!(parsed.selector_groups.len(), 1);
+        assert_eq!(parsed.selector_groups[0].terms, ["annual report"]);
         assert_eq!(parsed.excluded_terms, ["draft"]);
-        assert_eq!(parsed.path_terms, ["Team Files"]);
+        assert_eq!(parsed.selector_groups[0].path_terms, ["Team Files"]);
         assert_eq!(parsed.excluded_path_terms, ["archive"]);
         assert_eq!(parsed.extensions, ["jpg", "pdf"]);
         assert_eq!(parsed.excluded_extensions, ["tmp"]);
         assert_eq!(parsed.kind, Some(FileCatalogEntryKind::File));
         assert_eq!(parsed.excluded_kinds, [FileCatalogEntryKind::Symlink]);
+    }
+
+    #[test]
+    fn parses_bounded_or_groups_and_name_globs() {
+        let parsed = parse_catalog_query(
+            r#"annual path:"Team Files" OR glob:invoice-*.pdf ext:pdf -draft -glob:*copy*"#,
+            0,
+        )
+        .expect("parse OR query");
+
+        assert_eq!(parsed.selector_groups.len(), 2);
+        assert_eq!(parsed.selector_groups[0].terms, ["annual"]);
+        assert_eq!(parsed.selector_groups[0].path_terms, ["Team Files"]);
+        assert_eq!(parsed.selector_groups[1].globs.len(), 1);
+        assert_eq!(parsed.selector_groups[1].globs[0].pattern, "invoice-*.pdf");
+        assert_eq!(
+            parsed.selector_groups[1].globs[0].like_pattern,
+            "invoice-%.pdf"
+        );
+        assert_eq!(
+            parsed.selector_groups[1].globs[0].literal_terms,
+            ["invoice-", ".pdf"]
+        );
+        assert_eq!(parsed.extensions, ["pdf"]);
+        assert_eq!(parsed.excluded_terms, ["draft"]);
+        assert_eq!(parsed.excluded_globs[0].like_pattern, "%copy%");
+
+        let quoted_or = parse_catalog_query(r#""OR" type:file"#, 0).expect("quoted OR");
+        assert_eq!(quoted_or.selector_groups[0].terms, ["OR"]);
     }
 
     #[test]
@@ -456,5 +627,19 @@ mod tests {
         assert!(parse_catalog_query("\"\"", 0).is_err());
         assert!(parse_catalog_query("-draft -ext:tmp", 0).is_err());
         assert!(parse_catalog_query("after:2026-01-01", 1_441).is_err());
+        assert!(parse_catalog_query("OR annual", 0).is_err());
+        assert!(parse_catalog_query("annual OR", 0).is_err());
+        assert!(parse_catalog_query("annual OR be", 0).is_err());
+        assert!(parse_catalog_query("annual OR ext:pdf", 0).is_err());
+        assert!(parse_catalog_query("annual ( report )", 0).is_err());
+        assert!(parse_catalog_query("glob:*.?", 0).is_err());
+        assert!(parse_catalog_query(r"glob:folder/*.pdf", 0).is_err());
+        assert!(
+            parse_catalog_query(
+                "one OR two OR three OR four OR five OR six OR seven OR eight OR nine",
+                0,
+            )
+            .is_err()
+        );
     }
 }

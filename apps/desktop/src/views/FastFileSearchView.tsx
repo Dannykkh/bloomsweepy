@@ -216,7 +216,7 @@ export function FastFileSearchView({
           <div>
             <p className="eyebrow">LOCAL FILE CATALOG</p>
             <h2 id="file-search-title">이름·경로·조건을 한 줄에서 찾으세요</h2>
-            <p>일반 단어는 모두 포함하고, 따옴표는 문구로 묶으며, 앞에 -를 붙인 단어는 결과에서 제외합니다.</p>
+            <p>일반 단어는 모두 포함하며 OR로 이름·경로·파일명 패턴을 나눠 찾습니다. 따옴표는 문구, 앞의 -는 제외 조건입니다.</p>
           </div>
           <span className="document-local-badge">
             <ShieldCheck size={14} aria-hidden="true" />
@@ -243,7 +243,7 @@ export function FastFileSearchView({
                 : stale
                   ? "휴지통 이동 결과를 반영하도록 카탈로그를 업데이트하세요"
                 : catalog
-                  ? "예: annual ext:pdf size:>100mb -draft"
+                  ? "예: invoice OR receipt ext:pdf -draft"
                   : "먼저 드라이브 또는 폴더 카탈로그를 만드세요"
             }
             onChange={(event) => setQuery(event.currentTarget.value)}
@@ -264,6 +264,8 @@ export function FastFileSearchView({
 
         <div className="file-query-syntax" id="file-query-syntax" role="note">
           <span>한 줄 조건</span>
+          <code>OR</code>
+          <code>glob:report-*.pdf</code>
           <code>ext:pdf,jpg</code>
           <code>type:file</code>
           <code>path:&quot;보고서&quot;</code>

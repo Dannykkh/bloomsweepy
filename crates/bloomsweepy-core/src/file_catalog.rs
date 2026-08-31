@@ -16,7 +16,7 @@ mod query;
 #[cfg(windows)]
 mod windows_ntfs;
 
-use query::{ParsedCatalogQuery, parse_catalog_query};
+use query::{CatalogGlob, CatalogSelectorGroup, ParsedCatalogQuery, parse_catalog_query};
 
 const INDEX_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_MAX_ENTRIES: usize = 2_000_000;
@@ -1298,30 +1298,46 @@ pub fn search_file_catalog(
     let max_results = request.max_results.clamp(1, MAX_SEARCH_RESULTS);
     let mut values = Vec::new();
     let mut predicates = Vec::new();
-    let mut fts_parts = Vec::new();
+    let ranked_fts = parsed.selector_groups.len() == 1;
+    let (from_clause, use_ranked_fts) = if ranked_fts {
+        let mut fts_parts = Vec::new();
+        append_selector_predicates(
+            &parsed.selector_groups[0],
+            &mut values,
+            &mut predicates,
+            &mut fts_parts,
+        );
+        if fts_parts.is_empty() {
+            ("FROM file_catalog_entries e", false)
+        } else {
+            values.push(Value::Text(fts_parts.join(" AND ")));
+            predicates.insert(0, format!("file_catalog_fts MATCH ?{}", values.len()));
+            (
+                "FROM file_catalog_fts JOIN file_catalog_entries e ON e.id = file_catalog_fts.rowid",
+                true,
+            )
+        }
+    } else {
+        let mut group_predicates = Vec::with_capacity(parsed.selector_groups.len());
+        for group in &parsed.selector_groups {
+            let mut branch = Vec::new();
+            let mut fts_parts = Vec::new();
+            append_selector_predicates(group, &mut values, &mut branch, &mut fts_parts);
+            debug_assert!(!fts_parts.is_empty());
+            values.push(Value::Text(fts_parts.join(" AND ")));
+            branch.insert(
+                0,
+                format!(
+                    "e.id IN (SELECT rowid FROM file_catalog_fts WHERE file_catalog_fts MATCH ?{})",
+                    values.len()
+                ),
+            );
+            group_predicates.push(format!("({})", branch.join(" AND ")));
+        }
+        predicates.push(format!("({})", group_predicates.join(" OR ")));
+        ("FROM file_catalog_entries e", false)
+    };
 
-    for term in &parsed.terms {
-        if term.chars().count() >= 3 {
-            fts_parts.push(fts_literal(term));
-        } else {
-            values.push(Value::Text(format!("%{}%", escape_like(term))));
-            predicates.push(format!(
-                "(e.name LIKE ?{0} ESCAPE '\\' COLLATE NOCASE OR e.path LIKE ?{0} ESCAPE '\\' COLLATE NOCASE)",
-                values.len()
-            ));
-        }
-    }
-    for term in &parsed.path_terms {
-        if term.chars().count() >= 3 {
-            fts_parts.push(format!("path : {}", fts_literal(term)));
-        } else {
-            values.push(Value::Text(format!("%{}%", escape_like(term))));
-            predicates.push(format!(
-                "e.path LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
-                values.len()
-            ));
-        }
-    }
     for term in &parsed.excluded_terms {
         values.push(Value::Text(format!("%{}%", escape_like(term))));
         predicates.push(format!(
@@ -1336,15 +1352,13 @@ pub fn search_file_catalog(
             values.len()
         ));
     }
-
-    let use_trigram = !fts_parts.is_empty();
-    let from_clause = if use_trigram {
-        values.push(Value::Text(fts_parts.join(" AND ")));
-        predicates.insert(0, format!("file_catalog_fts MATCH ?{}", values.len()));
-        "FROM file_catalog_fts JOIN file_catalog_entries e ON e.id = file_catalog_fts.rowid"
-    } else {
-        "FROM file_catalog_entries e"
-    };
+    for glob in &parsed.excluded_globs {
+        values.push(Value::Text(glob.like_pattern.clone()));
+        predicates.push(format!(
+            "e.name NOT LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+            values.len()
+        ));
+    }
 
     if let Some(kind) = request.kind {
         values.push(Value::Text(kind.database_value().to_owned()));
@@ -1403,7 +1417,7 @@ pub fn search_file_catalog(
     }
 
     let order_clause = match request.sort {
-        FileCatalogSort::Relevance if use_trigram => {
+        FileCatalogSort::Relevance if use_ranked_fts => {
             "ORDER BY bm25(file_catalog_fts, 4.0, 1.0), length(e.path), e.name COLLATE NOCASE"
         }
         FileCatalogSort::Relevance => {
@@ -1472,6 +1486,48 @@ pub fn search_file_catalog(
     })
 }
 
+fn append_selector_predicates(
+    group: &CatalogSelectorGroup,
+    values: &mut Vec<Value>,
+    predicates: &mut Vec<String>,
+    fts_parts: &mut Vec<String>,
+) {
+    for term in &group.terms {
+        if term.chars().count() >= 3 {
+            fts_parts.push(fts_literal(term));
+        } else {
+            values.push(Value::Text(format!("%{}%", escape_like(term))));
+            predicates.push(format!(
+                "(e.name LIKE ?{0} ESCAPE '\\' COLLATE NOCASE OR e.path LIKE ?{0} ESCAPE '\\' COLLATE NOCASE)",
+                values.len()
+            ));
+        }
+    }
+    for term in &group.path_terms {
+        if term.chars().count() >= 3 {
+            fts_parts.push(format!("path : {}", fts_literal(term)));
+        } else {
+            values.push(Value::Text(format!("%{}%", escape_like(term))));
+            predicates.push(format!(
+                "e.path LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+                values.len()
+            ));
+        }
+    }
+    for glob in &group.globs {
+        fts_parts.extend(
+            glob.literal_terms
+                .iter()
+                .map(|literal| format!("name : {}", fts_literal(literal))),
+        );
+        values.push(Value::Text(glob.like_pattern.clone()));
+        predicates.push(format!(
+            "e.name LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+            values.len()
+        ));
+    }
+}
+
 fn add_text_set_predicate<I>(
     values: &mut Vec<Value>,
     predicates: &mut Vec<String>,
@@ -1494,16 +1550,58 @@ fn add_text_set_predicate<I>(
 }
 
 fn catalog_match_source(name: &str, query: &ParsedCatalogQuery) -> FileCatalogMatchSource {
-    if !query.path_terms.is_empty()
-        || query
+    if query
+        .selector_groups
+        .iter()
+        .any(|group| selector_group_matches_name(name, group))
+    {
+        FileCatalogMatchSource::Name
+    } else {
+        FileCatalogMatchSource::Path
+    }
+}
+
+fn selector_group_matches_name(name: &str, group: &CatalogSelectorGroup) -> bool {
+    group.path_terms.is_empty()
+        && group
             .terms
             .iter()
-            .any(|term| !contains_case_insensitive(name, term))
-    {
-        FileCatalogMatchSource::Path
-    } else {
-        FileCatalogMatchSource::Name
+            .all(|term| contains_case_insensitive(name, term))
+        && group
+            .globs
+            .iter()
+            .all(|glob| glob_matches_case_insensitive(name, glob))
+}
+
+fn glob_matches_case_insensitive(value: &str, glob: &CatalogGlob) -> bool {
+    let value = value.to_lowercase().chars().collect::<Vec<_>>();
+    let pattern = glob.pattern.to_lowercase().chars().collect::<Vec<_>>();
+    let (mut value_index, mut pattern_index) = (0, 0);
+    let (mut star_index, mut star_value_index) = (None, 0);
+
+    while value_index < value.len() {
+        if pattern_index < pattern.len()
+            && (pattern[pattern_index] == '?' || pattern[pattern_index] == value[value_index])
+        {
+            value_index += 1;
+            pattern_index += 1;
+        } else if pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+            star_index = Some(pattern_index);
+            pattern_index += 1;
+            star_value_index = value_index;
+        } else if let Some(star_index) = star_index {
+            star_value_index += 1;
+            value_index = star_value_index;
+            pattern_index = star_index + 1;
+        } else {
+            return false;
+        }
     }
+
+    while pattern_index < pattern.len() && pattern[pattern_index] == '*' {
+        pattern_index += 1;
+    }
+    pattern_index == pattern.len()
 }
 
 pub fn clear_file_catalog(database_path: impl AsRef<Path>) -> Result<bool, FileCatalogError> {
@@ -2007,6 +2105,8 @@ mod tests {
         fs::write(team_files.join("annual-final.pdf"), vec![1_u8; 64]).expect("write final report");
         fs::write(team_files.join("annual-draft.pdf"), vec![2_u8; 64]).expect("write draft report");
         fs::write(archive.join("annual-final.txt"), vec![3_u8; 64]).expect("write archived report");
+        fs::write(archive.join("invoice-001.PDF"), vec![4_u8; 64]).expect("write invoice");
+        fs::write(archive.join("invoice-copy.pdf"), vec![5_u8; 64]).expect("write copied invoice");
         let database = temporary.path().join("catalog.sqlite3");
         build(&root, &database);
 
@@ -2032,6 +2132,44 @@ mod tests {
             structured.results[0].match_source,
             FileCatalogMatchSource::Path
         );
+
+        let alternatives = search_file_catalog(
+            &database,
+            request(
+                r#"annual path:"Team Files" OR glob:invoice-*.pdf ext:pdf -draft -glob:*copy*"#,
+            ),
+        )
+        .expect("OR and glob search");
+        let mut alternative_names = alternatives
+            .results
+            .iter()
+            .map(|result| result.name.as_str())
+            .collect::<Vec<_>>();
+        alternative_names.sort_unstable();
+        assert_eq!(alternative_names, ["annual-final.pdf", "invoice-001.PDF"]);
+        assert_eq!(
+            alternatives
+                .results
+                .iter()
+                .find(|result| result.name == "annual-final.pdf")
+                .expect("path alternative")
+                .match_source,
+            FileCatalogMatchSource::Path
+        );
+        assert_eq!(
+            alternatives
+                .results
+                .iter()
+                .find(|result| result.name == "invoice-001.PDF")
+                .expect("glob alternative")
+                .match_source,
+            FileCatalogMatchSource::Name
+        );
+
+        let wildcard = search_file_catalog(&database, request("glob:annual-?????.pdf -draft"))
+            .expect("question-mark glob search");
+        assert_eq!(wildcard.results.len(), 1);
+        assert_eq!(wildcard.results[0].name, "annual-final.pdf");
 
         let filter_only =
             search_file_catalog(&database, request("ext:txt type:file")).expect("filter search");
