@@ -4461,6 +4461,31 @@ option {
   white-space: nowrap;
 }
 
+.file-query-syntax {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: -8px;
+  font-size: 8px;
+  color: var(--text-muted);
+}
+
+.file-query-syntax > span {
+  margin-right: 2px;
+  color: var(--text-faint);
+}
+
+.file-query-syntax code {
+  padding: 4px 7px;
+  font-family: "JetBrains Mono", "Pretendard Variable", monospace;
+  font-size: 8px;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface-strong);
+}
+
 .file-filter-row {
   display: grid;
   grid-template-columns: auto minmax(140px, 1fr) minmax(150px, auto) minmax(140px, auto);

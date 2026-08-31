@@ -665,6 +665,9 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn scan_runtime_rejects_overlap_and_recovers_after_finish() {
@@ -690,5 +693,42 @@ mod tests {
 
         runtime.finish();
         assert!(!runtime.cancel().expect("cancel with no active scan"));
+    }
+
+    #[test]
+    fn blocking_worker_keeps_status_overlap_and_cancel_responsive() {
+        const CONTROL_PLANE_LIMIT: Duration = Duration::from_millis(250);
+
+        let runtime = Arc::new(ScanRuntime::default());
+        let cancellation = runtime.begin().expect("begin blocking work");
+        let (started_tx, started_rx) = mpsc::sync_channel(0);
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            started_tx.send(()).expect("signal worker start");
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !cancellation.load(Ordering::Acquire) {
+                assert!(Instant::now() < deadline, "worker was not cancelled");
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("blocking worker start");
+
+        let started = Instant::now();
+        assert!(runtime.is_running());
+        assert!(runtime.begin().is_err());
+        assert!(runtime.cancel().expect("cancel blocking work"));
+        let control_plane_elapsed = started.elapsed();
+        println!("runtime control-plane latency: {control_plane_elapsed:?}");
+        assert!(
+            control_plane_elapsed < CONTROL_PLANE_LIMIT,
+            "status, overlap rejection, and cancellation took {:?}",
+            control_plane_elapsed
+        );
+
+        tauri::async_runtime::block_on(worker).expect("join blocking worker");
+        runtime.finish();
+        assert!(!runtime.is_running());
+        assert!(runtime.begin().is_ok());
     }
 }

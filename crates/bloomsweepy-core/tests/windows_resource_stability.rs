@@ -208,6 +208,7 @@ fn run_file_catalog(root: &std::path::Path, database: &std::path::Path) {
             extensions: Vec::new(),
             min_bytes: None,
             max_bytes: None,
+            timezone_offset_minutes: 0,
             sort: FileCatalogSort::Relevance,
             max_results: 100,
         },

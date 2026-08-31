@@ -21,7 +21,7 @@
 - **type** `DuplicatesViewProps` (L23)
 
 ## apps/desktop/src/views/FastFileSearchView.tsx
-- **component** `IndexMetric` (L533)
+- **component** `IndexMetric` (L546)
 - **type** `FastFileSearchViewProps` (L34)
 - **type** `KindFilter` (L50)
 - **type** `SearchState` (L52)

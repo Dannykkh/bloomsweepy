@@ -12,8 +12,11 @@ use thiserror::Error;
 
 use crate::{bounded_worker_threads, system_time_ms};
 
+mod query;
 #[cfg(windows)]
 mod windows_ntfs;
+
+use query::{ParsedCatalogQuery, parse_catalog_query};
 
 const INDEX_SCHEMA_VERSION: i64 = 2;
 const DEFAULT_MAX_ENTRIES: usize = 2_000_000;
@@ -201,6 +204,8 @@ pub struct FileCatalogSearchRequest {
     #[serde(default)]
     pub max_bytes: Option<u64>,
     #[serde(default)]
+    pub timezone_offset_minutes: i32,
+    #[serde(default)]
     pub sort: FileCatalogSort,
     #[serde(default = "default_search_results")]
     pub max_results: usize,
@@ -253,6 +258,8 @@ pub enum FileCatalogError {
     EmptyQuery,
     #[error("search query is longer than {MAX_QUERY_CHARS} characters")]
     QueryTooLong,
+    #[error("invalid file search query: {0}")]
+    InvalidQuery(String),
     #[error("no completed file catalog is available")]
     IndexUnavailable,
     #[error("failed to access the file catalog: {0}")]
@@ -537,6 +544,9 @@ where
         processed_bytes: stats.indexed_bytes,
         unreadable_entries: stats.unreadable_entries,
     });
+    if should_cancel() {
+        return Err(FileCatalogError::Cancelled);
+    }
     removed_entries = removed_entries.saturating_add(
         transaction
             .execute(
@@ -546,6 +556,9 @@ where
             .map_err(index_error)? as u64,
     );
     rebuild_bulk_indexes(&transaction)?;
+    if should_cancel() {
+        return Err(FileCatalogError::Cancelled);
+    }
 
     let completed_at = unix_time_ms();
     let duration_ms = started.elapsed().as_millis();
@@ -565,6 +578,9 @@ where
         refresh_mode: FileCatalogRefreshMode::Full,
     };
     write_meta(&transaction, &status, generation, source_meta)?;
+    if should_cancel() {
+        return Err(FileCatalogError::Cancelled);
+    }
     transaction.commit().map_err(index_error)?;
     checkpoint_index(connection)?;
 
@@ -1133,6 +1149,9 @@ where
         processed_bytes: write_stats.indexed_bytes,
         unreadable_entries: write_stats.unreadable_entries,
     });
+    if should_cancel() {
+        return Err(FileCatalogError::Cancelled);
+    }
 
     let completed_at = unix_time_ms();
     let duration_ms = started.elapsed().as_millis();
@@ -1164,6 +1183,9 @@ where
     transaction
         .execute("DELETE FROM file_catalog_changed_ids", [])
         .map_err(index_error)?;
+    if should_cancel() {
+        return Err(FileCatalogError::Cancelled);
+    }
     transaction.commit().map_err(index_error)?;
     checkpoint_index(connection)?;
 
@@ -1244,8 +1266,8 @@ pub fn file_catalog_status(
     if !database_path.exists() {
         return Ok(None);
     }
-    let connection = open_index(database_path)?;
-    initialize_schema(&connection)?;
+    let connection = open_existing_index(database_path)?;
+    ensure_existing_schema(&connection)?;
     read_meta(&connection).map(|meta| meta.map(IndexMeta::into_status))
 }
 
@@ -1254,71 +1276,139 @@ pub fn search_file_catalog(
     request: FileCatalogSearchRequest,
 ) -> Result<FileCatalogSearchReport, FileCatalogError> {
     let started = Instant::now();
-    let query = request.query.trim();
+    let query = request.query.trim().to_owned();
     if query.is_empty() {
         return Err(FileCatalogError::EmptyQuery);
     }
     if query.chars().count() > MAX_QUERY_CHARS {
         return Err(FileCatalogError::QueryTooLong);
     }
+    let parsed = parse_catalog_query(&query, request.timezone_offset_minutes)
+        .map_err(FileCatalogError::InvalidQuery)?;
 
     let database_path = database_path.as_ref();
     if !database_path.exists() {
         return Err(FileCatalogError::IndexUnavailable);
     }
-    let connection = open_index(database_path)?;
-    initialize_schema(&connection)?;
+    let connection = open_existing_index(database_path)?;
+    ensure_existing_schema(&connection)?;
     let meta = read_meta(&connection)?.ok_or(FileCatalogError::IndexUnavailable)?;
     let status = meta.into_status();
     let extensions = normalized_extensions(request.extensions);
     let max_results = request.max_results.clamp(1, MAX_SEARCH_RESULTS);
-    let use_trigram = query.chars().count() >= 3;
     let mut values = Vec::new();
+    let mut predicates = Vec::new();
+    let mut fts_parts = Vec::new();
 
-    let (from_clause, base_predicate) = if use_trigram {
-        values.push(Value::Text(fts_literal(query)));
-        (
-            "FROM file_catalog_fts JOIN file_catalog_entries e ON e.id = file_catalog_fts.rowid",
-            format!("file_catalog_fts MATCH ?{}", values.len()),
-        )
-    } else {
-        values.push(Value::Text(format!("%{}%", escape_like(query))));
-        (
-            "FROM file_catalog_entries e",
-            format!(
+    for term in &parsed.terms {
+        if term.chars().count() >= 3 {
+            fts_parts.push(fts_literal(term));
+        } else {
+            values.push(Value::Text(format!("%{}%", escape_like(term))));
+            predicates.push(format!(
                 "(e.name LIKE ?{0} ESCAPE '\\' COLLATE NOCASE OR e.path LIKE ?{0} ESCAPE '\\' COLLATE NOCASE)",
                 values.len()
-            ),
-        )
+            ));
+        }
+    }
+    for term in &parsed.path_terms {
+        if term.chars().count() >= 3 {
+            fts_parts.push(format!("path : {}", fts_literal(term)));
+        } else {
+            values.push(Value::Text(format!("%{}%", escape_like(term))));
+            predicates.push(format!(
+                "e.path LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+                values.len()
+            ));
+        }
+    }
+    for term in &parsed.excluded_terms {
+        values.push(Value::Text(format!("%{}%", escape_like(term))));
+        predicates.push(format!(
+            "NOT (e.name LIKE ?{0} ESCAPE '\\' COLLATE NOCASE OR e.path LIKE ?{0} ESCAPE '\\' COLLATE NOCASE)",
+            values.len()
+        ));
+    }
+    for term in &parsed.excluded_path_terms {
+        values.push(Value::Text(format!("%{}%", escape_like(term))));
+        predicates.push(format!(
+            "e.path NOT LIKE ?{} ESCAPE '\\' COLLATE NOCASE",
+            values.len()
+        ));
+    }
+
+    let use_trigram = !fts_parts.is_empty();
+    let from_clause = if use_trigram {
+        values.push(Value::Text(fts_parts.join(" AND ")));
+        predicates.insert(0, format!("file_catalog_fts MATCH ?{}", values.len()));
+        "FROM file_catalog_fts JOIN file_catalog_entries e ON e.id = file_catalog_fts.rowid"
+    } else {
+        "FROM file_catalog_entries e"
     };
 
-    let mut predicates = vec![base_predicate];
     if let Some(kind) = request.kind {
         values.push(Value::Text(kind.database_value().to_owned()));
         predicates.push(format!("e.kind = ?{}", values.len()));
     }
-    if !extensions.is_empty() {
-        let mut placeholders = Vec::with_capacity(extensions.len());
-        for extension in extensions {
-            values.push(Value::Text(extension));
-            placeholders.push(format!("?{}", values.len()));
-        }
-        predicates.push(format!("e.extension IN ({})", placeholders.join(", ")));
+    if let Some(kind) = parsed.kind {
+        values.push(Value::Text(kind.database_value().to_owned()));
+        predicates.push(format!("e.kind = ?{}", values.len()));
     }
-    if let Some(min_bytes) = request.min_bytes {
+    add_text_set_predicate(
+        &mut values,
+        &mut predicates,
+        "e.extension",
+        extensions,
+        false,
+    );
+    add_text_set_predicate(
+        &mut values,
+        &mut predicates,
+        "e.extension",
+        parsed.extensions.iter().cloned(),
+        false,
+    );
+    add_text_set_predicate(
+        &mut values,
+        &mut predicates,
+        "e.extension",
+        parsed.excluded_extensions.iter().cloned(),
+        true,
+    );
+    add_text_set_predicate(
+        &mut values,
+        &mut predicates,
+        "e.kind",
+        parsed
+            .excluded_kinds
+            .iter()
+            .map(|kind| kind.database_value().to_owned()),
+        true,
+    );
+    for min_bytes in [request.min_bytes, parsed.min_bytes].into_iter().flatten() {
         values.push(Value::Integer(saturating_u64_to_i64(min_bytes)));
         predicates.push(format!("e.logical_bytes >= ?{}", values.len()));
     }
-    if let Some(max_bytes) = request.max_bytes {
+    for max_bytes in [request.max_bytes, parsed.max_bytes].into_iter().flatten() {
         values.push(Value::Integer(saturating_u64_to_i64(max_bytes)));
         predicates.push(format!("e.logical_bytes <= ?{}", values.len()));
+    }
+    if let Some(modified_after_ms) = parsed.modified_after_ms {
+        values.push(Value::Integer(saturating_u64_to_i64(modified_after_ms)));
+        predicates.push(format!("e.modified_at_ms >= ?{}", values.len()));
+    }
+    if let Some(modified_before_ms) = parsed.modified_before_ms {
+        values.push(Value::Integer(saturating_u64_to_i64(modified_before_ms)));
+        predicates.push(format!("e.modified_at_ms < ?{}", values.len()));
     }
 
     let order_clause = match request.sort {
         FileCatalogSort::Relevance if use_trigram => {
             "ORDER BY bm25(file_catalog_fts, 4.0, 1.0), length(e.path), e.name COLLATE NOCASE"
         }
-        FileCatalogSort::Relevance => "",
+        FileCatalogSort::Relevance => {
+            "ORDER BY length(e.path), e.name COLLATE NOCASE, e.path COLLATE NOCASE"
+        }
         FileCatalogSort::Name => "ORDER BY e.name COLLATE NOCASE, e.path COLLATE NOCASE",
         FileCatalogSort::Largest => {
             "ORDER BY e.logical_bytes DESC, e.modified_at_ms DESC, e.name COLLATE NOCASE"
@@ -1357,11 +1447,7 @@ pub fn search_file_catalog(
     for row in rows {
         let (name, path, parent, extension, kind, logical_bytes, modified_at) =
             row.map_err(index_error)?;
-        let match_source = if contains_case_insensitive(&name, query) {
-            FileCatalogMatchSource::Name
-        } else {
-            FileCatalogMatchSource::Path
-        };
+        let match_source = catalog_match_source(&name, &parsed);
         results.push(FileCatalogSearchResult {
             name,
             path,
@@ -1378,12 +1464,46 @@ pub fn search_file_catalog(
 
     Ok(FileCatalogSearchReport {
         root: status.root,
-        query: query.to_owned(),
+        query,
         indexed_entries: status.indexed_entries,
         search_duration_ms: started.elapsed().as_millis(),
         results_truncated,
         results,
     })
+}
+
+fn add_text_set_predicate<I>(
+    values: &mut Vec<Value>,
+    predicates: &mut Vec<String>,
+    column: &str,
+    items: I,
+    excluded: bool,
+) where
+    I: IntoIterator<Item = String>,
+{
+    let mut placeholders = Vec::new();
+    for item in items {
+        values.push(Value::Text(item));
+        placeholders.push(format!("?{}", values.len()));
+    }
+    if placeholders.is_empty() {
+        return;
+    }
+    let operator = if excluded { "NOT IN" } else { "IN" };
+    predicates.push(format!("{column} {operator} ({})", placeholders.join(", ")));
+}
+
+fn catalog_match_source(name: &str, query: &ParsedCatalogQuery) -> FileCatalogMatchSource {
+    if !query.path_terms.is_empty()
+        || query
+            .terms
+            .iter()
+            .any(|term| !contains_case_insensitive(name, term))
+    {
+        FileCatalogMatchSource::Path
+    } else {
+        FileCatalogMatchSource::Name
+    }
 }
 
 pub fn clear_file_catalog(database_path: impl AsRef<Path>) -> Result<bool, FileCatalogError> {
@@ -1424,6 +1544,33 @@ fn open_index(path: &Path) -> Result<Connection, FileCatalogError> {
         )
         .map_err(index_error)?;
     Ok(connection)
+}
+
+fn open_existing_index(path: &Path) -> Result<Connection, FileCatalogError> {
+    let connection = Connection::open(path).map_err(index_error)?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(index_error)?;
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;",
+        )
+        .map_err(index_error)?;
+    Ok(connection)
+}
+
+fn ensure_existing_schema(connection: &Connection) -> Result<(), FileCatalogError> {
+    let schema_version = connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map_err(index_error)?;
+    match schema_version {
+        INDEX_SCHEMA_VERSION => Ok(()),
+        0 | 1 => initialize_schema(connection),
+        _ => Err(FileCatalogError::Index(format!(
+            "unsupported file catalog schema version {schema_version}"
+        ))),
+    }
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
@@ -1787,6 +1934,7 @@ mod tests {
             extensions: Vec::new(),
             min_bytes: None,
             max_bytes: None,
+            timezone_offset_minutes: 0,
             sort: FileCatalogSort::Relevance,
             max_results: 100,
         }
@@ -1846,6 +1994,62 @@ mod tests {
         let size_result = search_file_catalog(&database, size_request).expect("size search");
         assert_eq!(size_result.results.len(), 1);
         assert_eq!(size_result.results[0].name, "report-large.log");
+    }
+
+    #[test]
+    fn structured_query_filters_the_catalog_without_replacing_ui_filters() {
+        let temporary = tempdir().expect("tempdir");
+        let root = temporary.path().join("root");
+        let team_files = root.join("Team Files");
+        let archive = root.join("archive");
+        fs::create_dir_all(&team_files).expect("create team directory");
+        fs::create_dir_all(&archive).expect("create archive directory");
+        fs::write(team_files.join("annual-final.pdf"), vec![1_u8; 64]).expect("write final report");
+        fs::write(team_files.join("annual-draft.pdf"), vec![2_u8; 64]).expect("write draft report");
+        fs::write(archive.join("annual-final.txt"), vec![3_u8; 64]).expect("write archived report");
+        let database = temporary.path().join("catalog.sqlite3");
+        build(&root, &database);
+
+        let connection = Connection::open(&database).expect("open catalog");
+        connection
+            .execute(
+                "UPDATE file_catalog_entries SET modified_at_ms = ?1 WHERE kind = 'file'",
+                [1_767_225_600_000_i64],
+            )
+            .expect("set deterministic modified time");
+        drop(connection);
+
+        let structured = search_file_catalog(
+            &database,
+            request(
+                r#"annual path:"Team Files" ext:pdf type:file size:>=32b -draft after:2026-01-01 before:2027-01-01"#,
+            ),
+        )
+        .expect("structured search");
+        assert_eq!(structured.results.len(), 1);
+        assert_eq!(structured.results[0].name, "annual-final.pdf");
+        assert_eq!(
+            structured.results[0].match_source,
+            FileCatalogMatchSource::Path
+        );
+
+        let filter_only =
+            search_file_catalog(&database, request("ext:txt type:file")).expect("filter search");
+        assert_eq!(filter_only.results.len(), 1);
+        assert_eq!(filter_only.results[0].name, "annual-final.txt");
+
+        let mut conflicting_ui_filter = request("annual ext:pdf");
+        conflicting_ui_filter.extensions = vec!["txt".to_owned()];
+        assert!(
+            search_file_catalog(&database, conflicting_ui_filter)
+                .expect("intersect filters")
+                .results
+                .is_empty()
+        );
+        assert!(matches!(
+            search_file_catalog(&database, request("size:large")),
+            Err(FileCatalogError::InvalidQuery(_))
+        ));
     }
 
     #[test]

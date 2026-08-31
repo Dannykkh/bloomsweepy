@@ -101,8 +101,9 @@
 - **function** `file_catalog_path()` (L542)
 - **function** `cleanup_scan_config()` (L549)
 - **function** `run()` (L635)
-- **function** `scan_runtime_rejects_overlap_and_recovers_after_finish()` (L670)
-- **function** `scan_runtime_cancel_sets_the_active_token()` (L684)
+- **function** `scan_runtime_rejects_overlap_and_recovers_after_finish()` (L673)
+- **function** `scan_runtime_cancel_sets_the_active_token()` (L687)
+- **function** `blocking_worker_keeps_status_overlap_and_cancel_responsive()` (L699)
 - **impl** `ScanRuntime` (L34)
 - **impl** `ScanCompletionGuard` (L79)
 - **impl** `StoredReports` (L102)
@@ -322,8 +323,8 @@
 - **type** `FileCatalogIssue` (L470)
 - **type** `FileCatalogReport` (L475)
 - **type** `FileCatalogSearchRequest` (L481)
-- **type** `FileCatalogSearchResult` (L491)
-- **type** `FileCatalogSearchReport` (L502)
+- **type** `FileCatalogSearchResult` (L492)
+- **type** `FileCatalogSearchReport` (L503)
 
 ## apps/desktop/src/vite-env.d.ts
 

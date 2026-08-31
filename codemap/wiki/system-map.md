@@ -53,8 +53,8 @@ flowchart LR
 ## Current CodeMap Shape
 
 - Projects: 0
-- Files: 234
-- Documents/assets: 26 / 23
+- Files: 240
+- Documents/assets: 29 / 210
 - Routes/API/UI signals: 0 / 0 / 76
 
 ## Main Implementation Areas
@@ -64,7 +64,7 @@ flowchart LR
 | [views](../views.md) | 36 | WPF View/Window/Panel |
 | [apps-desktop](../apps-desktop.md) | 21 | .tsx×10, .rs×6, .ts×5 |
 | [services](../services.md) | 21 | 서비스 클래스/메서드 |
-| [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 9 | .rs×9 |
+| [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |
 | [broomsweepy](../broomsweepy.md) | 2 | .swift×2 |
 | [broomsweepy-models](../broomsweepy-models.md) | 2 | .swift×2 |
 | [viewmodels](../viewmodels.md) | 1 | ViewModel 클래스/속성/명령 |

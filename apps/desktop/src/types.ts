@@ -485,6 +485,7 @@ export interface FileCatalogSearchRequest {
   extensions: string[];
   minBytes: number | null;
   maxBytes: number | null;
+  timezoneOffsetMinutes: number;
   sort: FileCatalogSort;
   maxResults: number;
 }

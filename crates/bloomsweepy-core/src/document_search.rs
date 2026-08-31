@@ -568,6 +568,9 @@ where
         skipped_documents,
         unreadable_entries,
     });
+    if should_cancel() {
+        return Err(DocumentSearchError::Cancelled);
+    }
 
     let removed_documents = transaction
         .execute("DELETE FROM documents WHERE generation <> ?1", [generation])
@@ -601,6 +604,9 @@ where
             ],
         )
         .map_err(index_error)?;
+    if should_cancel() {
+        return Err(DocumentSearchError::Cancelled);
+    }
     transaction.commit().map_err(index_error)?;
     connection
         .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
@@ -635,8 +641,8 @@ pub fn document_index_status(
     if !database_path.exists() {
         return Ok(None);
     }
-    let connection = open_index(database_path)?;
-    initialize_schema(&connection)?;
+    let connection = open_existing_index(database_path)?;
+    ensure_existing_schema(&connection)?;
     let Some(meta) = read_meta(&connection)? else {
         return Ok(None);
     };
@@ -673,8 +679,8 @@ pub fn search_document_index(
     if !database_path.exists() {
         return Err(DocumentSearchError::IndexUnavailable);
     }
-    let connection = open_index(database_path)?;
-    initialize_schema(&connection)?;
+    let connection = open_existing_index(database_path)?;
+    ensure_existing_schema(&connection)?;
     let meta = read_meta(&connection)?.ok_or(DocumentSearchError::IndexUnavailable)?;
     let searched_documents = connection
         .query_row("SELECT COUNT(*) FROM documents", [], |row| {
@@ -816,6 +822,33 @@ fn open_index(path: &Path) -> Result<Connection, DocumentSearchError> {
         )
         .map_err(index_error)?;
     Ok(connection)
+}
+
+fn open_existing_index(path: &Path) -> Result<Connection, DocumentSearchError> {
+    let connection = Connection::open(path).map_err(index_error)?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(index_error)?;
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;",
+        )
+        .map_err(index_error)?;
+    Ok(connection)
+}
+
+fn ensure_existing_schema(connection: &Connection) -> Result<(), DocumentSearchError> {
+    let schema_version = connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map_err(index_error)?;
+    match schema_version {
+        INDEX_SCHEMA_VERSION => Ok(()),
+        0 => initialize_schema(connection),
+        _ => Err(DocumentSearchError::Index(format!(
+            "unsupported index schema version {schema_version}"
+        ))),
+    }
 }
 
 fn initialize_schema(connection: &Connection) -> Result<(), DocumentSearchError> {

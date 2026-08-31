@@ -152,6 +152,7 @@ export function FastFileSearchView({
         extensions: normalizedExtensions,
         minBytes,
         maxBytes: null,
+        timezoneOffsetMinutes: new Date().getTimezoneOffset(),
         sort,
         maxResults: 100,
       })
@@ -214,8 +215,8 @@ export function FastFileSearchView({
           </span>
           <div>
             <p className="eyebrow">LOCAL FILE CATALOG</p>
-            <h2 id="file-search-title">이름이나 경로 일부만 입력하세요</h2>
-            <p>파일 본문을 열지 않는 메타데이터 검색입니다. 입력할 때마다 로컬 카탈로그에서 즉시 좁혀집니다.</p>
+            <h2 id="file-search-title">이름·경로·조건을 한 줄에서 찾으세요</h2>
+            <p>일반 단어는 모두 포함하고, 따옴표는 문구로 묶으며, 앞에 -를 붙인 단어는 결과에서 제외합니다.</p>
           </div>
           <span className="document-local-badge">
             <ShieldCheck size={14} aria-hidden="true" />
@@ -235,13 +236,14 @@ export function FastFileSearchView({
             disabled={!canSearch}
             maxLength={256}
             autoComplete="off"
+            aria-describedby="file-query-syntax"
             placeholder={
               scopeChanged
                 ? "선택한 폴더의 카탈로그를 먼저 업데이트하세요"
                 : stale
                   ? "휴지통 이동 결과를 반영하도록 카탈로그를 업데이트하세요"
                 : catalog
-                  ? "예: invoice, node_modules, 휴가 사진"
+                  ? "예: annual ext:pdf size:>100mb -draft"
                   : "먼저 드라이브 또는 폴더 카탈로그를 만드세요"
             }
             onChange={(event) => setQuery(event.currentTarget.value)}
@@ -258,6 +260,17 @@ export function FastFileSearchView({
                 ? `${formatCount(searchReport.results.length)}개`
                 : "즉시 검색"}
           </span>
+        </div>
+
+        <div className="file-query-syntax" id="file-query-syntax" role="note">
+          <span>한 줄 조건</span>
+          <code>ext:pdf,jpg</code>
+          <code>type:file</code>
+          <code>path:&quot;보고서&quot;</code>
+          <code>size:&gt;100mb</code>
+          <code>after:2026-01-01</code>
+          <code>before:2027-01-01</code>
+          <code>-draft</code>
         </div>
 
         <div className="document-filter-row file-filter-row">
@@ -470,7 +483,7 @@ export function FastFileSearchView({
             <div className="document-results-empty">
               <Search size={24} aria-hidden="true" />
               <strong>일치하는 파일이나 폴더가 없습니다</strong>
-              <p>검색어를 줄이거나 종류·확장자·크기 필터를 바꿔보세요.</p>
+              <p>검색어 또는 한 줄 조건을 줄이거나 아래 필터를 바꿔보세요.</p>
             </div>
           ) : (
             <div className="document-result-list">

@@ -18,7 +18,7 @@
 | views | views | WPF View/Window/Panel | codemap/views.md |
 | apps-desktop | apps-desktop | .tsx×10, .rs×6, .ts×5 | codemap/apps-desktop.md |
 | services | services | 서비스 클래스/메서드 | codemap/services.md |
-| crates-bloomsweepy-core | crates-bloomsweepy-core | .rs×9 | codemap/crates-bloomsweepy-core.md |
+| crates-bloomsweepy-core | crates-bloomsweepy-core | .rs×11 | codemap/crates-bloomsweepy-core.md |
 | broomsweepy | broomsweepy | .swift×2 | codemap/broomsweepy.md |
 | broomsweepy-models | broomsweepy-models | .swift×2 | codemap/broomsweepy-models.md |
 | viewmodels | viewmodels | ViewModel 클래스/속성/명령 | codemap/viewmodels.md |
