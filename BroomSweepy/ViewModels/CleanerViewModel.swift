@@ -106,8 +106,8 @@ final class CleanerViewModel {
         scanMessage = "캐시 + 대용량 파일 스캔 중..."
 
         // Phase 1: 캐시 + 대용량 파일 동시 스캔 (서로 다른 경로 → I/O 병렬 가능)
-        let (cache, large) = await withTaskCancellationHandler {
-            async let cacheResult = Task.detached { [engine, scanURL, token] in
+        let scanResults: ([CacheItem], [LargeFile]) = await withTaskCancellationHandler {
+            async let cacheResult: [CacheItem] = Task.detached { [engine, scanURL, token] in
                 engine.scanCache(
                     homeURL: scanURL,
                     progressCallback: { [weak self] msg, progress in
@@ -121,7 +121,7 @@ final class CleanerViewModel {
                 )
             }.value
 
-            async let largeResult = Task.detached { [engine, scanURL, token] in
+            async let largeResult: [LargeFile] = Task.detached { [engine, scanURL, token] in
                 engine.scanLargeFiles(
                     scanURL: scanURL,
                     minSizeMB: 50,
@@ -140,6 +140,7 @@ final class CleanerViewModel {
         } onCancel: {
             token.cancel()
         }
+        let (cache, large) = scanResults
         guard shouldContinueOperation(scanID, token: token) else { return }
         cacheItems = cache
         largeFiles = large
