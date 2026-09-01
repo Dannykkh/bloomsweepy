@@ -4,6 +4,7 @@ use rusqlite::{
     params_from_iter,
 };
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -281,6 +282,7 @@ struct CatalogRecord {
 }
 
 trait CatalogRecordSink {
+    #[cfg(windows)]
     fn set_scanned_entries(&mut self, scanned_entries: u64);
     fn push(&mut self, record: CatalogRecord) -> Result<bool, String>;
 }
@@ -358,9 +360,13 @@ where
     let database_path = database_path.as_ref().to_path_buf();
     let mut connection = open_index(&database_path)?;
     initialize_schema(&connection)?;
+    #[cfg(windows)]
     let previous = read_meta(&connection)?;
     let (mut source, fallback_issue) = CatalogSource::select(&root);
+    #[cfg(windows)]
     let mut initial_issues = fallback_issue.into_iter().collect::<Vec<_>>();
+    #[cfg(not(windows))]
+    let initial_issues = fallback_issue.into_iter().collect::<Vec<_>>();
 
     #[cfg(windows)]
     if let (Some(ntfs), Some(previous)) = (source.ntfs(), previous.as_ref())
@@ -687,6 +693,7 @@ impl<'statement, 'progress> CatalogWriter<'statement, 'progress> {
 }
 
 impl CatalogRecordSink for CatalogWriter<'_, '_> {
+    #[cfg(windows)]
     fn set_scanned_entries(&mut self, scanned_entries: u64) {
         self.stats.scanned_entries = self.stats.scanned_entries.max(scanned_entries);
         self.emit_progress_if_needed(false);
@@ -1228,6 +1235,7 @@ fn load_ntfs_directory_paths(
     Ok(directories)
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone, Copy, Default)]
 struct CatalogTotals {
     indexed_entries: u64,
@@ -1237,6 +1245,7 @@ struct CatalogTotals {
     indexed_bytes: u64,
 }
 
+#[cfg(windows)]
 fn catalog_totals(connection: &Connection) -> Result<CatalogTotals, FileCatalogError> {
     connection
         .query_row(
@@ -1825,9 +1834,13 @@ struct IndexMeta {
     entry_limit_reached: i64,
     provider: String,
     refresh_mode: String,
+    #[cfg_attr(not(windows), allow(dead_code))]
     volume_serial: Option<i64>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     journal_id: Option<String>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     next_usn: Option<i64>,
+    #[cfg_attr(not(windows), allow(dead_code))]
     root_record_id: Option<i64>,
 }
 
