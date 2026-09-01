@@ -136,7 +136,7 @@ final class CleanerViewModel {
                 )
             }.value
 
-            await (cacheResult, largeResult)
+            return await (cacheResult, largeResult)
         } onCancel: {
             token.cancel()
         }

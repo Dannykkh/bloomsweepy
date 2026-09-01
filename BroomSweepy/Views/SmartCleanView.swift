@@ -537,7 +537,7 @@ struct SmartCleanView: View {
         }
 
         let duplicateGroups = viewModel.duplicateGroups
-        let protectedKeeperPaths = Set(duplicateGroups.compactMap { group in
+        let protectedKeeperPaths: Set<String> = Set(duplicateGroups.compactMap { group -> String? in
             let ordered = group.files.sorted { $0.path < $1.path }
             guard ordered.dropFirst().contains(where: { duplicatePaths.contains($0.path) }) else {
                 return nil
