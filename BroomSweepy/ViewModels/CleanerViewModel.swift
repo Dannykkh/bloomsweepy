@@ -106,37 +106,36 @@ final class CleanerViewModel {
         scanMessage = "캐시 + 대용량 파일 스캔 중..."
 
         // Phase 1: 캐시 + 대용량 파일 동시 스캔 (서로 다른 경로 → I/O 병렬 가능)
-        async let cacheResult = Task.detached { [engine, scanURL, token] in
-            engine.scanCache(
-                homeURL: scanURL,
-                progressCallback: { [weak self] msg, progress in
-                    Task { @MainActor in
-                        guard self?.isCurrentOperation(scanID, token: token) == true else { return }
-                        self?.scanMessage = "캐시: \(msg)"
-                        if progress >= 0 { self?.scanProgress = progress * 0.25 }
-                    }
-                },
-                shouldCancel: { token.isCancelled }
-            )
-        }.value
-
-        async let largeResult = Task.detached { [engine, scanURL, token] in
-            engine.scanLargeFiles(
-                scanURL: scanURL,
-                minSizeMB: 50,
-                progressCallback: { [weak self] msg, _ in
-                    Task { @MainActor in
-                        guard self?.isCurrentOperation(scanID, token: token) == true else { return }
-                        self?.scanMessage = msg
-                        self?.scanProgress = 0.25 + 0.10
-                    }
-                },
-                shouldCancel: { token.isCancelled }
-            )
-        }.value
-
-        // 두 결과를 동시에 기다림
         let (cache, large) = await withTaskCancellationHandler {
+            async let cacheResult = Task.detached { [engine, scanURL, token] in
+                engine.scanCache(
+                    homeURL: scanURL,
+                    progressCallback: { [weak self] msg, progress in
+                        Task { @MainActor in
+                            guard self?.isCurrentOperation(scanID, token: token) == true else { return }
+                            self?.scanMessage = "캐시: \(msg)"
+                            if progress >= 0 { self?.scanProgress = progress * 0.25 }
+                        }
+                    },
+                    shouldCancel: { token.isCancelled }
+                )
+            }.value
+
+            async let largeResult = Task.detached { [engine, scanURL, token] in
+                engine.scanLargeFiles(
+                    scanURL: scanURL,
+                    minSizeMB: 50,
+                    progressCallback: { [weak self] msg, _ in
+                        Task { @MainActor in
+                            guard self?.isCurrentOperation(scanID, token: token) == true else { return }
+                            self?.scanMessage = msg
+                            self?.scanProgress = 0.25 + 0.10
+                        }
+                    },
+                    shouldCancel: { token.isCancelled }
+                )
+            }.value
+
             await (cacheResult, largeResult)
         } onCancel: {
             token.cancel()
