@@ -71,6 +71,7 @@ struct DashboardView: View {
                     .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
+                .disabled(viewModel.isScanning)
                 .help("안전한 항목만 자동 선택하여 한번에 정리합니다")
             }
 

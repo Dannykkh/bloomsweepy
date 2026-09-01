@@ -5,7 +5,99 @@ export type ViewId =
   | "cleanup"
   | "large-files"
   | "duplicates"
+  | "assistant"
   | "settings";
+
+export interface ControlOperationStatus {
+  operationId: string;
+  kind: string;
+  source: "app" | "chatCli";
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  cancellationRequested: boolean;
+  message: string | null;
+  processedItems: number | null;
+  processedBytes: number | null;
+  startedAtUnixMs: number;
+  finishedAtUnixMs: number | null;
+  scanGeneration: number | null;
+  summary: StorageScanSummary | null;
+}
+
+export interface StorageScanSummary {
+  root: string;
+  completedAtUnixMs: number;
+  durationMs: number;
+  totalFiles: number;
+  totalLogicalBytes: number;
+  largeFileCount: number;
+  duplicateGroupCount: number;
+  duplicateWasteBytes: number;
+  unreadableEntries: number;
+  issueCount: number;
+  candidateLimitReached: boolean;
+  hardLinkIdentityLimitReached: boolean;
+}
+
+export interface ControlPendingReview {
+  id: string;
+  itemCount: number;
+  totalBytes: number;
+  expiresAtUnixMs: number;
+}
+
+export interface ControlStatus {
+  revision: number;
+  bridgeAvailable: boolean;
+  connectedClients: number;
+  lastConnectedAtUnixMs: number | null;
+  activeOperation: ControlOperationStatus | null;
+  lastOperation: ControlOperationStatus | null;
+  pendingReview: ControlPendingReview | null;
+  lastError: string | null;
+  protocolVersion: number;
+  searchAccess: ControlSearchAccess;
+  scanAccess: ControlScanAccess;
+}
+
+export interface ControlSearchAccess {
+  files: boolean;
+  documents: boolean;
+}
+
+export interface ControlSearchAccessRequest {
+  fileRoot: string | null;
+  documentRoot: string | null;
+}
+
+export interface ControlScanAccess {
+  enabled: boolean;
+  root: string | null;
+  approvedAtUnixMs: number | null;
+}
+
+export interface ControlScanAccessRequest {
+  root: string | null;
+  config: ScanConfig | null;
+}
+
+export interface ControlScanProgressEvent {
+  operationId: string;
+  revision: number;
+  progress: ScanProgress;
+}
+
+export interface ControlScanCompletedEvent {
+  operationId: string;
+  revision: number;
+  state: "completed" | "failed" | "cancelled";
+  scanGeneration: number | null;
+  message: string;
+}
+
+export interface ScanReportSnapshot {
+  scanGeneration: number;
+  report: ScanReport;
+}
 
 export interface ScanConfig {
   minLargeFileBytes: number;
@@ -141,7 +233,7 @@ export interface InstalledApplication {
 
 export interface InstalledAppInventory {
   supported: boolean;
-  source: "windowsRegistry" | "notAvailable";
+  source: "windowsRegistry" | "macApplicationBundles" | "notAvailable";
   estimatedTotalBytes: number;
   applications: InstalledApplication[];
   issues: string[];

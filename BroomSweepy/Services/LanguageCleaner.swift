@@ -7,7 +7,7 @@ final class LanguageCleaner {
     /// Languages to keep (English + Base + user's Korean)
     private let keepLanguages: Set<String> = ["en.lproj", "Base.lproj", "ko.lproj"]
 
-    struct LanguageResource: Identifiable {
+    struct LanguageResource: Identifiable, Sendable {
         let id = UUID()
         let appName: String
         let appPath: String
@@ -60,25 +60,12 @@ final class LanguageCleaner {
         return results.sorted { $0.size > $1.size }
     }
 
-    /// Remove selected .lproj folders
+    /// App language resources are review-only because changing a signed app
+    /// bundle can invalidate its code signature.
+    @available(*, unavailable, message: "앱 언어 리소스는 Finder 검토 전용입니다")
     func clean(resources: [LanguageResource]) -> (freed: Int64, errors: [String]) {
-        var totalFreed: Int64 = 0
-        var errors: [String] = []
-
-        for resource in resources {
-            do {
-                try fileManager.removeItem(atPath: resource.path)
-                totalFreed += resource.size
-            } catch {
-                errors.append("\(resource.appName)/\(resource.language): 삭제 권한이 필요합니다")
-            }
-        }
-
-        if !errors.isEmpty && totalFreed == 0 {
-            errors = ["앱 폴더 수정에 관리자 권한이 필요합니다. 시스템 설정 > 개인정보 보호 > 전체 디스크 접근에서 BroomSweepy를 허용해주세요."]
-        }
-
-        return (totalFreed, errors)
+        guard !resources.isEmpty else { return (0, []) }
+        return (0, ["앱 서명이 손상될 수 있어 자동 이동을 지원하지 않습니다. Finder에서 직접 검토해 주세요."])
     }
 
     /// Total size of removable language files
@@ -87,13 +74,15 @@ final class LanguageCleaner {
     }
 
     private func directorySize(_ path: String) -> Int64 {
+        guard let rootSnapshot = FileIdentitySnapshot.capture(path: path),
+              rootSnapshot.kind == .directory else { return 0 }
         var total: Int64 = 0
         guard let enumerator = fileManager.enumerator(atPath: path) else { return 0 }
         while let file = enumerator.nextObject() as? String {
             let fullPath = (path as NSString).appendingPathComponent(file)
-            guard let attrs = try? fileManager.attributesOfItem(atPath: fullPath),
-                  attrs[.type] as? FileAttributeType != .typeDirectory else { continue }
-            total += (attrs[.size] as? Int64) ?? 0
+            guard let snapshot = FileIdentitySnapshot.capture(path: fullPath),
+                  snapshot.kind == .regularFile else { continue }
+            total += snapshot.size
         }
         return total
     }

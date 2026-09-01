@@ -27,11 +27,11 @@ export function LargeFilesView({ report, scanning, onStartScan }: LargeFilesView
     return (
       <div className="empty-panel empty-panel--page">
         <Search size={28} aria-hidden="true" />
-        <strong>큰 파일을 비교하려면 먼저 스캔하세요</strong>
-        <p>설정한 크기 기준을 넘는 파일을 크기순으로 정렬합니다.</p>
+        <strong>큰 파일과 중복 파일을 한 번에 검사하세요</strong>
+        <p>한 번의 자세한 검사로 큰 파일 목록과 실제 중복 결과를 함께 만듭니다.</p>
         <button className="primary-button" type="button" disabled={scanning} onClick={onStartScan}>
           <Search size={17} aria-hidden="true" />
-          스캔 시작
+          큰 파일·중복 찾기
         </button>
       </div>
     );

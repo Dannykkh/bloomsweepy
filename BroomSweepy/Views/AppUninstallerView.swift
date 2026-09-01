@@ -3,14 +3,13 @@ import AppKit
 
 struct AppUninstallerView: View {
     @Bindable var viewModel: CleanerViewModel
-    @State private var showConfirm = false
     @State private var expandedAppIDs: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack(alignment: .center, spacing: 12) {
-                Text("앱 완전 삭제")
+                Text("앱 정리")
                     .font(.title2.bold())
 
                 Spacer()
@@ -27,10 +26,9 @@ struct AppUninstallerView: View {
                     .buttonStyle(.bordered)
                     .disabled(viewModel.isScanning)
 
-                Button("선택 앱 삭제") { showConfirm = true }
+                Button("선택 앱 Finder에서 검토") { revealSelectedApps() }
                     .buttonStyle(.borderedProminent)
-                    .tint(.red)
-                    .disabled(viewModel.selectedAppIDs.isEmpty)
+                    .disabled(viewModel.selectedAppIDs.isEmpty || viewModel.isScanning)
             }
             .padding(24)
 
@@ -55,7 +53,7 @@ struct AppUninstallerView: View {
 
                     Spacer()
 
-                    let totalSelected = viewModel.filteredApps
+                    let totalSelected = viewModel.installedApps
                         .filter { viewModel.selectedAppIDs.contains($0.id) }
                         .reduce(Int64(0)) { $0 + $1.totalSize }
 
@@ -108,18 +106,6 @@ struct AppUninstallerView: View {
                 .listStyle(.inset(alternatesRowBackgrounds: true))
             }
         }
-        .alert("앱 삭제 확인", isPresented: $showConfirm) {
-            Button("취소", role: .cancel) {}
-            Button("휴지통으로 이동", role: .destructive) {
-                Task { await viewModel.uninstallSelectedApps() }
-            }
-        } message: {
-            let count = viewModel.selectedAppIDs.count
-            let size = viewModel.filteredApps
-                .filter { viewModel.selectedAppIDs.contains($0.id) }
-                .reduce(Int64(0)) { $0 + $1.totalSize }
-            Text("\(count)개 앱과 관련 파일을 휴지통으로 이동합니다. (\(ByteCountFormatter.string(fromByteCount: size, countStyle: .file)))")
-        }
     }
 
     // MARK: - Sub-states
@@ -132,6 +118,8 @@ struct AppUninstallerView: View {
             Text(viewModel.scanMessage.isEmpty ? "스캔 중..." : viewModel.scanMessage)
                 .font(.headline)
                 .foregroundStyle(.secondary)
+            Button("취소") { viewModel.cancelCurrentTask() }
+                .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)
@@ -142,15 +130,24 @@ struct AppUninstallerView: View {
             Image(systemName: "square.stack.3d.up")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text("앱 삭제 시 남는 설정파일, 캐시, 찌꺼기까지\n함께 정리합니다 (일반 삭제 시 수백 MB 잔존)")
+            Text("앱과 관련 설정파일·캐시를 검토 목록으로 보여줍니다")
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Text("✅ 휴지통으로 이동 — Finder에서 복구 가능")
+            Text("앱 폴더 전체 변경을 검증할 수 없어 자동으로 이동하지 않습니다")
                 .font(.caption)
-                .foregroundStyle(.green)
+                .foregroundStyle(.orange)
                 .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func revealSelectedApps() {
+        let urls = viewModel.installedApps
+            .filter { viewModel.selectedAppIDs.contains($0.id) }
+            .map { URL(fileURLWithPath: $0.path) }
+        guard !urls.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+        viewModel.toastMessage = "선택한 앱을 Finder에서 열었습니다. 앱 본체와 관련 파일은 자동으로 이동하지 않습니다."
     }
 }
 
@@ -179,9 +176,9 @@ struct AppRow: View {
                     .labelsHidden()
 
                 // App icon
-                Image(nsImage: app.icon ?? NSImage())
-                    .resizable()
-                    .interpolation(.high)
+                Image(systemName: "app.dashed")
+                    .font(.title2)
+                    .foregroundStyle(.secondary)
                     .frame(width: 32, height: 32)
 
                 // Name + metadata
@@ -189,13 +186,14 @@ struct AppRow: View {
                     HStack(spacing: 6) {
                         Text(app.name)
                             .font(.headline)
-                        if app.isUnused {
-                            Text("미사용")
+                        if app.isUnmodifiedFor180Days {
+                            Text("180일+ 수정 없음")
                                 .font(.system(size: 10, weight: .bold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
                                 .background(.orange.opacity(0.15), in: Capsule())
-                                .foregroundStyle(.orange)
+                            .foregroundStyle(.orange)
+                            .help("앱 bundle 수정 시각 기준 참고 정보이며, 사용 여부를 뜻하지 않습니다")
                         }
                     }
                     Text(app.bundleIdentifier)
@@ -247,7 +245,7 @@ struct AppRow: View {
                     Divider()
                         .padding(.leading, 80)
 
-                    Text("관련 파일")
+                    Text("관련 파일 검토 전용 · 자동 이동하지 않음")
                         .font(.caption.bold())
                         .foregroundStyle(.secondary)
                         .padding(.leading, 80)

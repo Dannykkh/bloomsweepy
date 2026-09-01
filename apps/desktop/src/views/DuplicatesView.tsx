@@ -124,11 +124,11 @@ export function DuplicatesView({
         ) : null}
         <div className="empty-panel empty-panel--page">
           <Copy size={28} aria-hidden="true" />
-          <strong>중복 파일을 확인하려면 먼저 스캔하세요</strong>
-          <p>파일 크기로 후보를 줄인 뒤 파일 내용을 처음부터 끝까지 비교합니다.</p>
+          <strong>큰 파일과 중복 파일을 한 번에 검사하세요</strong>
+          <p>한 번의 자세한 검사로 큰 파일을 찾고, 중복 후보는 내용을 처음부터 끝까지 비교합니다.</p>
           <button className="primary-button" type="button" disabled={scanning} onClick={onStartScan}>
             <Copy size={17} aria-hidden="true" />
-            스캔 시작
+            큰 파일·중복 찾기
           </button>
         </div>
       </div>

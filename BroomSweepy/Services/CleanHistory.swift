@@ -1,6 +1,6 @@
 import Foundation
 
-/// 정리 이력을 기록하고 Before/After를 추적하는 서비스
+/// 휴지통으로 이동한 논리 용량 이력을 기록하는 서비스.
 @Observable
 final class CleanHistory {
     static let shared = CleanHistory()
@@ -14,6 +14,7 @@ final class CleanHistory {
         let type: String   // "smart", "cache", "large", "duplicate", "manual"
 
         var freedFormatted: String { formatSize(freedBytes) }
+        var movedFormatted: String { formatSize(freedBytes) }
         var dateFormatted: String {
             let f = DateFormatter()
             f.dateFormat = "M월 d일 HH:mm"
@@ -34,7 +35,9 @@ final class CleanHistory {
             id: UUID(),
             date: Date(),
             freedBytes: freed,
-            diskBefore: disk.usedSpace + freed,
+            // 휴지통을 비우기 전에는 실제 디스크 여유가 늘지 않는다.
+            // 기존 저장 형식 호환을 위해 두 필드는 유지하되 값을 꾸미지 않는다.
+            diskBefore: disk.usedSpace,
             diskAfter: disk.usedSpace,
             type: type
         )
@@ -46,11 +49,12 @@ final class CleanHistory {
         UserDefaults.standard.set(Date(), forKey: "lastCleanDate")
     }
 
-    /// 총 확보 용량
+    /// 총 휴지통 이동 논리 용량
     var totalFreed: Int64 { records.reduce(0) { $0 + $1.freedBytes } }
     var totalFreedFormatted: String { formatSize(totalFreed) }
+    var totalMovedFormatted: String { formatSize(totalFreed) }
 
-    /// 이번 달 확보 용량
+    /// 이번 달 휴지통 이동 논리 용량
     var monthlyFreed: Int64 {
         let cal = Calendar.current
         let startOfMonth = cal.date(from: cal.dateComponents([.year, .month], from: Date()))!

@@ -48,7 +48,7 @@ struct PermissionManagerView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text("앱 권한 관리")
+            Text("앱 권한 사용 가능성")
                 .font(.title2.bold())
             Spacer()
             Button("스캔") {
@@ -152,7 +152,7 @@ struct PermissionManagerView: View {
             ProgressView()
                 .scaleEffect(1.5)
                 .progressViewStyle(.circular)
-            Text("앱 권한 정보를 수집 중...")
+            Text("앱의 권한 사용 근거를 수집 중...")
                 .font(.headline)
                 .foregroundStyle(.secondary)
         }
@@ -165,10 +165,10 @@ struct PermissionManagerView: View {
             Image(systemName: "lock.shield")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
-            Text("'스캔' 버튼을 눌러 앱 권한을 확인하세요")
+            Text("'스캔' 버튼을 눌러 권한 사용 가능성을 확인하세요")
                 .font(.headline)
                 .foregroundStyle(.secondary)
-            Text("카메라, 마이크, 위치 등 앱별 권한 현황을 보여줍니다")
+            Text("실제 허용 상태는 macOS 시스템 설정에서 확인해야 합니다")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
@@ -185,7 +185,7 @@ struct PermissionManagerView: View {
             PermissionManager.shared.scan(homeURL: homeURL, progressCallback: nil)
         }.value
         isScanning = false
-        viewModel.toastMessage = "\(permissions.count)개 앱 권한을 찾았습니다"
+        viewModel.toastMessage = "\(permissions.count)개 권한 사용 근거를 찾았습니다"
     }
 }
 
@@ -285,17 +285,17 @@ private struct PermissionAppRow: View {
 
             // Status badge
             HStack(spacing: 4) {
-                Image(systemName: permission.isGranted ? "checkmark.circle.fill" : "xmark.circle.fill")
-                Text(permission.isGranted ? "허용됨" : "거부됨")
+                Image(systemName: "info.circle.fill")
+                Text(permission.evidence.rawValue)
             }
             .font(.caption)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(
-                (permission.isGranted ? Color.green : Color.red).opacity(0.1),
+                Color.orange.opacity(0.1),
                 in: Capsule()
             )
-            .foregroundStyle(permission.isGranted ? .green : .red)
+            .foregroundStyle(.orange)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

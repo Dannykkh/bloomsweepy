@@ -182,7 +182,7 @@ export function DocumentSearchView({
       setInspectionMessage(
         outcome === "opened"
           ? `${name} 문서를 기본 앱으로 열었습니다.`
-          : `${name}은 실행 가능한 형식이라 폴더에서 위치만 표시했습니다.`,
+          : `${name}은 직접 열도록 허용한 문서 형식이 아니라 폴더에서 위치만 표시했습니다.`,
       );
     } catch (reason) {
       setInspectionMessage(`${name} 문서를 열지 못했습니다: ${normalizeError(reason)}`);

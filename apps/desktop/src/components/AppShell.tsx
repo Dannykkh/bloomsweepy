@@ -1,11 +1,10 @@
 import { useEffect, type ReactNode } from "react";
 import {
-  Copy,
+  Bot,
   FileSearch,
   FolderOpen,
   HardDrive,
-  LayoutDashboard,
-  ListChecks,
+  Map,
   Menu,
   Search,
   Settings,
@@ -14,9 +13,6 @@ import {
 } from "lucide-react";
 import { formatBytes, formatDate } from "../lib/format";
 import type {
-  CleanupScanReport,
-  DocumentIndexStatus,
-  FileCatalogStatus,
   ScanReport,
   ViewId,
   VolumeInfo,
@@ -27,9 +23,6 @@ interface AppShellProps {
   children: ReactNode;
   root: string | null;
   report: ScanReport | null;
-  cleanupReport: CleanupScanReport | null;
-  documentIndex: DocumentIndexStatus | null;
-  fileCatalog: FileCatalogStatus | null;
   volume: VolumeInfo | null;
   mobileNavigationOpen: boolean;
   selectionBlocked: boolean;
@@ -42,43 +35,31 @@ const navigation: Array<{
   id: ViewId;
   label: string;
   description: string;
-  icon: typeof LayoutDashboard;
+  icon: typeof Map;
 }> = [
   {
     id: "overview",
-    label: "대시보드",
-    description: "현재 상태와 스캔",
-    icon: LayoutDashboard,
+    label: "용량 관리",
+    description: "지도·큰 파일·중복",
+    icon: Map,
   },
   {
     id: "files",
-    label: "빠른 파일 찾기",
+    label: "파일 이름 찾기",
     description: "이름과 위치로 찾기",
     icon: Search,
   },
   {
     id: "documents",
-    label: "문서 검색",
-    description: "파일 내용과 문장",
+    label: "문서 내용 찾기",
+    description: "문장으로 찾기",
     icon: FileSearch,
   },
   {
-    id: "cleanup",
-    label: "정리 후보",
-    description: "임시 파일·프로그램 흔적",
-    icon: ListChecks,
-  },
-  {
-    id: "large-files",
-    label: "공간 정리",
-    description: "용량이 큰 파일",
-    icon: HardDrive,
-  },
-  {
-    id: "duplicates",
-    label: "중복 파일",
-    description: "전체 내용 검증",
-    icon: Copy,
+    id: "assistant",
+    label: "AI 도우미",
+    description: "선택 기능",
+    icon: Bot,
   },
   {
     id: "settings",
@@ -88,32 +69,59 @@ const navigation: Array<{
   },
 ];
 
-const titles: Record<ViewId, { title: string; description: string }> = {
+const storageViews = new Set<ViewId>([
+  "overview",
+  "large-files",
+  "duplicates",
+  "cleanup",
+]);
+
+const folderViews = new Set<ViewId>([
+  "overview",
+  "large-files",
+  "duplicates",
+  "files",
+  "documents",
+]);
+
+const titles: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
   overview: {
-    title: "저장공간 대시보드",
-    description: "용량이 늘어난 위치를 찾고 삭제 전에 근거를 확인합니다.",
+    eyebrow: "용량 관리",
+    title: "폴더 용량 지도",
+    description: "큰 사각형부터 따라가며 용량이 늘어난 위치를 찾습니다.",
   },
   files: {
-    title: "빠른 파일 찾기",
+    eyebrow: "파일 찾기",
+    title: "파일 이름 찾기",
     description: "파일을 열지 않고 이름이나 폴더 위치로 찾습니다.",
   },
   "large-files": {
+    eyebrow: "용량 관리",
     title: "큰 파일",
     description: "크기와 위치를 나란히 비교합니다.",
   },
   documents: {
-    title: "문서 검색",
+    eyebrow: "문서 찾기",
+    title: "문서 내용 찾기",
     description: "선택한 폴더의 문서를 미리 읽어 내용으로 빠르게 찾습니다.",
   },
   cleanup: {
+    eyebrow: "용량 관리",
     title: "정리 후보",
     description: "오래된 임시 파일과 삭제 후 남은 흔적을 근거별로 검토합니다.",
   },
   duplicates: {
+    eyebrow: "용량 관리",
     title: "중복 파일",
     description: "파일 내용을 끝까지 비교해 실제로 같은 결과만 표시합니다.",
   },
+  assistant: {
+    eyebrow: "선택 기능",
+    title: "AI 도우미",
+    description: "로컬 CLI 연결 상태와 이번 실행의 허용 범위를 관리합니다.",
+  },
   settings: {
+    eyebrow: "앱 설정",
     title: "스캔 설정",
     description: "분석 범위와 결과 한도를 조정합니다.",
   },
@@ -124,9 +132,6 @@ export function AppShell({
   children,
   root,
   report,
-  cleanupReport,
-  documentIndex,
-  fileCatalog,
   volume,
   mobileNavigationOpen,
   selectionBlocked,
@@ -138,6 +143,13 @@ export function AppShell({
     ? ((volume.totalBytes - volume.availableBytes) / volume.totalBytes) * 100
     : 0;
   const page = titles[activeView];
+  const showFolderButton = folderViews.has(activeView);
+  const folderLabel =
+    activeView === "files"
+      ? "찾을 위치"
+      : activeView === "documents"
+        ? "문서를 읽을 폴더"
+        : "검사할 폴더";
 
   useEffect(() => {
     if (!mobileNavigationOpen) return;
@@ -193,28 +205,18 @@ export function AppShell({
         <nav className="primary-navigation" aria-label="주요 화면">
           {navigation.map((item) => {
             const Icon = item.icon;
-            const active = activeView === item.id;
-            const badge =
-              item.id === "files"
-                ? fileCatalog?.indexedEntries
-                : item.id === "documents"
-                ? documentIndex?.indexedDocuments
-                : item.id === "cleanup"
-                ? cleanupReport
-                  ? cleanupReport.candidates.length + cleanupReport.registryResidues.candidates.length
-                  : null
-                : item.id === "large-files"
-                ? report?.largeFiles.length
-                : item.id === "duplicates"
-                  ? report?.duplicateGroups.length
-                  : null;
-
+            const active =
+              item.id === "overview"
+                ? storageViews.has(activeView)
+                : activeView === item.id;
             return (
               <button
                 type="button"
                 className={`nav-item ${active ? "is-active" : ""}`}
                 aria-label={`${item.label}: ${item.description}`}
                 aria-current={active ? "page" : undefined}
+                data-tooltip={item.label}
+                title={`${item.label} - ${item.description}`}
                 key={item.id}
                 onClick={() => navigate(item.id)}
               >
@@ -225,9 +227,6 @@ export function AppShell({
                   <strong>{item.label}</strong>
                   <small>{item.description}</small>
                 </span>
-                {badge !== null && badge !== undefined ? (
-                  <span className="nav-item__badge">{badge}</span>
-                ) : null}
               </button>
             );
           })}
@@ -257,22 +256,28 @@ export function AppShell({
       <main className="main-content" id="main-content" tabIndex={-1}>
         <header className="utility-header">
           <div>
-            <p className="eyebrow">{report ? `마지막 스캔 ${formatDate(report.completedAtUnixMs)}` : "분석 준비"}</p>
+            <p className="eyebrow">
+              {storageViews.has(activeView) && report
+                ? `마지막 검사 ${formatDate(report.completedAtUnixMs)}`
+                : page.eyebrow}
+            </p>
             <h1>{page.title}</h1>
             <p>{page.description}</p>
           </div>
-          <button
-            className="folder-button"
-            type="button"
-            disabled={selectionBlocked}
-            onClick={onPickFolder}
-          >
-            <FolderOpen size={17} aria-hidden="true" />
-            <span>
-              <small>{activeView === "files" ? "찾을 위치" : "스캔 범위"}</small>
-              <strong title={root ?? undefined}>{root ?? "폴더 선택"}</strong>
-            </span>
-          </button>
+          {showFolderButton ? (
+            <button
+              className="folder-button"
+              type="button"
+              disabled={selectionBlocked}
+              onClick={onPickFolder}
+            >
+              <FolderOpen size={17} aria-hidden="true" />
+              <span>
+                <small>{folderLabel}</small>
+                <strong title={root ?? undefined}>{root ?? "폴더 선택"}</strong>
+              </span>
+            </button>
+          ) : null}
         </header>
         {children}
       </main>

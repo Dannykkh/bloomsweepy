@@ -1,0 +1,40 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    Approve[앱에서 폴더와 현재 설정을 확인하고<br/>이 실행의 채팅 검사를 별도로 허용] --> Start([사용자가 채팅으로 검사를 지시])
+    Start --> Interpret[CLI·공급자가 start_storage_scan 선택<br/>경로와 설정 인수는 없음]
+    Interpret --> Call[제어 도구가 v2 구조화 요청 전송]
+    Call --> AppRunning{BroomSweepy가 실행 중이고<br/>현재 사용자 연결인가?}
+    AppRunning -->|아니요| Offline[파일 작업 없이 app_not_running 또는 인증 오류]
+    AppRunning -->|예| Allowed{저장된 허용 폴더가 존재하고<br/>정규화 결과가 그대로인가?}
+    Allowed -->|아니요| Reject[scan_approval_required 반환<br/>앱에서 다시 허용]
+    Allowed -->|예| Busy{검사·색인·검색 작업이<br/>이미 진행 중인가?}
+    Busy -->|예| RejectBusy[대기열 없이 busy 반환]
+    Busy -->|아니요| StartJob[앱이 별도 작업 번호 생성<br/>Rust blocking worker 시작]
+    StartJob --> Accepted[CLI에 running 상태와 작업 번호 즉시 반환]
+    StartJob --> Assistant[AI 도우미와 전역 상태 영역에<br/>허용 폴더·단계·처리량 표시]
+    Accepted --> Operation{작업 번호로 상태 확인}
+    Assistant --> Operation
+    Operation -->|진행 중| Poll[operation_status 재조회]
+    Poll --> Operation
+    Operation -->|취소 요청| Exact{현재 작업 번호와 정확히 일치?}
+    Exact -->|아니요| RejectCancel[현재 작업은 건드리지 않고 operation_not_found]
+    Exact -->|예| Cancel[원자 취소 신호 설정<br/>worker 종료 뒤 cancelled 확정]
+    Cancel --> Operation
+    Operation -->|실패·취소| Failure[앱이 터미널 상태와 제한된 원인 보관]
+    Operation -->|완료| Store[앱이 전체 결과와 새 검사 번호 저장]
+    Store --> Hydrate[앱 UI가 검사 번호로 전체 결과를 다시 읽음]
+    Store --> Result[CLI에는 용량·개수·한도 여부 요약만 반환]
+    Result --> Summarize[CLI·공급자가 결과를 쉬운 말로 요약]
+    Hydrate --> End([용량 관리·큰 파일·중복 화면 갱신])
+    Summarize --> End
+
+    classDef accent fill:#eef3ff,stroke:#3478d4,stroke-width:2px,color:#182235
+    class Assistant,End accent

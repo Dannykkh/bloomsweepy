@@ -3,7 +3,7 @@ import SwiftUI
 struct LargeFilesView: View {
     @Bindable var viewModel: CleanerViewModel
     @State private var selectedCategory: LargeFile.FileCategory?
-    @State private var showConfirm = false
+    @State private var trashRequest: LargeFileTrashRequest?
     @State private var hasScanned = false
 
     private var filteredFiles: [LargeFile] {
@@ -23,10 +23,12 @@ struct LargeFilesView: View {
                         .buttonStyle(.bordered)
                         .disabled(viewModel.isScanning)
                 }
-                Button("선택 항목 삭제") { showConfirm = true }
+                Button("선택 항목 휴지통으로 이동") {
+                    requestSelectedFilesTrash()
+                }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(viewModel.selectedLargeFileIDs.isEmpty)
+                    .disabled(viewModel.selectedLargeFileIDs.isEmpty || viewModel.isScanning)
                     .help("선택한 파일을 휴지통으로 이동합니다")
             }
             .padding(24)
@@ -113,7 +115,7 @@ struct LargeFilesView: View {
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
-                                    Text("✅ 휴지통으로 이동 — 실수해도 복구 가능")
+                                    Text("휴지통에서 복원할 수 있으며, 비워야 디스크 여유가 늘어납니다")
                                         .font(.caption)
                                         .foregroundStyle(.green)
                                 }
@@ -135,16 +137,62 @@ struct LargeFilesView: View {
                         } else {
                             viewModel.selectedLargeFileIDs.insert(file.id)
                         }
+                    } onRequestTrash: {
+                        trashRequest = LargeFileTrashRequest(
+                            kind: .confirm([LargeFileTrashCandidate(file: file)])
+                        )
                     }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
             }
         }
-        .alert("파일 삭제", isPresented: $showConfirm) {
-            Button("취소", role: .cancel) {}
-            Button("삭제", role: .destructive) { Task { await viewModel.deleteSelectedLargeFiles() } }
-        } message: {
-            Text("\(viewModel.selectedLargeFileIDs.count)개 파일을 삭제하시겠습니까?")
+        .alert(item: $trashRequest) { request in
+            switch request.kind {
+            case .confirm(let candidates):
+                let totalSize = candidates.reduce(Int64(0)) { $0 + $1.size }
+                let subject = candidates.count == 1
+                    ? "\(candidates[0].name)\n\(formatSize(totalSize))"
+                    : "\(candidates.count)개 파일, \(formatSize(totalSize))"
+                return Alert(
+                    title: Text("휴지통으로 이동하기 전 최종 확인"),
+                    message: Text(
+                        subject + "\n\n" +
+                        "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+                    ),
+                    primaryButton: .destructive(Text("휴지통으로 이동")) {
+                        Task { await moveToTrash(candidates) }
+                    },
+                    secondaryButton: .cancel(Text("취소"))
+                )
+            case .error(let message):
+                return Alert(
+                    title: Text("휴지통으로 이동하지 못한 파일이 있습니다"),
+                    message: Text(message),
+                    dismissButton: .default(Text("확인"))
+                )
+            }
+        }
+    }
+
+    private func requestSelectedFilesTrash() {
+        let candidates = viewModel.largeFiles
+            .filter { viewModel.selectedLargeFileIDs.contains($0.id) }
+            .map { LargeFileTrashCandidate(file: $0) }
+        guard !candidates.isEmpty else { return }
+        trashRequest = LargeFileTrashRequest(kind: .confirm(candidates))
+    }
+
+    @MainActor
+    private func moveToTrash(_ candidates: [LargeFileTrashCandidate]) async {
+        viewModel.selectedLargeFileIDs = Set(candidates.map(\.id))
+        await viewModel.deleteSelectedLargeFiles()
+        if let firstError = viewModel.cleanErrors.first {
+            trashRequest = LargeFileTrashRequest(
+                kind: .error(
+                    "\(viewModel.cleanErrors.count)개 항목을 이동하지 않았습니다.\n\n" +
+                    firstError
+                )
+            )
         }
     }
 
@@ -157,6 +205,7 @@ struct LargeFileRow: View {
     let file: LargeFile
     let isSelected: Bool
     let onToggle: () -> Void
+    let onRequestTrash: () -> Void
 
     private var safetyLevel: SafetyLevel {
         if file.ageDays > 180 { return .review }
@@ -206,9 +255,7 @@ struct LargeFileRow: View {
                 Label("Finder에서 보기", systemImage: "magnifyingglass")
             }
             Divider()
-            Button(role: .destructive) {
-                try? FileManager.default.trashItem(at: URL(fileURLWithPath: file.path), resultingItemURL: nil)
-            } label: {
+            Button(role: .destructive, action: onRequestTrash) {
                 Label("휴지통으로 이동", systemImage: "trash")
             }
         }
@@ -220,6 +267,28 @@ struct LargeFileRow: View {
             return "~" + path.dropFirst(home.count)
         }
         return path
+    }
+}
+
+private struct LargeFileTrashCandidate: Sendable {
+    let id: UUID
+    let name: String
+    let size: Int64
+
+    init(file: LargeFile) {
+        id = file.id
+        name = file.name
+        size = file.size
+    }
+}
+
+private struct LargeFileTrashRequest: Identifiable {
+    let id = UUID()
+    let kind: Kind
+
+    enum Kind {
+        case confirm([LargeFileTrashCandidate])
+        case error(String)
     }
 }
 

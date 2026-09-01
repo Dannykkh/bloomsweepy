@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 
 extension Notification.Name {
     static let navigateTo = Notification.Name("navigateTo")
@@ -8,11 +9,19 @@ extension Notification.Name {
 struct BroomSweepyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var menuBarMonitor = MenuBarMonitor()
+    @AppStorage("showMenuBarPercent") private var showMenuBarPercent = true
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup(id: "main") {
             RootView()
+                .onAppear {
+                    let openMainWindow = openWindow
+                    appDelegate.configureMainWindowOpening {
+                        openMainWindow(id: "main")
+                    }
+                    appDelegate.mainWindowDidAppear()
+                }
         }
         .windowStyle(.titleBar)
         .defaultSize(width: 1100, height: 750)
@@ -82,9 +91,11 @@ struct BroomSweepyApp: App {
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: "sparkles")
-                Text("\(menuBarMonitor.ramUsage)%")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .monospacedDigit()
+                if showMenuBarPercent {
+                    Text("\(menuBarMonitor.ramUsage)%")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .monospacedDigit()
+                }
             }
         }
         .menuBarExtraStyle(.window)
@@ -94,9 +105,12 @@ struct BroomSweepyApp: App {
         // 기존 윈도우가 있으면 활성화, 없으면 새로 생성
         NSApplication.shared.activate(ignoringOtherApps: true)
         let mainWindows = NSApplication.shared.windows.filter {
-            $0.canBecomeMain && $0.title.contains("BroomSweepy") || $0.identifier?.rawValue.contains("main") == true
+            $0.canBecomeMain && (
+                $0.title.contains("BroomSweepy") || $0.identifier?.rawValue.contains("main") == true
+            )
         }
         if let window = mainWindows.first {
+            window.deminiaturize(nil)
             window.makeKeyAndOrderFront(nil)
         } else {
             // WindowGroup에 새 윈도우 요청
@@ -107,11 +121,36 @@ struct BroomSweepyApp: App {
 
 // MARK: - AppDelegate (창 닫아도 상주)
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    private var openMainWindowHandler: (() -> Void)?
+    private var pendingNavigationDestination: String?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 알림 권한 요청 + 스케줄 시작
-        HealthMonitor.shared.requestNotificationPermission()
-        HealthMonitor.shared.startScheduleIfEnabled()
+        UNUserNotificationCenter.current().delegate = self
+
+        Task.detached {
+            let recovery = VerifiedFileMover.shared.recoverPendingOperations()
+            guard !recovery.isEmpty else { return }
+            await MainActor.run {
+                let alert = NSAlert()
+                alert.messageText = recovery.needsReview.isEmpty
+                    ? "중단된 파일 이동을 복구했습니다"
+                    : "중단된 파일 이동을 확인해 주세요"
+                let recoveredText = recovery.recovered.isEmpty
+                    ? ""
+                    : "원래 위치로 복구: \(recovery.recovered.prefix(5).joined(separator: "\n"))\n\n"
+                let reviewText = recovery.needsReview.isEmpty
+                    ? ""
+                    : recovery.needsReview.prefix(5).joined(separator: "\n")
+                alert.informativeText = recoveredText + reviewText
+                alert.alertStyle = recovery.needsReview.isEmpty ? .informational : .warning
+                alert.addButton(withTitle: "확인")
+                alert.runModal()
+            }
+        }
+
+        // 알림 사용 설정이 켜진 경우에만 권한을 요청하고 정리 알림을 예약한다.
+        HealthMonitor.shared.startScheduleIfEnabled(requestPermissionIfNeeded: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -121,14 +160,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
             // Dock 아이콘 클릭 시에도 윈도우 복원
-            for window in sender.windows {
-                if window.canBecomeMain {
-                    window.makeKeyAndOrderFront(nil)
-                    return true
-                }
+            if let window = mainWindow(in: sender) {
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+                return true
             }
+            openMainWindowHandler?()
         }
         return true
+    }
+
+    func configureMainWindowOpening(_ handler: @escaping () -> Void) {
+        openMainWindowHandler = handler
+    }
+
+    func mainWindowDidAppear() {
+        guard let destination = pendingNavigationDestination else { return }
+        pendingNavigationDestination = nil
+
+        // 새 RootView의 알림 구독이 연결된 다음 화면 이동을 요청한다.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .navigateTo, object: destination)
+        }
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let destination = response.notification.request.content.userInfo["destination"] as? String
+            ?? "dashboard"
+
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            if let window = self.mainWindow(in: NSApplication.shared) {
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+                NotificationCenter.default.post(name: .navigateTo, object: destination)
+            } else {
+                self.pendingNavigationDestination = destination
+                self.openMainWindowHandler?()
+            }
+            completionHandler()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        FileAccessManager.shared.stopAccessingResources()
+    }
+
+    private func mainWindow(in application: NSApplication) -> NSWindow? {
+        application.windows.first {
+            $0.canBecomeMain && (
+                $0.title.contains("BroomSweepy") || $0.identifier?.rawValue.contains("main") == true
+            )
+        }
     }
 }
 

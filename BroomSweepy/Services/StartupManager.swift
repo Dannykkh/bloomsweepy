@@ -1,6 +1,6 @@
 import Foundation
 
-struct LoginItem: Identifiable {
+struct LoginItem: Identifiable, Sendable {
     let id = UUID()
     let name: String
     let path: String
@@ -8,7 +8,7 @@ struct LoginItem: Identifiable {
     var isEnabled: Bool
     let type: LoginItemType
 
-    enum LoginItemType: String {
+    enum LoginItemType: String, Sendable {
         case launchAgent = "백그라운드 에이전트"
         case loginItem = "로그인 항목"
     }
@@ -20,7 +20,10 @@ final class StartupManager {
 
     // MARK: - Scan
 
-    func scanLoginItems(homeURL: URL? = nil) -> [LoginItem] {
+    func scanLoginItems(
+        homeURL: URL? = nil,
+        shouldCancel: () -> Bool = { false }
+    ) -> [LoginItem] {
         let home = homeURL?.path ?? ("/Users/" + NSUserName())
         var items: [LoginItem] = []
 
@@ -30,8 +33,10 @@ final class StartupManager {
         ]
 
         for dir in dirs {
+            guard !shouldCancel() else { return [] }
             guard let files = try? fm.contentsOfDirectory(atPath: dir) else { continue }
             for file in files where file.hasSuffix(".plist") {
+                guard !shouldCancel() else { return [] }
                 let path = "\(dir)/\(file)"
                 let plist = NSDictionary(contentsOfFile: path)
                 let isDisabled = plist?["Disabled"] as? Bool ?? false

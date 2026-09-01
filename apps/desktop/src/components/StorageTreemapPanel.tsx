@@ -27,6 +27,8 @@ interface StorageTreemapPanelProps {
   error: string | null;
   breadcrumbs: DirectoryBreadcrumb[];
   blocked: boolean;
+  showAction?: boolean;
+  onPickFolder: () => void;
   onStart: (path: string, breadcrumbs?: DirectoryBreadcrumb[]) => void;
   onCancel: () => void;
 }
@@ -58,6 +60,8 @@ export function StorageTreemapPanel({
   error,
   breadcrumbs,
   blocked,
+  showAction = true,
+  onPickFolder,
   onStart,
   onCancel,
 }: StorageTreemapPanelProps) {
@@ -87,11 +91,11 @@ export function StorageTreemapPanel({
     <section className="storage-map" id="storage-map" aria-labelledby="storage-map-title">
       <header className="storage-map__header">
         <div>
-          <p className="eyebrow">폴더별 용량 보기</p>
-          <h2 id="storage-map-title">비례사각형 저장공간 맵</h2>
-          <p>사각형이 클수록 파일이나 폴더의 크기가 큽니다.</p>
+          <p className="eyebrow">저장공간 트리맵</p>
+          <h2 id="storage-map-title">폴더 용량 지도</h2>
+          <p>사각형이 클수록 더 많은 용량을 사용합니다. 폴더를 누르면 안쪽으로 이동합니다.</p>
         </div>
-        <div className="storage-map__actions">
+        {showAction ? <div className="storage-map__actions">
           {scanning ? (
             <button className="secondary-button danger-outline" type="button" onClick={onCancel}>
               <X size={16} aria-hidden="true" />
@@ -101,16 +105,23 @@ export function StorageTreemapPanel({
             <button
               className="primary-button"
               type="button"
-              disabled={!root || blocked}
+              disabled={blocked}
               onClick={() => {
                 if (root) onStart(root);
+                else onPickFolder();
               }}
             >
-              {report ? <RefreshCw size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}
-              {report ? "처음부터 다시 분석" : "저장공간 맵 만들기"}
+              {report ? (
+                <RefreshCw size={16} aria-hidden="true" />
+              ) : root ? (
+                <Search size={16} aria-hidden="true" />
+              ) : (
+                <FolderOpen size={16} aria-hidden="true" />
+              )}
+              {report ? "처음부터 다시 보기" : root ? "폴더 용량 지도 만들기" : "폴더 선택"}
             </button>
           )}
-        </div>
+        </div> : <span className="storage-map__mode">읽기 전용</span>}
       </header>
 
       {breadcrumbs.length ? (
@@ -293,13 +304,14 @@ export function StorageTreemapPanel({
             </span>
           </footer>
         </>
-      ) : (
+      ) : showAction ? (
         <button
           className="storage-map__start"
           type="button"
-          disabled={!root || blocked || scanning}
+          disabled={blocked || scanning}
           onClick={() => {
             if (root) onStart(root);
+            else onPickFolder();
           }}
         >
           <span aria-hidden="true">
@@ -307,9 +319,19 @@ export function StorageTreemapPanel({
             <ChevronRight size={16} />
             <Folder size={18} />
           </span>
-          <strong>큰 사각형부터 폴더 안쪽으로 이동합니다</strong>
-          <small>용량 지도와 빈 폴더 목록을 만들려면 분석을 시작하세요.</small>
+          <strong>{root ? "큰 사각형부터 폴더 안쪽으로 이동합니다" : "먼저 검사할 폴더를 선택하세요"}</strong>
+          <small>{root ? "용량 지도와 빈 폴더 목록을 만들려면 분석을 시작하세요." : "폴더를 고른 뒤 용량 지도를 만들 수 있습니다."}</small>
         </button>
+      ) : (
+        <div className="storage-map__start is-static">
+          <span aria-hidden="true">
+            <Folder size={22} />
+            <ChevronRight size={16} />
+            <Folder size={18} />
+          </span>
+          <strong>{root ? "큰 사각형부터 폴더 안쪽으로 이동합니다" : "먼저 검사할 폴더를 선택하세요"}</strong>
+          <small>{root ? "위 안내의 버튼으로 폴더 용량 지도를 만드세요." : "폴더를 고른 뒤 용량 지도를 만들 수 있습니다."}</small>
+        </div>
       )}
     </section>
   );

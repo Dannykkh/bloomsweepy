@@ -1,0 +1,24 @@
+flowchart TD
+    Start([앱 시작]) --> Storage[용량 관리]
+
+    Storage --> Pick{검사할 폴더가 있는가}
+    Pick -->|아니요| PickFolder[폴더 선택]
+    PickFolder --> Map
+    Pick -->|예| Map[폴더 용량 지도]
+    Map --> Drill[큰 사각형 선택]
+    Drill --> Map
+    Map --> Detail[큰 파일·중복 찾기]
+    Detail --> Large[큰 파일]
+    Detail --> Duplicate[중복 파일]
+    Storage --> Cleanup[정리 후보]
+
+    Start --> FileSearch[파일 이름 찾기]
+    Start --> DocumentSearch[문서 내용 찾기]
+    Start --> Assistant[AI 도우미]
+    Start --> Settings[설정]
+
+    Assistant --> LocalCli{로컬 CLI와 MCP 연결 도구가 등록됐는가}
+    LocalCli -->|아니요| Optional[연결 없이 기본 기능 계속 사용]
+    LocalCli -->|예| Permission[이번 실행의 검색·검사 범위 허용]
+    Permission --> Request[대화는 CLI에서 진행]
+    Request --> AppWork[BroomSweepy가 실제 검색·검사 수행]

@@ -39,14 +39,14 @@
 
 - Project: `bloomsweepy`
 - Detected projects: 0
-- Source categories: 7
-- Files: 240
-- Documents: 29
-- Assets: 210
+- Source categories: 9
+- Files: 290
+- Documents: 40
+- Assets: 239
 - Routes: 0
 - API signals: 0
-- UI signals: 76
+- UI signals: 79
 
 ## Source Categories
 
-- `services.md`, `viewmodels.md`, `views.md`, `apps-desktop.md`, `broomsweepy.md`, `broomsweepy-models.md`, `crates-bloomsweepy-core.md`
+- `services.md`, `viewmodels.md`, `views.md`, `apps-bloomsweepy-mcp.md`, `apps-desktop.md`, `broomsweepy.md`, `broomsweepy-models.md`, `crates-bloomsweepy-control.md`, `crates-bloomsweepy-core.md`

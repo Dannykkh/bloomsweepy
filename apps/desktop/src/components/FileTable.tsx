@@ -41,7 +41,7 @@ export function FileTable({
       setInspectionMessage(
         outcome === "opened"
           ? `${file.name} 파일을 기본 앱으로 열었습니다.`
-          : `${file.name}은 실행 가능한 형식이라 폴더에서 위치만 표시했습니다.`,
+          : `${file.name}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.`,
       );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);

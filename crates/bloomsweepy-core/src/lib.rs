@@ -33,6 +33,7 @@ pub use document_search::{
     DocumentIndexProgress, DocumentIndexReport, DocumentIndexStatus, DocumentMatchSource,
     DocumentSearchError, DocumentSearchReport, DocumentSearchRequest, DocumentSearchResult,
     DocumentSnippetPart, build_document_index, document_index_status, search_document_index,
+    search_document_index_with_cancellation,
 };
 pub use drive::{
     DriveScanConfig, DriveScanPhase, DriveScanProgress, DriveScanReport, StorageCategory,
@@ -44,6 +45,7 @@ pub use file_catalog::{
     FileCatalogRefreshMode, FileCatalogReport, FileCatalogSearchReport, FileCatalogSearchRequest,
     FileCatalogSearchResult, FileCatalogSort, FileCatalogStatus, build_file_catalog,
     clear_file_catalog, file_catalog_status, search_file_catalog,
+    search_file_catalog_with_cancellation,
 };
 
 const HASH_CHUNK_BYTES: usize = 64 * 1024;

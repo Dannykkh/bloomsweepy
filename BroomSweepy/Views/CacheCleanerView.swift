@@ -1,10 +1,21 @@
 import SwiftUI
+import AppKit
 
 struct CacheCleanerView: View {
     @Bindable var viewModel: CleanerViewModel
     @State private var showConfirm = false
     @State private var emptyBounce = 0
     @State private var hasScanned = false
+
+    private var selectedSize: Int64 {
+        viewModel.cacheItems
+            .filter { viewModel.selectedCacheIDs.contains($0.id) }
+            .reduce(Int64(0)) { $0 + $1.size }
+    }
+
+    private var movableIDs: Set<UUID> {
+        Set(viewModel.cacheItems.filter { $0.snapshot.kind == .regularFile }.map(\.id))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -18,10 +29,10 @@ struct CacheCleanerView: View {
                         .buttonStyle(.bordered)
                         .disabled(viewModel.isScanning)
                 }
-                Button("선택 항목 정리") { showConfirm = true }
+                Button("선택 파일 휴지통으로 이동") { showConfirm = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(viewModel.selectedCacheIDs.isEmpty)
+                    .disabled(viewModel.selectedCacheIDs.isEmpty || viewModel.isScanning)
                     .help("선택한 캐시를 휴지통으로 이동합니다")
             }
             .padding(24)
@@ -31,16 +42,19 @@ struct CacheCleanerView: View {
             if !viewModel.cacheItems.isEmpty {
                 HStack {
                     Toggle("전체 선택", isOn: Binding(
-                        get: { viewModel.selectedCacheIDs.count == viewModel.cacheItems.count },
+                        get: {
+                            !movableIDs.isEmpty && movableIDs.isSubset(of: viewModel.selectedCacheIDs)
+                        },
                         set: { selectAll in
                             if selectAll {
-                                viewModel.selectedCacheIDs = Set(viewModel.cacheItems.map(\.id))
+                                viewModel.selectedCacheIDs.formUnion(movableIDs)
                             } else {
-                                viewModel.selectedCacheIDs.removeAll()
+                                viewModel.selectedCacheIDs.subtract(movableIDs)
                             }
                         }
                     ))
                     .toggleStyle(.checkbox)
+                    .disabled(movableIDs.isEmpty)
                     Spacer()
                 }
                 .padding(.horizontal, 24)
@@ -66,38 +80,19 @@ struct CacheCleanerView: View {
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
 
-                // 삭제 실패 안내
+                // 휴지통 이동 실패 안내
                 if !viewModel.cleanErrors.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 6) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
-                            Text("\(viewModel.cleanErrors.count)개 항목을 삭제할 수 없습니다")
+                            Text("\(viewModel.cleanErrors.count)개 항목을 휴지통으로 이동하지 못했습니다")
                                 .font(.callout.bold())
                                 .foregroundStyle(.orange)
                         }
-                        Text("샌드박스 권한 제한으로 일부 캐시를 직접 삭제할 수 없습니다.\n터미널에서 아래 명령으로 삭제할 수 있습니다:")
+                        Text(viewModel.cleanErrors[0])
                             .font(.caption)
                             .foregroundStyle(.secondary)
-
-                        HStack {
-                            Text("npm cache clean --force")
-                                .font(.system(size: 12, design: .monospaced))
-                                .padding(8)
-                                .background(.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
-
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString("npm cache clean --force", forType: .string)
-                                viewModel.toastMessage = "클립보드에 복사됨"
-                            } label: {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            .help("명령어 복사")
-                        }
                     }
                     .padding(16)
                     .background(.orange.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
@@ -110,11 +105,16 @@ struct CacheCleanerView: View {
                 }
             }
         }
-        .alert("캐시 정리", isPresented: $showConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showConfirm) {
             Button("취소", role: .cancel) {}
-            Button("정리", role: .destructive) { Task { await viewModel.cleanSelectedCache() } }
+            Button("휴지통으로 이동", role: .destructive) {
+                Task { await viewModel.cleanSelectedCache() }
+            }
         } message: {
-            Text("\(viewModel.selectedCacheIDs.count)개 캐시를 정리하시겠습니까?")
+            Text(
+                "\(viewModel.selectedCacheIDs.count)개 캐시, \(formatSize(selectedSize))를 휴지통으로 이동합니다.\n\n" +
+                "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 
@@ -185,11 +185,11 @@ struct CacheCleanerView: View {
                         VStack(spacing: 8) {
                             Text("클릭하여 캐시 스캔")
                                 .font(.title3.bold())
-                            Text("앱들이 빠른 실행을 위해 임시 저장하는 데이터입니다\n삭제해도 앱이 자동으로 다시 만들어내므로 안전합니다")
+                            Text("앱들이 빠른 실행을 위해 임시 저장하는 데이터입니다\n개별 파일만 자동 이동하며 캐시 폴더는 Finder에서 검토합니다")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                            Text("✅ 삭제해도 앱 동작에 영향 없음")
+                            Text("휴지통에서 복원할 수 있으며, 비워야 디스크 여유가 늘어납니다")
                                 .font(.caption)
                                 .foregroundStyle(.green)
                         }
@@ -212,11 +212,16 @@ struct CacheRow: View {
     let isSelected: Bool
     let onToggle: () -> Void
 
+    private var canMoveAutomatically: Bool {
+        item.snapshot.kind == .regularFile
+    }
+
     var body: some View {
         HStack(spacing: 14) {
             Toggle("", isOn: Binding(get: { isSelected }, set: { _ in onToggle() }))
                 .toggleStyle(.checkbox)
                 .labelsHidden()
+                .disabled(!canMoveAutomatically)
 
             Image(systemName: item.icon)
                 .font(.title2)
@@ -226,9 +231,13 @@ struct CacheRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(item.name).font(.headline)
-                    SafetyBadge(level: .safe)
+                    SafetyBadge(level: canMoveAutomatically ? .safe : .review)
                 }
-                Text("\(item.description) (\(item.fileCount)개 파일)")
+                Text(
+                    canMoveAutomatically
+                        ? "\(item.description)"
+                        : "\(item.description) (\(item.fileCount)개 파일) · 폴더는 Finder 검토 전용"
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 GeometryReader { geo in
@@ -241,6 +250,15 @@ struct CacheRow: View {
 
             Spacer()
 
+            if !canMoveAutomatically {
+                Button("Finder에서 보기") {
+                    NSWorkspace.shared.activateFileViewerSelecting([
+                        URL(fileURLWithPath: item.path)
+                    ])
+                }
+                .buttonStyle(.borderless)
+            }
+
             Text(item.sizeFormatted)
                 .font(.headline)
                 .foregroundStyle(.red)
@@ -248,7 +266,9 @@ struct CacheRow: View {
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
-        .onTapGesture { onToggle() }
+        .onTapGesture {
+            if canMoveAutomatically { onToggle() }
+        }
     }
 }
 

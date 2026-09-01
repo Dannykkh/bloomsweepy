@@ -2,25 +2,27 @@ import Foundation
 
 // MARK: - Cloud Models
 
-struct CloudProvider: Identifiable {
+struct CloudProvider: Identifiable, Sendable {
     let id = UUID()
     let name: String
     let icon: String
     let path: String
     let totalSize: Int64
     let fileCount: Int
+    let snapshot: FileIdentitySnapshot
     var files: [CloudFile]
 
     var totalSizeFormatted: String { ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file) }
 }
 
-struct CloudFile: Identifiable, Hashable {
+struct CloudFile: Identifiable, Hashable, Sendable {
     let id = UUID()
     let name: String
     let path: String
     let size: Int64
     let modified: Date
     let isOld: Bool // older than 6 months
+    let snapshot: FileIdentitySnapshot
 
     var sizeFormatted: String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
 
@@ -40,7 +42,7 @@ final class CloudStorageCleaner {
     // MARK: - Scan
 
     func scan(homeURL: URL? = nil, progressCallback: ((String, Double) -> Void)? = nil) -> [CloudProvider] {
-        let home = homeURL?.path ?? ("/Users/" + NSUserName())
+        let home = homeURL?.path ?? actualUserHomeURL().path
         var providers: [CloudProvider] = []
 
         let cloudTargets: [(name: String, icon: String, paths: [String])] = [
@@ -68,7 +70,8 @@ final class CloudStorageCleaner {
             let resolvedPaths = target.paths.flatMap { resolvePath($0) }
 
             for resolvedPath in resolvedPaths {
-                guard fm.fileExists(atPath: resolvedPath) else { continue }
+                guard let rootSnapshot = FileIdentitySnapshot.capture(path: resolvedPath),
+                      rootSnapshot.kind == .directory else { continue }
 
                 let (files, totalSize, fileCount) = scanCloudDirectory(resolvedPath)
 
@@ -79,6 +82,7 @@ final class CloudStorageCleaner {
                         path: resolvedPath,
                         totalSize: totalSize,
                         fileCount: fileCount,
+                        snapshot: rootSnapshot,
                         files: files
                     ))
                 }
@@ -90,26 +94,35 @@ final class CloudStorageCleaner {
         return providers.sorted { $0.totalSize > $1.totalSize }
     }
 
-    // MARK: - Delete Local Only
+    // MARK: - Reviewed Trash Move
 
-    /// Delete local copy only — the cloud provider should keep the remote copy.
-    /// Works by removing the local file; cloud sync clients typically re-create a placeholder.
-    func deleteLocalOnly(paths: [String]) -> (freed: Int64, errors: [String]) {
+    /// Moves reviewed filesystem entries to Trash. The sync provider decides
+    /// whether that move is propagated to the remote copy.
+    func trashReviewedFiles(files: [CloudFile]) -> (freed: Int64, errors: [String], movedIDs: Set<UUID>) {
         var totalFreed: Int64 = 0
         var errors: [String] = []
+        var movedIDs: Set<UUID> = []
 
-        for path in paths {
-            do {
-                let attrs = try fm.attributesOfItem(atPath: path)
-                let size = (attrs[.size] as? Int64) ?? 0
-                try fm.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-                totalFreed += size
-            } catch {
-                errors.append("\(path): \(error.localizedDescription)")
+        for file in files {
+            guard file.snapshot.kind == .regularFile,
+                  file.snapshot.size == file.size,
+                  file.snapshot.exactlyMatches(path: file.path) else {
+                errors.append("\(file.name): 스캔 뒤 파일이 변경되어 이동하지 않았습니다")
+                continue
+            }
+            let result = VerifiedFileMover.shared.moveToTrash(
+                path: file.path,
+                expectedSnapshot: file.snapshot
+            )
+            if result.succeeded {
+                totalFreed += file.size
+                movedIDs.insert(file.id)
+            } else {
+                errors.append("\(file.name): \(result.error ?? "휴지통으로 이동하지 못했습니다")")
             }
         }
 
-        return (totalFreed, errors)
+        return (totalFreed, errors, movedIDs)
     }
 
     // MARK: - Private
@@ -135,6 +148,9 @@ final class CloudStorageCleaner {
         var fileCount = 0
         let minSizeForListing: Int64 = 1024 * 1024 // 1 MB
 
+        let rootPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        guard let rootSnapshot = FileIdentitySnapshot.capture(path: rootPath),
+              rootSnapshot.kind == .directory else { return ([], 0, 0) }
         let enumerator = fm.enumerator(
             at: URL(fileURLWithPath: path),
             includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey, .contentModificationDateKey],
@@ -142,11 +158,17 @@ final class CloudStorageCleaner {
         ) { _, _ in true }
 
         while let url = enumerator?.nextObject() as? URL {
-            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey, .contentModificationDateKey]),
+            let normalized = url.standardizedFileURL.path
+            guard normalized.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/"),
+                  rootSnapshot.exactlyMatches(path: rootPath),
+                  let snapshot = FileIdentitySnapshot.capture(path: normalized),
+                  snapshot.kind == .regularFile,
+                  let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey, .contentModificationDateKey]),
                   values.isDirectory == false,
                   let fileSize = values.fileSize else { continue }
 
             let size = Int64(fileSize)
+            guard snapshot.size == size else { continue }
             totalSize += size
             fileCount += 1
 
@@ -160,7 +182,8 @@ final class CloudStorageCleaner {
                     path: url.path,
                     size: size,
                     modified: modified,
-                    isOld: isOld
+                    isOld: isOld,
+                    snapshot: snapshot
                 ))
             }
         }

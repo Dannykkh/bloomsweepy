@@ -26,6 +26,7 @@ const MAX_ISSUES: usize = 1_000;
 const MAX_SEARCH_RESULTS: usize = 250;
 const MAX_QUERY_CHARS: usize = 256;
 const PROGRESS_ENTRY_INTERVAL: u64 = 512;
+const SEARCH_PROGRESS_OPS: i32 = 1_000;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -1275,6 +1276,26 @@ pub fn search_file_catalog(
     database_path: impl AsRef<Path>,
     request: FileCatalogSearchRequest,
 ) -> Result<FileCatalogSearchReport, FileCatalogError> {
+    search_file_catalog_inner(database_path.as_ref(), request, None)
+}
+
+pub fn search_file_catalog_with_cancellation(
+    database_path: impl AsRef<Path>,
+    request: FileCatalogSearchRequest,
+    should_cancel: impl FnMut() -> bool + Send + 'static,
+) -> Result<FileCatalogSearchReport, FileCatalogError> {
+    search_file_catalog_inner(
+        database_path.as_ref(),
+        request,
+        Some(Box::new(should_cancel)),
+    )
+}
+
+fn search_file_catalog_inner(
+    database_path: &Path,
+    request: FileCatalogSearchRequest,
+    mut should_cancel: Option<Box<dyn FnMut() -> bool + Send>>,
+) -> Result<FileCatalogSearchReport, FileCatalogError> {
     let started = Instant::now();
     let query = request.query.trim().to_owned();
     if query.is_empty() {
@@ -1286,11 +1307,18 @@ pub fn search_file_catalog(
     let parsed = parse_catalog_query(&query, request.timezone_offset_minutes)
         .map_err(FileCatalogError::InvalidQuery)?;
 
-    let database_path = database_path.as_ref();
     if !database_path.exists() {
         return Err(FileCatalogError::IndexUnavailable);
     }
     let connection = open_existing_index(database_path)?;
+    if should_cancel.as_mut().is_some_and(|cancel| cancel()) {
+        return Err(FileCatalogError::Index("search cancelled".to_owned()));
+    }
+    if let Some(cancel) = should_cancel {
+        connection
+            .progress_handler(SEARCH_PROGRESS_OPS, Some(cancel))
+            .map_err(index_error)?;
+    }
     ensure_existing_schema(&connection)?;
     let meta = read_meta(&connection)?.ok_or(FileCatalogError::IndexUnavailable)?;
     let status = meta.into_status();
@@ -2036,6 +2064,18 @@ mod tests {
             sort: FileCatalogSort::Relevance,
             max_results: 100,
         }
+    }
+
+    #[test]
+    fn cancellable_search_stops_before_querying() {
+        let temporary = tempdir().expect("tempdir");
+        let database = temporary.path().join("catalog.sqlite3");
+        fs::write(&database, []).expect("empty database file");
+
+        let error = search_file_catalog_with_cancellation(&database, request("report"), || true)
+            .expect_err("cancelled search");
+
+        assert!(matches!(error, FileCatalogError::Index(message) if message == "search cancelled"));
     }
 
     #[test]

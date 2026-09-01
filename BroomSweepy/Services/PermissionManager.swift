@@ -3,20 +3,26 @@ import AppKit
 
 // MARK: - AppPermission Model
 
-struct AppPermission: Identifiable {
+struct AppPermission: Identifiable, Sendable {
     let id = UUID()
     let appName: String
     let bundleId: String
     let permissionType: PermissionType
-    let isGranted: Bool
+    let evidence: Evidence
     let appPath: String?
 
+    @MainActor
     var icon: NSImage? {
         guard let path = appPath else { return nil }
         return NSWorkspace.shared.icon(forFile: path)
     }
 
-    enum PermissionType: String, CaseIterable {
+    enum Evidence: String, Sendable {
+        case commonlyUses = "일반적으로 사용하는 권한"
+        case declaresUsage = "앱 설정에 사용 목적 선언"
+    }
+
+    enum PermissionType: String, CaseIterable, Sendable {
         case camera = "카메라"
         case microphone = "마이크"
         case location = "위치"
@@ -68,7 +74,7 @@ final class PermissionManager {
         let home = homeURL?.path ?? ("/Users/" + NSUserName())
         var permissions: [AppPermission] = []
 
-        progressCallback?("앱 권한 정보 수집 중...", 0.1)
+        progressCallback?("앱의 권한 사용 근거 수집 중...", 0.1)
 
         // Gather all installed apps
         let apps = gatherInstalledApps()
@@ -94,6 +100,7 @@ final class PermissionManager {
 
     // MARK: - Open System Settings
 
+    @MainActor
     func openSystemSettings(for permissionType: AppPermission.PermissionType) {
         let urlString: String
         switch permissionType {
@@ -165,7 +172,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .accessibility,
-                    isGranted: true,
+                    evidence: .commonlyUses,
                     appPath: app.path
                 ))
             }
@@ -189,7 +196,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .screenRecording,
-                    isGranted: true,
+                    evidence: .commonlyUses,
                     appPath: app.path
                 ))
             }
@@ -212,7 +219,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .fullDiskAccess,
-                    isGranted: true,
+                    evidence: .commonlyUses,
                     appPath: app.path
                 ))
             }
@@ -233,7 +240,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .camera,
-                    isGranted: true,
+                    evidence: .declaresUsage,
                     appPath: app.path
                 ))
             }
@@ -243,7 +250,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .microphone,
-                    isGranted: true,
+                    evidence: .declaresUsage,
                     appPath: app.path
                 ))
             }
@@ -253,7 +260,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .location,
-                    isGranted: true,
+                    evidence: .declaresUsage,
                     appPath: app.path
                 ))
             }
@@ -263,7 +270,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .contacts,
-                    isGranted: true,
+                    evidence: .declaresUsage,
                     appPath: app.path
                 ))
             }
@@ -273,7 +280,7 @@ final class PermissionManager {
                     appName: app.name,
                     bundleId: app.bundleId,
                     permissionType: .photos,
-                    isGranted: true,
+                    evidence: .declaresUsage,
                     appPath: app.path
                 ))
             }

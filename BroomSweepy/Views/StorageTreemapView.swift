@@ -8,6 +8,7 @@ struct TreemapItem: Identifiable {
     let path: String
     let size: Int64
     let isDirectory: Bool
+    let snapshot: FileIdentitySnapshot
     var color: Color
 
     var sizeFormatted: String { formatSize(size) }
@@ -23,6 +24,16 @@ struct TreemapItem: Identifiable {
     }
 }
 
+private struct TreemapDialog: Identifiable {
+    let id = UUID()
+    let kind: Kind
+
+    enum Kind {
+        case confirm(TreemapItem)
+        case error(String)
+    }
+}
+
 // MARK: - Storage Treemap View
 
 struct StorageTreemapView: View {
@@ -31,6 +42,10 @@ struct StorageTreemapView: View {
     @State private var pathStack: [URL] = []
     @State private var hoveredItem: UUID?
     @State private var scanMessage = ""
+    @State private var trashDialog: TreemapDialog?
+    @State private var leasedRootURL: URL?
+    @State private var isMoving = false
+    @State private var isViewActive = false
 
     private var totalSize: Int64 { items.reduce(0) { $0 + $1.size } }
 
@@ -55,6 +70,33 @@ struct StorageTreemapView: View {
                         .frame(minWidth: 220, maxWidth: 280)
                 }
             }
+        }
+        .alert(item: $trashDialog) { dialog in
+            switch dialog.kind {
+            case .confirm(let item):
+                return Alert(
+                    title: Text("휴지통으로 이동할까요?"),
+                    message: Text(
+                        "\(item.name)\n\(item.sizeFormatted)\n\n" +
+                        "실행 직전에 검토한 항목과 같은 파일인지 다시 확인합니다. 휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+                    ),
+                    primaryButton: .destructive(Text("휴지통으로 이동")) {
+                        confirmTrashItem(item)
+                    },
+                    secondaryButton: .cancel(Text("취소"))
+                )
+            case .error(let message):
+                return Alert(
+                    title: Text("휴지통으로 이동하지 못했습니다"),
+                    message: Text(message),
+                    dismissButton: .default(Text("확인"))
+                )
+            }
+        }
+        .onAppear { isViewActive = true }
+        .onDisappear {
+            isViewActive = false
+            releaseFolderLeaseIfInactive()
         }
     }
 
@@ -152,7 +194,7 @@ struct StorageTreemapView: View {
                         },
                         onDrillDown: { drillDown(to: item) },
                         onReveal: { revealInFinder(item.path) },
-                        onTrash: { trashItem(item) }
+                        onTrash: { requestTrash(item) }
                     )
                 }
             }
@@ -229,9 +271,11 @@ private struct TreemapCellView: View {
                 Button { onReveal() } label: {
                     Label("Finder에서 보기", systemImage: "magnifyingglass")
                 }
-                Divider()
-                Button(role: .destructive) { onTrash() } label: {
-                    Label("휴지통으로 이동", systemImage: "trash")
+                if !item.isDirectory {
+                    Divider()
+                    Button(role: .destructive) { onTrash() } label: {
+                        Label("휴지통으로 이동", systemImage: "trash")
+                    }
                 }
             }
             .offset(x: rect.minX, y: rect.minY)
@@ -307,9 +351,11 @@ private extension StorageTreemapView {
                             Button { revealInFinder(item.path) } label: {
                                 Label("Finder에서 보기", systemImage: "magnifyingglass")
                             }
-                            Divider()
-                            Button(role: .destructive) { trashItem(item) } label: {
-                                Label("휴지통으로 이동", systemImage: "trash")
+                            if !item.isDirectory {
+                                Divider()
+                                Button(role: .destructive) { requestTrash(item) } label: {
+                                    Label("휴지통으로 이동", systemImage: "trash")
+                                }
                             }
                         }
                     }
@@ -396,21 +442,36 @@ private extension StorageTreemapView {
     @MainActor
     private func scanFolder() async {
         guard let url = FileAccessManager.shared.requestFolderAccess(message: "분석할 폴더를 선택하세요") else { return }
+        if let previous = leasedRootURL, previous.path != url.path {
+            FileAccessManager.shared.releaseFolderAccess(previous)
+        }
+        leasedRootURL = url
         isScanning = true
+        defer {
+            isScanning = false
+            releaseFolderLeaseIfInactive()
+        }
         scanMessage = "폴더 구조 분석 중..."
         pathStack = [url]
         items = await Task.detached { Self.scanDir(url: url) }.value
-        isScanning = false
     }
 
     private func drillDown(to item: TreemapItem) {
+        guard item.snapshot.kind == .directory,
+              item.snapshot.exactlyMatches(path: item.path) else {
+            trashDialog = TreemapDialog(kind: .error("폴더가 스캔 뒤 변경되어 열지 않았습니다."))
+            return
+        }
         let url = URL(fileURLWithPath: item.path)
         pathStack.append(url)
         Task {
             isScanning = true
+            defer {
+                isScanning = false
+                releaseFolderLeaseIfInactive()
+            }
             scanMessage = "\(item.name) 분석 중..."
             items = await Task.detached { Self.scanDir(url: url) }.value
-            withAnimation(.spring(duration: 0.3)) { isScanning = false }
         }
     }
 
@@ -420,8 +481,11 @@ private extension StorageTreemapView {
         guard let p = pathStack.last else { return }
         Task {
             isScanning = true
+            defer {
+                isScanning = false
+                releaseFolderLeaseIfInactive()
+            }
             items = await Task.detached { Self.scanDir(url: p) }.value
-            isScanning = false
         }
     }
 
@@ -430,8 +494,11 @@ private extension StorageTreemapView {
         guard let t = pathStack.last else { return }
         Task {
             isScanning = true
+            defer {
+                isScanning = false
+                releaseFolderLeaseIfInactive()
+            }
             items = await Task.detached { Self.scanDir(url: t) }.value
-            isScanning = false
         }
     }
 
@@ -441,24 +508,91 @@ private extension StorageTreemapView {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
-    private func trashItem(_ item: TreemapItem) {
+    private func requestTrash(_ item: TreemapItem) {
+        guard !item.isDirectory, item.snapshot.kind == .regularFile else {
+            revealInFinder(item.path)
+            trashDialog = TreemapDialog(
+                kind: .error("폴더 내부 전체를 다시 검증할 수 없어 자동 이동하지 않습니다. Finder에서 검토해 주세요.")
+            )
+            return
+        }
+        trashDialog = TreemapDialog(kind: .confirm(item))
+    }
+
+    private func confirmTrashItem(_ item: TreemapItem) {
+        guard !item.isDirectory, item.snapshot.kind == .regularFile else {
+            trashDialog = TreemapDialog(
+                kind: .error("폴더는 자동 이동하지 않습니다. Finder에서 검토해 주세요.")
+            )
+            return
+        }
+        let path = item.path
+        let name = item.name
+        let id = item.id
+        let snapshot = item.snapshot
+        let logicalSize = item.size
+        isMoving = true
         Task {
-            let url = URL(fileURLWithPath: item.path)
-            do {
-                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-                withAnimation(.spring(duration: 0.3)) {
-                    items.removeAll { $0.id == item.id }
+            defer {
+                isMoving = false
+                releaseFolderLeaseIfInactive()
+            }
+            let failure = await Task.detached { () -> String? in
+                let trashPath = actualUserHomeURL()
+                    .appendingPathComponent(".Trash")
+                    .standardizedFileURL.path
+                guard path != trashPath,
+                      !path.hasPrefix(trashPath + "/"),
+                      snapshot.exactlyMatches(path: path) else {
+                    return "스캔 뒤 항목이 변경되었거나 링크여서 이동하지 않았습니다: \(path)"
                 }
-            } catch {
-                // 권한 부족
+                let result = VerifiedFileMover.shared.moveToTrash(
+                    path: path,
+                    expectedSnapshot: snapshot
+                )
+                return result.succeeded
+                    ? nil
+                    : "\(name): \(result.error ?? "휴지통으로 이동하지 못했습니다")"
+            }.value
+
+            if let failure {
+                trashDialog = TreemapDialog(kind: .error(failure))
+                return
+            }
+
+            withAnimation(.spring(duration: 0.3)) {
+                items.removeAll { $0.id == id || $0.path == path }
+            }
+            if logicalSize > 0 {
+                HealthMonitor.shared.recordClean()
+                CleanHistory.shared.record(freed: logicalSize, type: "manual")
             }
         }
+    }
+
+    @MainActor
+    private func releaseFolderLeaseIfInactive() {
+        guard !isViewActive, !isScanning, !isMoving else { return }
+        if let leasedRootURL {
+            FileAccessManager.shared.releaseFolderAccess(leasedRootURL)
+            self.leasedRootURL = nil
+        }
+        items = []
+        pathStack = []
     }
 
     // MARK: - Scanner
 
     private static func scanDir(url: URL) -> [TreemapItem] {
         let fm = FileManager.default
+        let rootPath = url.standardizedFileURL.path
+        let trashPath = actualUserHomeURL()
+            .appendingPathComponent(".Trash")
+            .standardizedFileURL.path
+        guard rootPath != trashPath,
+              !rootPath.hasPrefix(trashPath + "/"),
+              let rootSnapshot = FileIdentitySnapshot.capture(path: rootPath),
+              rootSnapshot.kind == .directory else { return [] }
         guard let contents = try? fm.contentsOfDirectory(
             at: url, includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
@@ -466,20 +600,26 @@ private extension StorageTreemapView {
 
         var result: [TreemapItem] = []
         for itemURL in contents {
-            guard let v = try? itemURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else { continue }
-            let isDir = v.isDirectory ?? false
+            let normalized = itemURL.standardizedFileURL.path
+            guard normalized.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/"),
+                  rootSnapshot.exactlyMatches(path: rootPath),
+                  let snapshot = FileIdentitySnapshot.capture(path: normalized),
+                  let v = try? itemURL.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey]) else { continue }
+            let isDir = snapshot.kind == .directory
             let name = itemURL.lastPathComponent
 
             if isDir {
                 let size = dirSize(itemURL)
                 guard size > 0 else { continue }
                 result.append(TreemapItem(name: name, path: itemURL.path, size: size,
-                                          isDirectory: true, color: .blue))
+                                          isDirectory: true, snapshot: snapshot, color: .blue))
             } else {
                 let size = Int64(v.fileSize ?? 0)
-                guard size > 10_000 else { continue }
+                guard snapshot.kind == .regularFile,
+                      snapshot.size == size,
+                      size > 10_000 else { continue }
                 result.append(TreemapItem(name: name, path: itemURL.path, size: size,
-                                          isDirectory: false, color: .blue))
+                                          isDirectory: false, snapshot: snapshot, color: .blue))
             }
         }
         return result.sorted { $0.size > $1.size }
@@ -492,7 +632,9 @@ private extension StorageTreemapView {
             options: [.skipsHiddenFiles]
         ) else { return 0 }
         for case let f as URL in e {
-            guard let v = try? f.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
+            guard let snapshot = FileIdentitySnapshot.capture(path: f.path),
+                  snapshot.kind == .regularFile,
+                  let v = try? f.resourceValues(forKeys: [.fileSizeKey, .isDirectoryKey]),
                   v.isDirectory == false, let s = v.fileSize else { continue }
             total += Int64(s)
         }

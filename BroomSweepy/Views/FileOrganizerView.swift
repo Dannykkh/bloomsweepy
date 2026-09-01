@@ -7,6 +7,8 @@ struct FileOrganizerView: View {
     @State private var showConfirm = false
     @State private var lastExecuted: [OrganizePlan] = []
     @State private var resultMessage = ""
+    @State private var resultColor: Color = .secondary
+    @State private var leasedFolderURL: URL?
 
     private let engine = FileOrganizerEngine.shared
 
@@ -117,7 +119,7 @@ struct FileOrganizerView: View {
             if !resultMessage.isEmpty {
                 Text(resultMessage)
                     .font(.callout.bold())
-                    .foregroundStyle(.green)
+                    .foregroundStyle(resultColor)
                     .padding()
             }
         }
@@ -127,10 +129,15 @@ struct FileOrganizerView: View {
         } message: {
             Text("\(preview.count)개 파일을 정리하시겠습니까?")
         }
+        .onDisappear { releaseFolderLease() }
     }
 
     private func selectFolder() {
         if let url = FileAccessManager.shared.requestFolderAccess(message: "정리할 폴더를 선택하세요") {
+            if let previous = leasedFolderURL, previous.path != url.path {
+                FileAccessManager.shared.releaseFolderAccess(previous)
+            }
+            leasedFolderURL = url
             viewModel.organizerTargetURL = url
             refreshPreview()
         }
@@ -144,18 +151,23 @@ struct FileOrganizerView: View {
     private func executeOrganize() {
         var plans = preview
         let result = engine.execute(plans: &plans)
-        lastExecuted = plans
-        preview = []
+        lastExecuted.append(contentsOf: plans.filter(\.executed))
+        preview = plans.filter { !$0.executed }
         resultMessage = "\(result.moved)개 파일 정리 완료"
         if !result.errors.isEmpty {
             resultMessage += " (\(result.errors.count)개 실패)"
         }
+        resultColor = result.errors.isEmpty ? .green : (result.moved > 0 ? .orange : .red)
     }
 
     private func undoOrganize() {
-        let undone = engine.undo(plans: lastExecuted)
-        lastExecuted = []
-        resultMessage = "\(undone)개 파일 원래 위치로 복원"
+        let result = engine.undo(plans: lastExecuted)
+        lastExecuted = result.remaining
+        resultMessage = "\(result.undone)개 파일 원래 위치로 복원"
+        if !result.errors.isEmpty {
+            resultMessage += " (\(result.errors.count)개 건너뜀: \(result.errors[0]))"
+        }
+        resultColor = result.errors.isEmpty ? .green : (result.undone > 0 ? .orange : .red)
         refreshPreview()
     }
 
@@ -166,5 +178,15 @@ struct FileOrganizerView: View {
             return "./" + url.path.dropFirst(base.count + 1)
         }
         return url.path
+    }
+
+    private func releaseFolderLease() {
+        if let leasedFolderURL {
+            FileAccessManager.shared.releaseFolderAccess(leasedFolderURL)
+            self.leasedFolderURL = nil
+        }
+        viewModel.organizerTargetURL = nil
+        preview = []
+        lastExecuted = []
     }
 }

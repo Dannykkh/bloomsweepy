@@ -1,14 +1,19 @@
+import Darwin
 import Foundation
 import CoreImage
 
 // MARK: - Organize Plan
 
-struct OrganizePlan: Identifiable {
+struct OrganizePlan: Identifiable, Sendable {
     let id = UUID()
     let originalURL: URL
     let destinationURL: URL
+    let approvedRootURL: URL
+    let approvedRootSnapshot: FileIdentitySnapshot
+    let sourceSnapshot: FileIdentitySnapshot
     let action: String // "move", "rename"
     var executed = false
+    var executedDestinationURL: URL? = nil
 }
 
 // MARK: - Organize Options
@@ -42,20 +47,27 @@ final class FileOrganizerEngine {
     func preview(folderURL: URL, options: OrganizeOptions) -> [OrganizePlan] {
         var plans: [OrganizePlan] = []
 
+        let approvedRootURL = folderURL.standardizedFileURL
+        guard let approvedRootSnapshot = FileIdentitySnapshot.capture(path: approvedRootURL.path),
+              approvedRootSnapshot.kind == .directory else { return [] }
+
         guard let contents = try? fileManager.contentsOfDirectory(
-            at: folderURL,
+            at: approvedRootURL,
             includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else { return [] }
 
         for fileURL in contents {
-            guard let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]),
-                  values.isDirectory == false else { continue }
+            let sourceURL = fileURL.standardizedFileURL
+            guard approvedRootSnapshot.exactlyMatches(path: approvedRootURL.path),
+                  sourceURL.deletingLastPathComponent() == approvedRootURL,
+                  let sourceSnapshot = FileIdentitySnapshot.capture(path: sourceURL.path),
+                  sourceSnapshot.kind == .regularFile else { continue }
 
-            let ext = fileURL.pathExtension.lowercased()
+            let ext = sourceURL.pathExtension.lowercased()
             let category = categorize(ext: ext)
-            let fileName = fileURL.lastPathComponent
-            let fileDate = getFileDate(url: fileURL)
+            let fileName = sourceURL.lastPathComponent
+            let fileDate = getFileDate(url: sourceURL)
 
             var destFolder = folderURL
             var newName = fileName
@@ -67,7 +79,7 @@ final class FileOrganizerEngine {
 
             // Photos: sort by EXIF date
             if options.sortPhotosByDate && category == .photo {
-                let exifDate = getEXIFDate(url: fileURL) ?? fileDate
+                let exifDate = getEXIFDate(url: sourceURL) ?? fileDate
                 let year = Calendar.current.component(.year, from: exifDate)
                 let month = monthFormatter.string(from: exifDate)
                 destFolder = folderURL
@@ -90,15 +102,23 @@ final class FileOrganizerEngine {
                 newName = "\(dateStr)_\(fileName)"
             }
 
-            let destURL = destFolder.appendingPathComponent(newName)
+            let destURL = destFolder.appendingPathComponent(newName).standardizedFileURL
 
             // Only add if something changes
-            if destURL != fileURL {
-                plans.append(OrganizePlan(originalURL: fileURL, destinationURL: destURL, action: "move"))
+            if destURL != sourceURL,
+               isSameOrDescendant(destURL.path, of: approvedRootURL.path) {
+                plans.append(OrganizePlan(
+                    originalURL: sourceURL,
+                    destinationURL: destURL,
+                    approvedRootURL: approvedRootURL,
+                    approvedRootSnapshot: approvedRootSnapshot,
+                    sourceSnapshot: sourceSnapshot,
+                    action: "move"
+                ))
             }
         }
 
-        return plans
+        return plans.sorted { $0.originalURL.path < $1.originalURL.path }
     }
 
     // MARK: - Execute
@@ -112,24 +132,52 @@ final class FileOrganizerEngine {
             let destDir = plan.destinationURL.deletingLastPathComponent()
 
             do {
-                if !fileManager.fileExists(atPath: destDir.path) {
-                    try fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
+                guard plan.sourceSnapshot.exactlyMatches(path: plan.originalURL.path) else {
+                    throw OrganizerSafetyError.sourceChanged
                 }
+                try ensureDestinationDirectory(
+                    destDir,
+                    under: plan.approvedRootURL,
+                    approvedRootSnapshot: plan.approvedRootSnapshot
+                )
 
                 // Handle name collision
                 var finalURL = plan.destinationURL
                 var counter = 1
-                while fileManager.fileExists(atPath: finalURL.path) {
+                while entryExistsNoFollow(finalURL.path) {
                     let stem = plan.destinationURL.deletingPathExtension().lastPathComponent
                     let ext = plan.destinationURL.pathExtension
-                    let newName = "\(stem)_\(counter).\(ext)"
+                    let newName = ext.isEmpty
+                        ? "\(stem)_\(counter)"
+                        : "\(stem)_\(counter).\(ext)"
                     finalURL = destDir.appendingPathComponent(newName)
                     counter += 1
                 }
 
-                try fileManager.moveItem(at: plan.originalURL, to: finalURL)
+                guard plan.sourceSnapshot.exactlyMatches(path: plan.originalURL.path),
+                      !entryExistsNoFollow(finalURL.path) else {
+                    throw OrganizerSafetyError.sourceChanged
+                }
+                let result = VerifiedFileMover.shared.moveAtomically(
+                    sourcePath: plan.originalURL.path,
+                    destinationPath: finalURL.path,
+                    expectedSnapshot: plan.sourceSnapshot
+                )
+                guard result.succeeded else {
+                    throw OrganizerSafetyError.moveFailed(
+                        result.error ?? "파일을 이동하지 못했습니다"
+                    )
+                }
                 plans[i].executed = true
+                let executedURL = result.resultingPath.map { URL(fileURLWithPath: $0) } ?? finalURL
+                plans[i].executedDestinationURL = executedURL
                 moved += 1
+                if let warning = result.error {
+                    errors.append("\(plan.originalURL.lastPathComponent): \(warning)")
+                }
+                if !plan.sourceSnapshot.exactlyMatches(path: executedURL.path) {
+                    errors.append("\(plan.originalURL.lastPathComponent): 이동 뒤 파일 동일성을 확인하지 못했습니다. Finder에서 확인하세요")
+                }
             } catch {
                 errors.append("\(plan.originalURL.lastPathComponent): \(error.localizedDescription)")
             }
@@ -140,21 +188,40 @@ final class FileOrganizerEngine {
 
     // MARK: - Undo
 
-    func undo(plans: [OrganizePlan]) -> Int {
+    func undo(plans: [OrganizePlan]) -> (
+        undone: Int,
+        errors: [String],
+        remaining: [OrganizePlan]
+    ) {
         var undone = 0
+        var errors: [String] = []
+        var remaining: [OrganizePlan] = []
         for plan in plans.reversed() where plan.executed {
             do {
-                let originalDir = plan.originalURL.deletingLastPathComponent()
-                if !fileManager.fileExists(atPath: originalDir.path) {
-                    try fileManager.createDirectory(at: originalDir, withIntermediateDirectories: true)
+                guard let executedURL = plan.executedDestinationURL,
+                      plan.sourceSnapshot.exactlyMatches(path: executedURL.path),
+                      sameEntryIdentity(plan.approvedRootSnapshot, at: plan.approvedRootURL.path),
+                      plan.originalURL.deletingLastPathComponent() == plan.approvedRootURL,
+                      !entryExistsNoFollow(plan.originalURL.path) else {
+                    throw OrganizerSafetyError.undoTargetChanged
                 }
-                try fileManager.moveItem(at: plan.destinationURL, to: plan.originalURL)
+                let result = VerifiedFileMover.shared.moveAtomically(
+                    sourcePath: executedURL.path,
+                    destinationPath: plan.originalURL.path,
+                    expectedSnapshot: plan.sourceSnapshot
+                )
+                guard result.succeeded else {
+                    throw OrganizerSafetyError.moveFailed(
+                        result.error ?? "파일을 원래 위치로 돌리지 못했습니다"
+                    )
+                }
                 undone += 1
             } catch {
-                continue
+                errors.append("\(plan.originalURL.lastPathComponent): \(error.localizedDescription)")
+                remaining.append(plan)
             }
         }
-        return undone
+        return (undone, errors, Array(remaining.reversed()))
     }
 
     // MARK: - Helpers
@@ -216,5 +283,77 @@ final class FileOrganizerEngine {
         let df = DateFormatter()
         df.dateFormat = "yyyy:MM:dd HH:mm:ss"
         return df.date(from: dateStr)
+    }
+
+    private func ensureDestinationDirectory(
+        _ destination: URL,
+        under approvedRoot: URL,
+        approvedRootSnapshot: FileIdentitySnapshot
+    ) throws {
+        let root = approvedRoot.standardizedFileURL
+        let target = destination.standardizedFileURL
+        guard isSameOrDescendant(target.path, of: root.path),
+              let rootSnapshot = FileIdentitySnapshot.capture(path: root.path),
+              rootSnapshot.kind == .directory,
+              rootSnapshot.device == approvedRootSnapshot.device,
+              rootSnapshot.inode == approvedRootSnapshot.inode else {
+            throw OrganizerSafetyError.unsafeDestination
+        }
+
+        let relative = target.path.dropFirst(root.path.count)
+        var current = root
+        for component in relative.split(separator: "/") {
+            current.appendPathComponent(String(component), isDirectory: true)
+            if entryExistsNoFollow(current.path) {
+                guard let snapshot = FileIdentitySnapshot.capture(path: current.path),
+                      snapshot.kind == .directory,
+                      snapshot.device == approvedRootSnapshot.device else {
+                    throw OrganizerSafetyError.unsafeDestination
+                }
+            } else {
+                try fileManager.createDirectory(at: current, withIntermediateDirectories: false)
+                guard let snapshot = FileIdentitySnapshot.capture(path: current.path),
+                      snapshot.kind == .directory,
+                      snapshot.device == approvedRootSnapshot.device else {
+                    throw OrganizerSafetyError.unsafeDestination
+                }
+            }
+        }
+    }
+
+    private func entryExistsNoFollow(_ path: String) -> Bool {
+        var value = stat()
+        return lstat(path, &value) == 0
+    }
+
+    private func sameEntryIdentity(_ snapshot: FileIdentitySnapshot, at path: String) -> Bool {
+        guard let current = FileIdentitySnapshot.capture(path: path) else { return false }
+        return current.device == snapshot.device
+            && current.inode == snapshot.inode
+            && current.kind == snapshot.kind
+    }
+
+    private func isSameOrDescendant(_ path: String, of root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+}
+
+private enum OrganizerSafetyError: LocalizedError {
+    case sourceChanged
+    case unsafeDestination
+    case undoTargetChanged
+    case moveFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .sourceChanged:
+            return "미리보기 뒤 원본 파일이 변경되어 이동하지 않았습니다"
+        case .unsafeDestination:
+            return "선택한 폴더 안의 안전한 대상 경로를 확인하지 못했습니다"
+        case .undoTargetChanged:
+            return "이동한 파일 또는 원래 위치가 변경되어 되돌리지 않았습니다"
+        case .moveFailed(let message):
+            return message
+        }
     }
 }

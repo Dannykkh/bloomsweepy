@@ -128,19 +128,19 @@ struct NextStepsSection: View {
                 Recommendation(icon: "doc.on.doc.fill", title: "중복 파일 탐색",
                               description: "같은 파일이 여러 곳에 있는지 확인", color: .orange, target: .space),
                 Recommendation(icon: "hand.raised.fill", title: "개인정보 정리",
-                              description: "브라우저 기록과 쿠키 삭제", color: .purple, target: .privacy),
+                              description: "브라우저 기록과 쿠키 검토", color: .purple, target: .privacy),
             ]
         case "duplicates":
             return [
-                Recommendation(icon: "shield.checkered", title: "보안 검사",
-                              description: "악성코드와 의심 파일 탐지", color: .orange, target: .security),
+                Recommendation(icon: "shield.checkered", title: "의심 항목 검토",
+                              description: "이름 패턴이 일치한 항목 확인", color: .orange, target: .security),
                 Recommendation(icon: "folder.fill", title: "파일 자동 정리",
                               description: "파일을 규칙에 따라 자동 분류", color: .cyan, target: .files),
             ]
         case "memory":
             return [
                 Recommendation(icon: "internaldrive.fill", title: "캐시 정리",
-                              description: "불필요한 캐시로 디스크 확보", color: .red, target: .space),
+                              description: "불필요한 캐시 검토", color: .red, target: .space),
                 Recommendation(icon: "power", title: "시작프로그램 관리",
                               description: "불필요한 자동 실행 프로그램 정리", color: .green, target: .speed),
             ]
@@ -149,7 +149,7 @@ struct NextStepsSection: View {
                 Recommendation(icon: "lock.shield.fill", title: "앱 권한 확인",
                               description: "카메라/마이크 권한 현황 점검", color: .orange, target: .security),
                 Recommendation(icon: "hand.raised.fill", title: "개인정보 정리",
-                              description: "브라우저 추적 데이터 삭제", color: .purple, target: .privacy),
+                              description: "브라우저 추적 데이터 검토", color: .purple, target: .privacy),
             ]
         default:
             return [

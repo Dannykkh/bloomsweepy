@@ -4,10 +4,12 @@ struct CloudStorageView: View {
     @Bindable var viewModel: CleanerViewModel
     @State private var providers: [CloudProvider] = []
     @State private var isScanning = false
+    @State private var isMoving = false
     @State private var expandedProviderIDs: Set<UUID> = []
     @State private var selectedFileIDs: Set<UUID> = []
-    @State private var showDeleteConfirm = false
+    @State private var showTrashConfirm = false
     @State private var resultMessage: String?
+    @State private var resultIsError = false
 
     private var totalCloudSize: Int64 {
         providers.reduce(0) { $0 + $1.totalSize }
@@ -38,11 +40,16 @@ struct CloudStorageView: View {
                 providerList
             }
         }
-        .alert("로컬에서만 삭제", isPresented: $showDeleteConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showTrashConfirm) {
             Button("취소", role: .cancel) {}
-            Button("삭제", role: .destructive) { performDelete() }
+            Button("휴지통으로 이동", role: .destructive) { performTrashMove() }
         } message: {
-            Text("선택한 \(selectedFileIDs.count)개 파일을 로컬에서 삭제합니다.\n클라우드의 원본은 유지됩니다.\n(\(ByteCountFormatter.string(fromByteCount: selectedSize, countStyle: .file)))")
+            Text(
+                "선택한 \(selectedFileIDs.count)개 파일, " +
+                "\(ByteCountFormatter.string(fromByteCount: selectedSize, countStyle: .file))를 휴지통으로 이동합니다.\n\n" +
+                "동기화 설정에 따라 클라우드와 다른 기기에도 이동이 반영될 수 있습니다. " +
+                "클라우드 원본 유지는 보장되지 않습니다. 휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 
@@ -54,17 +61,18 @@ struct CloudStorageView: View {
                 .font(.title2.bold())
             Spacer()
             if !selectedFileIDs.isEmpty {
-                Button("로컬에서만 삭제 (\(selectedFileIDs.count)개)") {
-                    showDeleteConfirm = true
+                Button("선택 파일 휴지통으로 이동 (\(selectedFileIDs.count)개)") {
+                    showTrashConfirm = true
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
+                .disabled(isScanning || isMoving)
             }
             Button("스캔") {
                 Task { await runScan() }
             }
             .buttonStyle(.bordered)
-            .disabled(isScanning)
+            .disabled(isScanning || isMoving)
         }
         .padding(24)
     }
@@ -94,11 +102,11 @@ struct CloudStorageView: View {
             Spacer()
             if let msg = resultMessage {
                 HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    Image(systemName: resultIsError ? "exclamationmark.triangle" : "checkmark.circle.fill")
+                        .foregroundStyle(resultIsError ? .orange : .green)
                     Text(msg)
                         .font(.callout)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(resultIsError ? .orange : .green)
                 }
             }
         }
@@ -165,11 +173,17 @@ struct CloudStorageView: View {
 
     @MainActor
     private func runScan() async {
+        guard !isScanning, !isMoving else { return }
+        guard let homeURL = FileAccessManager.shared.loadBookmark()
+                ?? FileAccessManager.shared.requestHomeAccess() else {
+            resultMessage = "홈 폴더 접근 권한이 필요합니다"
+            resultIsError = true
+            return
+        }
         isScanning = true
         selectedFileIDs.removeAll()
         resultMessage = nil
 
-        let homeURL = FileAccessManager.shared.loadBookmark()
         providers = await Task.detached {
             CloudStorageCleaner.shared.scan(homeURL: homeURL, progressCallback: nil)
         }.value
@@ -180,21 +194,36 @@ struct CloudStorageView: View {
             : "\(providers.count)개 클라우드 서비스 발견"
     }
 
-    private func performDelete() {
-        let paths = selectedFiles.map(\.path)
+    @MainActor
+    private func performTrashMove() {
+        guard !isScanning, !isMoving else { return }
+        let files = selectedFiles
+        guard !files.isEmpty else { return }
+        isMoving = true
         Task {
             let result = await Task.detached {
-                CloudStorageCleaner.shared.deleteLocalOnly(paths: paths)
+                CloudStorageCleaner.shared.trashReviewedFiles(files: files)
             }.value
-            selectedFileIDs.removeAll()
-
-            if result.errors.isEmpty {
-                resultMessage = "\(ByteCountFormatter.string(fromByteCount: result.freed, countStyle: .file)) 정리 완료"
-            } else {
-                resultMessage = "일부 항목 실패 (\(result.errors.count)건)"
+            selectedFileIDs.subtract(result.movedIDs)
+            if result.freed > 0 {
+                HealthMonitor.shared.recordClean()
+                CleanHistory.shared.record(freed: result.freed, type: "manual")
             }
-            viewModel.toastMessage = resultMessage
+            let message: String
+            let isError: Bool
+            if result.errors.isEmpty {
+                message = "휴지통으로 이동한 논리 용량: \(ByteCountFormatter.string(fromByteCount: result.freed, countStyle: .file))"
+                isError = false
+            } else {
+                message = "휴지통으로 이동한 논리 용량: \(ByteCountFormatter.string(fromByteCount: result.freed, countStyle: .file)) · " +
+                    "\(result.errors.count)개 실패: \(result.errors[0])"
+                isError = true
+            }
+            isMoving = false
             await runScan()
+            resultMessage = message
+            resultIsError = isError
+            viewModel.toastMessage = message
         }
     }
 }

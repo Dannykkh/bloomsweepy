@@ -7,8 +7,24 @@ import UserNotifications
 final class HealthMonitor {
     static let shared = HealthMonitor()
 
+    private let defaults = UserDefaults.standard
+    private let notificationCenter = UNUserNotificationCenter.current()
+    private let cleanReminderIdentifier = "schedule-clean"
+    private let scanCompleteIdentifier = "scan-complete"
+    private let lastCleanReminderDateKey = "lastCleanReminderDate"
+    private let cleanReminderThrottle: TimeInterval = 24 * 3600
+
     var briefing: DailyBriefing?
     var lastCheckDate: Date?
+
+    private init() {
+        defaults.register(defaults: [
+            "notificationsEnabled": true,
+            "autoCleanEnabled": false,
+            "autoCleanInterval": 7,
+            "showMenuBarPercent": true
+        ])
+    }
 
     struct DailyBriefing {
         let date: Date
@@ -126,28 +142,57 @@ final class HealthMonitor {
 
     /// 마지막 정리 날짜 기록
     func recordClean() {
-        UserDefaults.standard.set(Date(), forKey: "lastCleanDate")
+        defaults.set(Date(), forKey: "lastCleanDate")
+        defaults.removeObject(forKey: lastCleanReminderDateKey)
+
+        DispatchQueue.main.async { [weak self] in
+            self?.startScheduleIfEnabled()
+        }
     }
 
-    // MARK: - 스케줄 자동 정리
+    // MARK: - 정리 알림 스케줄
 
     private var scheduleTimer: Timer?
 
-    /// 앱 시작 시 호출 — 설정에 따라 주기적 체크 타이머 등록
-    func startScheduleIfEnabled() {
+    /// 설정에 맞춰 기존 예약을 취소하고 정리 알림 체크를 다시 시작한다.
+    func startScheduleIfEnabled(requestPermissionIfNeeded: Bool = false) {
         scheduleTimer?.invalidate()
+        scheduleTimer = nil
+        notificationCenter.removePendingNotificationRequests(
+            withIdentifiers: [cleanReminderIdentifier]
+        )
 
-        guard UserDefaults.standard.bool(forKey: "autoCleanEnabled") else { return }
-        let intervalDays = UserDefaults.standard.integer(forKey: "autoCleanInterval")
+        guard defaults.bool(forKey: "notificationsEnabled") else {
+            notificationCenter.removePendingNotificationRequests(
+                withIdentifiers: [scanCompleteIdentifier]
+            )
+            return
+        }
+
+        if requestPermissionIfNeeded {
+            requestNotificationPermission { [weak self] isAuthorized in
+                guard isAuthorized else { return }
+                DispatchQueue.main.async {
+                    self?.startScheduleIfEnabled()
+                }
+            }
+            return
+        }
+
+        guard defaults.bool(forKey: "autoCleanEnabled") else { return }
+        let intervalDays = defaults.integer(forKey: "autoCleanInterval")
         guard intervalDays > 0 else { return }
 
         // 마지막 정리 시점 확인
-        let lastClean = UserDefaults.standard.object(forKey: "lastCleanDate") as? Date ?? .distantPast
+        let lastClean = defaults.object(forKey: "lastCleanDate") as? Date ?? .distantPast
         let daysSinceClean = Date().timeIntervalSince(lastClean) / (24 * 3600)
 
         if daysSinceClean >= Double(intervalDays) {
             // 바로 알림
             sendCleanReminder()
+        } else if let lastReminder = defaults.object(forKey: lastCleanReminderDateKey) as? Date,
+                  lastClean >= lastReminder {
+            defaults.removeObject(forKey: lastCleanReminderDateKey)
         }
 
         // 6시간마다 체크 (앱이 실행 중인 동안)
@@ -157,27 +202,45 @@ final class HealthMonitor {
     }
 
     private func checkSchedule() {
-        guard UserDefaults.standard.bool(forKey: "autoCleanEnabled") else { return }
-        let intervalDays = UserDefaults.standard.integer(forKey: "autoCleanInterval")
-        let lastClean = UserDefaults.standard.object(forKey: "lastCleanDate") as? Date ?? .distantPast
+        guard defaults.bool(forKey: "notificationsEnabled"),
+              defaults.bool(forKey: "autoCleanEnabled") else { return }
+        let intervalDays = defaults.integer(forKey: "autoCleanInterval")
+        guard intervalDays > 0 else { return }
+        let lastClean = defaults.object(forKey: "lastCleanDate") as? Date ?? .distantPast
         let daysSinceClean = Date().timeIntervalSince(lastClean) / (24 * 3600)
 
-        if daysSinceClean >= Double(intervalDays) {
-            sendCleanReminder()
+        guard daysSinceClean >= Double(intervalDays) else {
+            if let lastReminder = defaults.object(forKey: lastCleanReminderDateKey) as? Date,
+               lastClean >= lastReminder {
+                defaults.removeObject(forKey: lastCleanReminderDateKey)
+            }
+            return
         }
+        sendCleanReminder()
     }
 
     private func sendCleanReminder() {
-        guard UserDefaults.standard.bool(forKey: "notificationsEnabled") else { return }
+        if let lastReminder = defaults.object(forKey: lastCleanReminderDateKey) as? Date,
+           Date() < lastReminder.addingTimeInterval(cleanReminderThrottle) {
+            return
+        }
 
         let content = UNMutableNotificationContent()
         content.title = "BroomSweepy"
-        content.body = "정리할 시간이에요! Mac을 쾌적하게 유지하세요."
+        content.body = "정리할 시점입니다. 파일은 자동으로 삭제되지 않습니다."
         content.sound = .default
+        content.userInfo = ["destination": "dashboard"]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
-        let request = UNNotificationRequest(identifier: "schedule-clean", content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(request)
+        let request = UNNotificationRequest(
+            identifier: cleanReminderIdentifier,
+            content: content,
+            trigger: trigger
+        )
+        addIfAuthorized(request) { [weak self] wasScheduled in
+            guard let self, wasScheduled else { return }
+            self.defaults.set(Date(), forKey: self.lastCleanReminderDateKey)
+        }
     }
 
     /// macOS 알림 발송
@@ -188,15 +251,67 @@ final class HealthMonitor {
         content.title = "BroomSweepy"
         content.body = b.recommendations.first?.text ?? "Mac 상태를 확인해보세요."
         content.sound = .default
+        content.userInfo = ["destination": "dashboard"]
 
         let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
         let request = UNNotificationRequest(identifier: "health-\(Date())", content: content, trigger: trigger)
 
-        UNUserNotificationCenter.current().add(request)
+        addIfAuthorized(request)
+    }
+
+    /// 전체 스캔이 성공적으로 끝난 경우 한 번 호출한다.
+    func sendScanCompletedNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "BroomSweepy 스캔 완료"
+        content.body = "스캔이 끝났습니다. 정리 후보를 확인하세요."
+        content.sound = .default
+        content.userInfo = ["destination": "dashboard"]
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: scanCompleteIdentifier,
+            content: content,
+            trigger: trigger
+        )
+        addIfAuthorized(request)
     }
 
     /// 알림 권한 요청
-    func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    func requestNotificationPermission(completion: ((Bool) -> Void)? = nil) {
+        guard defaults.bool(forKey: "notificationsEnabled") else {
+            completion?(false)
+            return
+        }
+
+        notificationCenter.requestAuthorization(options: [.alert, .sound]) { granted, error in
+            completion?(granted && error == nil)
+        }
+    }
+
+    private func addIfAuthorized(
+        _ request: UNNotificationRequest,
+        completion: ((Bool) -> Void)? = nil
+    ) {
+        guard defaults.bool(forKey: "notificationsEnabled") else {
+            completion?(false)
+            return
+        }
+
+        notificationCenter.getNotificationSettings { [weak self] settings in
+            guard let self,
+                  self.defaults.bool(forKey: "notificationsEnabled") else {
+                completion?(false)
+                return
+            }
+
+            switch settings.authorizationStatus {
+            case .authorized, .provisional:
+                self.notificationCenter.add(request) { error in
+                    completion?(error == nil)
+                }
+            default:
+                completion?(false)
+            }
+        }
     }
 }

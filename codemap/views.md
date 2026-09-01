@@ -2,6 +2,10 @@
 
 > WPF View/Window/Panel
 
+## apps/desktop/src/views/AssistantView.tsx
+- **component** `AssistantView` (L18)
+- **type** `AssistantViewProps` (L4)
+
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70)
 - **component** `CleanupMetric` (L461)
@@ -31,10 +35,10 @@
 - **type** `LargeFilesViewProps` (L6)
 
 ## apps/desktop/src/views/OverviewView.tsx
-- **component** `OverviewView` (L54)
-- **component** `SummaryMetric` (L300)
-- **type** `OverviewViewProps` (L26)
-- **type** `SummaryMetricProps` (L292)
+- **component** `OverviewView` (L58)
+- **component** `GuideStep` (L296)
+- **type** `OverviewViewProps` (L28)
+- **type** `GuideStepProps` (L289)
 
 ## apps/desktop/src/views/SettingsView.tsx
 - **component** `SettingsView` (L10)
@@ -42,36 +46,36 @@
 
 ## BroomSweepy/Views/AppUninstallerView.swift
 - **view** `AppUninstallerView` : View (L3)
-- **view** `AppRow` : View (L158)
+- **view** `AppRow` : View (L155)
 
 ## BroomSweepy/Views/CacheCleanerView.swift
-- **view** `CacheCleanerView` : View (L2)
+- **view** `CacheCleanerView` : View (L3)
 - **view** `CacheRow` : View (L208)
-- **enum** `SafetyLevel` : String (L256)
-- **view** `SafetyBadge` : View (L270)
+- **enum** `SafetyLevel` : String (L276)
+- **view** `SafetyBadge` : View (L290)
 
 ## BroomSweepy/Views/CleanupToolsView.swift
 - **view** `CleanupToolsView` : View (L3)
 - **enum** `CleanupTab` : String, CaseIterable, Identifiable (L6)
 - **view** `MailAttachmentsSection` : View (L83)
-- **view** `MailAttachmentRow` : View (L189)
-- **view** `BrokenDownloadsSection` : View (L236)
-- **view** `BrokenDownloadRow` : View (L342)
-- **view** `AppVersionsSection` : View (L393)
-- **view** `AppVersionRow` : View (L454)
-- **view** `LanguageCleanerSection` : View (L498)
-- **view** `BrokenPlistSection` : View (L685)
+- **view** `MailAttachmentRow` : View (L209)
+- **view** `BrokenDownloadsSection` : View (L256)
+- **view** `BrokenDownloadRow` : View (L382)
+- **view** `AppVersionsSection` : View (L433)
+- **view** `AppVersionRow` : View (L494)
+- **view** `LanguageCleanerSection` : View (L538)
+- **view** `BrokenPlistSection` : View (L719)
 
 ## BroomSweepy/Views/CloudStorageView.swift
 - **view** `CloudStorageView` : View (L2)
 
 ## BroomSweepy/Views/DashboardView.swift
 - **view** `DashboardView` : View (L3)
-- **view** `SummaryCard` : View (L592)
+- **view** `SummaryCard` : View (L593)
 
 ## BroomSweepy/Views/DuplicateFilesView.swift
 - **view** `DuplicateFilesView` : View (L2)
-- **view** `DuplicateGroupCard` : View (L125)
+- **view** `DuplicateGroupCard` : View (L135)
 
 ## BroomSweepy/Views/FeatureInfoBanner.swift
 - **view** `FeatureInfoBanner` : View (L4)
@@ -85,14 +89,15 @@
 
 ## BroomSweepy/Views/LargeFilesView.swift
 - **view** `LargeFilesView` : View (L2)
-- **view** `LargeFileRow` : View (L155)
-- **view** `FilterChip` : View (L225)
+- **view** `LargeFileRow` : View (L203)
+- **enum** `Kind` (L288)
+- **view** `FilterChip` : View (L294)
 
 ## BroomSweepy/Views/MaintenanceView.swift
-- **view** `MaintenanceView` : View (L2)
+- **view** `MaintenanceView` : View (L9)
 
 ## BroomSweepy/Views/MalwareScannerView.swift
-- **view** `MalwareScannerView` : View (L2)
+- **view** `MalwareScannerView` : View (L3)
 
 ## BroomSweepy/Views/MemoryCleanerView.swift
 - **view** `MemoryCleanerView` : View (L2)
@@ -118,7 +123,7 @@
 - **view** `PrivacyCategoryView` : View (L2)
 
 ## BroomSweepy/Views/PrivacyCleanerView.swift
-- **view** `PrivacyCleanerView` : View (L2)
+- **view** `PrivacyCleanerView` : View (L3)
 
 ## BroomSweepy/Views/RuleBuilderView.swift
 - **view** `RuleBuilderView` : View (L2)
@@ -134,15 +139,15 @@
 
 ## BroomSweepy/Views/SimilarImagesView.swift
 - **view** `SimilarImagesView` : View (L2)
-- **view** `SimilarImageGroupCard` : View (L182)
-- **view** `SimilarImageCell` : View (L236)
+- **view** `SimilarImageGroupCard` : View (L286)
+- **view** `SimilarImageCell` : View (L340)
 
 ## BroomSweepy/Views/SmartCleanView.swift
 - **struct** `SmartCleanFile` : Identifiable (L5)
 - **struct** `SmartCleanGroup` : Identifiable (L15)
 - **enum** `Safety` : String (L29)
 - **view** `SmartCleanView` : View (L46)
-- **enum** `Phase` (L58)
+- **enum** `Phase` (L61)
 
 ## BroomSweepy/Views/SpaceCategoryView.swift
 - **view** `SpaceCategoryView` : View (L2)
@@ -154,12 +159,13 @@
 
 ## BroomSweepy/Views/StartupManagerView.swift
 - **view** `StartupManagerView` : View (L2)
-- **view** `LoginItemRow` : View (L105)
+- **view** `LoginItemRow` : View (L107)
 
 ## BroomSweepy/Views/StorageTreemapView.swift
 - **struct** `TreemapItem` : Identifiable (L4)
-- **view** `StorageTreemapView` : View (L27)
-- **function** `colorAt()` (L20)
+- **enum** `Kind` (L30)
+- **view** `StorageTreemapView` : View (L38)
+- **function** `colorAt()` (L21)
 
 ## BroomSweepy/Views/SystemMonitorView.swift
 - **view** `SystemMonitorView` : View (L2)

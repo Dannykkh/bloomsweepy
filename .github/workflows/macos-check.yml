@@ -1,0 +1,162 @@
+name: macOS check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-check:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      APPLE_SIGNING_IDENTITY: "-"
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Record toolchain versions
+        run: |
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-version
+          swift --version
+          rustc --version
+          cargo --version
+          node --version
+          npm --version
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Install Tauri frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Check Rust workspace
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Check Tauri frontend
+        working-directory: apps/desktop
+        run: |
+          npm run check
+          npm run test:file-policy
+          npm run build
+
+      - name: Build ad-hoc signed Tauri app
+        working-directory: apps/desktop
+        run: npx tauri build --bundles app
+
+      - name: Validate Tauri app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="target/release/bundle/macos/BroomSweepy.app"
+          plist="$app/Contents/Info.plist"
+
+          test -d "$app"
+          plutil -lint "$plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = \
+            "com.broomsweepy.desktop"
+
+          executable="$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist"
+          )"
+          test -x "$app/Contents/MacOS/$executable"
+          file "$app/Contents/MacOS/$executable" | grep -q arm64
+          codesign -vvv --deep --strict "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Signature=adhoc"
+
+      - name: Generate Swift Xcode project
+        run: |
+          xcodegen generate --spec project.yml
+          xcodebuild -project BroomSweepy.xcodeproj -list
+
+      - name: Check Swift file-operation policy
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R -n --include='*.swift' '\.removeItem(' BroomSweepy; then
+            echo "Permanent removeItem calls are not allowed in the Swift app."
+            exit 1
+          fi
+
+          if grep -R -n -E --include='*.swift' 'try\?.*trashItem' BroomSweepy; then
+            echo "Trash failures must be reported instead of ignored."
+            exit 1
+          fi
+
+          if grep -n -E '\.(trashItem|moveItem)\(' \
+            BroomSweepy/Services/LanguageCleaner.swift \
+            BroomSweepy/Services/MalwareScanner.swift; then
+            echo "Language resources and name-pattern findings are review-only."
+            exit 1
+          fi
+
+      - name: Build unsigned Swift app
+        run: |
+          xcodebuild \
+            -project BroomSweepy.xcodeproj \
+            -scheme BroomSweepy \
+            -configuration Debug \
+            -destination "platform=macOS,arch=arm64" \
+            -derivedDataPath "$PWD/build/swift-derived" \
+            DEVELOPMENT_TEAM="" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Ad-hoc sign and validate Swift app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="build/swift-derived/Build/Products/Debug/BroomSweepy.app"
+          plist="$app/Contents/Info.plist"
+
+          test -d "$app"
+          codesign \
+            --force \
+            --sign - \
+            --options runtime \
+            --timestamp=none \
+            --entitlements BroomSweepy/BroomSweepy.entitlements \
+            "$app"
+
+          plutil -lint "$plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")" = \
+            "com.broomsweepy.app"
+
+          executable="$(
+            /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist"
+          )"
+          test -x "$app/Contents/MacOS/$executable"
+          file "$app/Contents/MacOS/$executable" | grep -q arm64
+          codesign -vvv --deep --strict "$app"
+          codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Signature=adhoc"

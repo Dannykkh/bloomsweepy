@@ -3,14 +3,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { AppShell } from "./components/AppShell";
 import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice";
+import { StorageSectionNav } from "./components/StorageSectionNav";
 import {
   cancelScan,
   clearFileCatalog,
+  configureControlScanAccess,
+  configureControlSearchAccess,
   getActionRecoveryStatus,
+  getControlStatus,
   getDocumentIndexStatus,
   getFileCatalogStatus,
+  getScanReportSnapshot,
   getSystemOverview,
   listenToCleanupScanProgress,
+  listenToControlStatus,
+  listenToControlScanCompleted,
+  listenToControlScanProgress,
   listenToDirectoryScanProgress,
   listenToDriveScanProgress,
   listenToDocumentIndexProgress,
@@ -54,6 +62,7 @@ import type {
   FileCatalogProgress,
   FileCatalogReport,
   FileCatalogStatus,
+  ControlStatus,
 } from "./types";
 import { DEFAULT_SCAN_CONFIG } from "./types";
 import { DuplicatesView } from "./views/DuplicatesView";
@@ -63,6 +72,28 @@ import { OverviewView } from "./views/OverviewView";
 import { SettingsView } from "./views/SettingsView";
 import { DocumentSearchView } from "./views/DocumentSearchView";
 import { FastFileSearchView } from "./views/FastFileSearchView";
+import { AssistantView } from "./views/AssistantView";
+
+const storageViews = new Set<ViewId>([
+  "overview",
+  "large-files",
+  "duplicates",
+  "cleanup",
+]);
+
+const unavailableControlStatus: ControlStatus = {
+  revision: 0,
+  bridgeAvailable: false,
+  connectedClients: 0,
+  lastConnectedAtUnixMs: null,
+  activeOperation: null,
+  lastOperation: null,
+  pendingReview: null,
+  lastError: null,
+  protocolVersion: 2,
+  searchAccess: { files: false, documents: false },
+  scanAccess: { enabled: false, root: null, approvedAtUnixMs: null },
+};
 
 function App() {
   const [activeView, setActiveView] = useState<ViewId>("overview");
@@ -111,8 +142,167 @@ function App() {
   const [recoveryErrorDismissed, setRecoveryErrorDismissed] = useState(false);
   const [openingSystemTrash, setOpeningSystemTrash] = useState(false);
   const [recoveryActionError, setRecoveryActionError] = useState<string | null>(null);
+  const [controlStatus, setControlStatus] = useState<ControlStatus>(
+    unavailableControlStatus,
+  );
+  const [controlAccessUpdating, setControlAccessUpdating] = useState(false);
+  const [controlAccessError, setControlAccessError] = useState<string | null>(null);
+  const [controlScanAccessUpdating, setControlScanAccessUpdating] = useState(false);
+  const [controlScanAccessError, setControlScanAccessError] = useState<string | null>(null);
+  const [backgroundScanTerminalAnnouncement, setBackgroundScanTerminalAnnouncement] =
+    useState("");
+  const [backgroundScanErrorAnnouncement, setBackgroundScanErrorAnnouncement] = useState("");
+  const controlStatusRevision = useRef(0);
+  const controlScanOperation = useRef<string | null>(null);
+  const loadedScanGeneration = useRef(0);
+  const handledControlCompletion = useRef<string | null>(null);
+  const announcedScanState = useRef<ScanUiState>("idle");
   const startupRecoveryPromise = useRef<Promise<ActionRecoveryReport> | null>(null);
   const [config, setConfig] = useState<ScanConfig>(DEFAULT_SCAN_CONFIG);
+
+  useEffect(() => {
+    if (activeView === "overview") {
+      announcedScanState.current = scanState;
+      setBackgroundScanTerminalAnnouncement("");
+      setBackgroundScanErrorAnnouncement("");
+      return;
+    }
+
+    if (announcedScanState.current === scanState && scanState !== "error") return;
+    announcedScanState.current = scanState;
+    setBackgroundScanTerminalAnnouncement(
+      scanState === "success"
+        ? "파일 검사가 완료됐습니다."
+        : scanState === "cancelled"
+          ? "파일 검사를 취소했습니다."
+          : "",
+    );
+    setBackgroundScanErrorAnnouncement(
+      scanState === "error"
+        ? `파일 검사를 완료하지 못했습니다. ${error ?? "오류 내용을 확인해 주세요."}`
+        : "",
+    );
+  }, [activeView, error, scanState]);
+
+  async function loadControlScanResult(
+    operationId: string,
+    scanGeneration: number,
+  ) {
+    if (scanGeneration <= loadedScanGeneration.current) return;
+    try {
+      const snapshot = await getScanReportSnapshot(scanGeneration);
+      if (
+        snapshot.scanGeneration !== scanGeneration ||
+        scanGeneration <= loadedScanGeneration.current
+      )
+        return;
+      loadedScanGeneration.current = scanGeneration;
+      controlScanOperation.current = null;
+      setRoot((current) => current ?? displayPath(snapshot.report.root));
+      setReport(snapshot.report);
+      setScanState("success");
+      setProgress(null);
+      setError(null);
+      setTrashResult(null);
+      setTrashResultSource(null);
+      setTrashError(null);
+      void getSystemOverview()
+        .then(setSystem)
+        .catch((reason: unknown) => {
+          console.warn("디스크 사용량을 새로 고치지 못했습니다.", reason);
+        });
+    } catch (reason) {
+      if (handledControlCompletion.current !== operationId) return;
+      controlScanOperation.current = null;
+      setScanState("error");
+      setProgress(null);
+      setError(normalizeError(reason));
+    }
+  }
+
+  function handleControlScanCompletion(
+    operationId: string,
+    state: "completed" | "failed" | "cancelled",
+    scanGeneration: number | null,
+    message: string,
+  ) {
+    if (handledControlCompletion.current === operationId) return;
+    handledControlCompletion.current = operationId;
+    if (state === "completed" && scanGeneration !== null) {
+      void loadControlScanResult(operationId, scanGeneration);
+      return;
+    }
+    controlScanOperation.current = null;
+    setProgress(null);
+    if (state === "cancelled") {
+      setScanState("cancelled");
+      setError(null);
+    } else {
+      setScanState("error");
+      setError(message);
+    }
+  }
+
+  function applyControlStatus(status: ControlStatus) {
+    if (status.revision < controlStatusRevision.current) return;
+    controlStatusRevision.current = status.revision;
+    setControlStatus(status);
+
+    const operation = status.activeOperation;
+    if (
+      operation?.source === "chatCli" &&
+      operation.kind === "storageScan" &&
+      (operation.state === "queued" || operation.state === "running")
+    ) {
+      if (controlScanOperation.current !== operation.operationId) {
+        controlScanOperation.current = operation.operationId;
+        handledControlCompletion.current = null;
+        if (status.scanAccess.root)
+          setRoot((current) => current ?? displayPath(status.scanAccess.root ?? ""));
+        setReport(null);
+        setTrashResult(null);
+        setTrashResultSource(null);
+        setTrashError(null);
+        setScanState("scanning");
+        setProgress({
+          phase: "discovering",
+          message: operation.message ?? "채팅에서 요청한 검사를 준비하고 있습니다",
+          processedFiles: operation.processedItems ?? 0,
+          processedBytes: operation.processedBytes ?? 0,
+          fraction: null,
+        });
+        setError(null);
+      } else {
+        setProgress((current) => ({
+          phase: current?.phase ?? "discovering",
+          message:
+            operation.message ??
+            current?.message ??
+            "채팅에서 요청한 검사를 진행하고 있습니다",
+          processedFiles: operation.processedItems ?? current?.processedFiles ?? 0,
+          processedBytes: operation.processedBytes ?? current?.processedBytes ?? 0,
+          fraction: current?.fraction ?? null,
+        }));
+      }
+      return;
+    }
+
+    const completed = status.lastOperation;
+    if (
+      completed?.source === "chatCli" &&
+      completed.kind === "storageScan" &&
+      (completed.state === "completed" ||
+        completed.state === "failed" ||
+        completed.state === "cancelled")
+    ) {
+      handleControlScanCompletion(
+        completed.operationId,
+        completed.state,
+        completed.scanGeneration,
+        completed.message ?? "채팅에서 요청한 검사를 완료하지 못했습니다",
+      );
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -123,6 +313,9 @@ function App() {
     let unlistenTrash: (() => void) | undefined;
     let unlistenDocuments: (() => void) | undefined;
     let unlistenFileCatalog: (() => void) | undefined;
+    let unlistenControlStatus: (() => void) | undefined;
+    let unlistenControlScanProgress: (() => void) | undefined;
+    let unlistenControlScanCompleted: (() => void) | undefined;
     const recoverySlowTimer = window.setTimeout(() => {
       if (!disposed) setRecoveryCheckSlow(true);
     }, 300);
@@ -251,6 +444,72 @@ function App() {
         if (!disposed) setFileCatalogError(normalizeError(reason));
       });
 
+    async function connectControlBridge() {
+      try {
+        const cleanup = await listenToControlStatus((status) => {
+          if (!disposed) applyControlStatus(status);
+        });
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlistenControlStatus = cleanup;
+      } catch {
+        if (!disposed && controlStatusRevision.current === 0)
+          setControlStatus(unavailableControlStatus);
+      }
+
+      try {
+        const cleanup = await listenToControlScanProgress((event) => {
+          if (
+            disposed ||
+            event.revision < controlStatusRevision.current ||
+            controlScanOperation.current !== event.operationId
+          )
+            return;
+          controlStatusRevision.current = event.revision;
+          setProgress(event.progress);
+        });
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlistenControlScanProgress = cleanup;
+      } catch (reason) {
+        if (!disposed) setError(normalizeError(reason));
+      }
+
+      try {
+        const cleanup = await listenToControlScanCompleted((event) => {
+          if (disposed || event.revision < controlStatusRevision.current) return;
+          controlStatusRevision.current = event.revision;
+          handleControlScanCompletion(
+            event.operationId,
+            event.state,
+            event.scanGeneration,
+            event.message,
+          );
+        });
+        if (disposed) {
+          cleanup();
+          return;
+        }
+        unlistenControlScanCompleted = cleanup;
+      } catch (reason) {
+        if (!disposed) setError(normalizeError(reason));
+      }
+
+      try {
+        const status = await getControlStatus();
+        if (!disposed) applyControlStatus(status);
+      } catch {
+        if (!disposed && controlStatusRevision.current === 0)
+          setControlStatus(unavailableControlStatus);
+      }
+    }
+
+    void connectControlBridge();
+
     return () => {
       disposed = true;
       window.clearTimeout(recoverySlowTimer);
@@ -261,6 +520,9 @@ function App() {
       unlistenTrash?.();
       unlistenDocuments?.();
       unlistenFileCatalog?.();
+      unlistenControlStatus?.();
+      unlistenControlScanProgress?.();
+      unlistenControlScanCompleted?.();
     };
   }, []);
 
@@ -298,6 +560,66 @@ function App() {
     }
   }
 
+  async function toggleControlSearchAccess() {
+    if (controlAccessUpdating || !controlStatus.bridgeAvailable) return;
+    const enabled =
+      controlStatus.searchAccess.files || controlStatus.searchAccess.documents;
+    if (!enabled && !fileCatalog && !documentIndex) return;
+
+    setControlAccessUpdating(true);
+    setControlAccessError(null);
+    try {
+      const status = await configureControlSearchAccess({
+        fileRoot: enabled ? null : (fileCatalog?.root ?? null),
+        documentRoot: enabled ? null : (documentIndex?.root ?? null),
+      });
+      applyControlStatus(status);
+    } catch (reason) {
+      setControlAccessError(normalizeError(reason));
+    } finally {
+      setControlAccessUpdating(false);
+    }
+  }
+
+  async function updateControlScanAccess(
+    nextRoot: string | null,
+    nextConfig: ScanConfig | null,
+  ): Promise<boolean> {
+    if (controlScanAccessUpdating || !controlStatus.bridgeAvailable) return false;
+    setControlScanAccessUpdating(true);
+    setControlScanAccessError(null);
+    try {
+      const status = await configureControlScanAccess({
+        root: nextRoot,
+        config: nextConfig,
+      });
+      applyControlStatus(status);
+      return true;
+    } catch (reason) {
+      setControlScanAccessError(normalizeError(reason));
+      return false;
+    } finally {
+      setControlScanAccessUpdating(false);
+    }
+  }
+
+  async function toggleControlScanAccess() {
+    if (controlStatus.scanAccess.enabled) {
+      await updateControlScanAccess(null, null);
+      return;
+    }
+    if (!root || selectionBlocked) return;
+    await updateControlScanAccess(root, config);
+  }
+
+  async function updateScanConfig(nextConfig: ScanConfig) {
+    if (controlStatus.scanAccess.enabled) {
+      const revoked = await updateControlScanAccess(null, null);
+      if (!revoked) return;
+    }
+    setConfig(nextConfig);
+  }
+
   const volume = useMemo(
     () => findVolumeForPath(system?.volumes ?? [], root ?? report?.root ?? null),
     [report?.root, root, system?.volumes],
@@ -325,6 +647,10 @@ function App() {
       if (!selected) return null;
 
       if (selected !== root) {
+        if (controlStatus.scanAccess.enabled) {
+          const revoked = await updateControlScanAccess(null, null);
+          if (!revoked) return null;
+        }
         setRoot(selected);
         setReport(null);
         setProgress(null);
@@ -889,9 +1215,6 @@ function App() {
             : root
       }
       report={report}
-      cleanupReport={cleanupReport}
-      documentIndex={documentIndex}
-      fileCatalog={fileCatalog}
       volume={volume}
       mobileNavigationOpen={mobileNavigationOpen}
       selectionBlocked={selectionBlocked}
@@ -899,6 +1222,17 @@ function App() {
       onNavigate={navigate}
       onPickFolder={() => void pickFolder()}
     >
+      <span
+        className="sr-only background-scan-announcement"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {backgroundScanTerminalAnnouncement}
+      </span>
+      <span className="sr-only background-scan-error-announcement" role="alert">
+        {backgroundScanErrorAnnouncement}
+      </span>
       {recoveryChecking && recoveryCheckSlow ? (
         <RecoveryCheckNotice
           error={null}
@@ -926,6 +1260,9 @@ function App() {
           onDismiss={() => setRecoveryDismissed(true)}
         />
       ) : null}
+      {storageViews.has(activeView) ? (
+        <StorageSectionNav activeView={activeView} onNavigate={navigate} />
+      ) : null}
       {activeView === "overview" ? (
         <OverviewView
           platform={system?.platform ?? null}
@@ -939,7 +1276,6 @@ function App() {
           driveProgress={driveProgress}
           driveState={driveScanState}
           driveError={driveError}
-          directoryRoot={root ?? volume?.mountPoint ?? null}
           directoryReport={directoryReport}
           directoryProgress={directoryProgress}
           directoryState={directoryScanState}
@@ -962,6 +1298,9 @@ function App() {
             void runDirectoryScan(path, breadcrumbs)
           }
           onCancelDirectoryScan={() => void stopDirectoryScan()}
+          onOpenLargeFiles={() => navigate("large-files")}
+          onOpenDuplicates={() => navigate("duplicates")}
+          onOpenCleanup={() => navigate("cleanup")}
         />
       ) : null}
       {activeView === "large-files" ? (
@@ -1020,6 +1359,21 @@ function App() {
           onCancelIndex={() => void stopDocumentIndex()}
         />
       ) : null}
+      {activeView === "assistant" ? (
+        <AssistantView
+          status={controlStatus}
+          canEnableSearch={Boolean(fileCatalog || documentIndex)}
+          updatingSearchAccess={controlAccessUpdating}
+          searchAccessError={controlAccessError}
+          onToggleSearchAccess={() => void toggleControlSearchAccess()}
+          scanRoot={root}
+          scanConfig={config}
+          canEnableScan={Boolean(root) && !selectionBlocked}
+          updatingScanAccess={controlScanAccessUpdating}
+          scanAccessError={controlScanAccessError}
+          onToggleScanAccess={() => void toggleControlScanAccess()}
+        />
+      ) : null}
       {activeView === "cleanup" ? (
         <CleanupView
           platform={system?.platform ?? null}
@@ -1061,7 +1415,10 @@ function App() {
         />
       ) : null}
       {activeView === "settings" ? (
-        <SettingsView config={config} onConfigChange={setConfig} />
+        <SettingsView
+          config={config}
+          onConfigChange={(nextConfig) => void updateScanConfig(nextConfig)}
+        />
       ) : null}
 
       {(trashRunning && activeView !== trashResultSource) ||
@@ -1076,9 +1433,9 @@ function App() {
         activeView !== "cleanup" &&
         !(activeView === "documents" && documentIndexState === "scanning") &&
         !(activeView === "files" && fileCatalogState === "scanning")) ? (
-        <div className="scan-status-dock" role="status" aria-live="polite">
+        <div className="scan-status-dock">
           <span>
-            <strong>
+            <strong role="status" aria-live="polite" aria-atomic="true">
               {trashRunning
                 ? "휴지통 이동 중"
                 : directoryScanState === "scanning"
@@ -1091,6 +1448,9 @@ function App() {
                   ? "파일 목록 만드는 중"
                 : driveScanState === "scanning"
                   ? "드라이브 분석 중"
+                : controlStatus.activeOperation?.source === "chatCli" &&
+                    controlStatus.activeOperation.kind === "storageScan"
+                  ? "채팅에서 요청한 파일 검사 중"
                   : "스캔 진행 중"}
             </strong>
             <small>
@@ -1148,6 +1508,12 @@ function findVolumeForPath(volumes: VolumeInfo[], path: string | null): VolumeIn
         normalizedPath.startsWith(volume.mountPoint.toLocaleLowerCase("en-US")),
       ) ?? volumes[0]
   );
+}
+
+function displayPath(path: string): string {
+  if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
+  if (path.startsWith("\\\\?\\")) return path.slice(4);
+  return path;
 }
 
 function normalizeError(reason: unknown): string {

@@ -81,9 +81,12 @@ struct SettingsView: View {
                     }
                 }
 
-                // 자동 정리
-                settingsSection("자동 관리", icon: "clock.badge.checkmark") {
-                    Toggle("자동 정리 알림", isOn: $autoCleanEnabled)
+                // 정리 알림
+                settingsSection("정리 알림", icon: "clock.badge.checkmark") {
+                    Toggle("주기적으로 정리 시점 알림", isOn: $autoCleanEnabled)
+                        .onChange(of: autoCleanEnabled) { _, _ in
+                            HealthMonitor.shared.startScheduleIfEnabled()
+                        }
                     if autoCleanEnabled {
                         HStack {
                             Text("알림 주기")
@@ -95,11 +98,19 @@ struct SettingsView: View {
                                 Text("30일마다").tag(30)
                             }
                             .frame(width: 130)
+                            .onChange(of: autoCleanInterval) { _, _ in
+                                HealthMonitor.shared.startScheduleIfEnabled()
+                            }
                         }
                     }
+                    Text("파일을 자동으로 삭제하지 않고, 정리할 시점만 알려드립니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Toggle("macOS 알림 사용", isOn: $notificationsEnabled)
                         .onChange(of: notificationsEnabled) { _, newVal in
-                            if newVal { HealthMonitor.shared.requestNotificationPermission() }
+                            HealthMonitor.shared.startScheduleIfEnabled(
+                                requestPermissionIfNeeded: newVal
+                            )
                         }
                 }
 
@@ -112,10 +123,10 @@ struct SettingsView: View {
                 settingsSection("정리 이력", icon: "clock.arrow.circlepath") {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("총 확보 용량")
+                            Text("총 휴지통 이동 논리 용량")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Text(history.totalFreedFormatted)
+                            Text(history.totalMovedFormatted)
                                 .font(.title3.bold())
                                 .foregroundStyle(.green)
                         }
@@ -141,7 +152,7 @@ struct SettingsView: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text("+\(record.freedFormatted)")
+                                Text(record.movedFormatted)
                                     .font(.caption.bold())
                                     .foregroundStyle(.green)
                             }

@@ -3,13 +3,18 @@
 > 경로 기반 자동 분류 결과
 
 ## BroomSweepy/BroomSweepyApp.swift
-- **struct** `BroomSweepyApp` : App (L8)
-- **class** `AppDelegate` : NSObject, NSApplicationDelegate (L109)
-- **view** `MenuBarPopover` : View (L136)
-- **class** `MenuBarMonitor` (L361)
-- **function** `applicationDidFinishLaunching()` (L111)
-- **function** `applicationShouldTerminateAfterLastWindowClosed()` (L116)
-- **function** `applicationShouldHandleReopen()` (L120)
+- **struct** `BroomSweepyApp` : App (L9)
+- **class** `AppDelegate` : NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate (L123)
+- **view** `MenuBarPopover` : View (L231)
+- **class** `MenuBarMonitor` (L456)
+- **function** `applicationDidFinishLaunching()` (L127)
+- **function** `applicationShouldTerminateAfterLastWindowClosed()` (L155)
+- **function** `applicationShouldHandleReopen()` (L159)
+- **function** `configureMainWindowOpening()` (L172)
+- **function** `mainWindowDidAppear()` (L176)
+- **function** `userNotificationCenter()` (L186)
+- **function** `userNotificationCenter()` (L194)
+- **function** `applicationWillTerminate()` (L216)
 
 ## BroomSweepy/ContentView.swift
 - **view** `RootView` : View (L4)

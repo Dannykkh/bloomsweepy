@@ -87,6 +87,7 @@ struct MailAttachmentsSection: View {
     @State private var isScanning = false
     @State private var showConfirm = false
     @State private var toastMessage: String?
+    @State private var toastIsError = false
 
     private var totalSize: Int64 {
         attachments.reduce(Int64(0)) { $0 + $1.size }
@@ -112,10 +113,10 @@ struct MailAttachmentsSection: View {
                 .buttonStyle(.bordered)
                 .disabled(isScanning)
 
-                Button("선택 항목 삭제") { showConfirm = true }
+                Button("선택 항목 휴지통으로 이동") { showConfirm = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(selectedIDs.isEmpty)
+                    .disabled(selectedIDs.isEmpty || isScanning)
             }
             .padding(24)
 
@@ -142,7 +143,7 @@ struct MailAttachmentsSection: View {
         }
         .overlay(alignment: .bottom) {
             if let msg = toastMessage {
-                ToastBanner(message: msg)
+                ToastBanner(message: msg, isError: toastIsError)
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             withAnimation { toastMessage = nil }
@@ -150,37 +151,56 @@ struct MailAttachmentsSection: View {
                     }
             }
         }
-        .alert("메일 첨부파일 삭제", isPresented: $showConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showConfirm) {
             Button("취소", role: .cancel) {}
             Button("휴지통으로 이동", role: .destructive) { deleteSelected() }
         } message: {
-            Text("\(selectedIDs.count)개 파일을 휴지통으로 이동하시겠습니까?")
+            Text(
+                "\(selectedIDs.count)개 메일 첨부파일을 휴지통으로 이동합니다. " +
+                "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 
     @MainActor
     private func scan() async {
+        guard let homeURL = FileAccessManager.shared.loadBookmark()
+                ?? FileAccessManager.shared.requestHomeAccess() else {
+            toastIsError = true
+            toastMessage = "홈 폴더 접근 권한이 필요합니다"
+            return
+        }
         isScanning = true
         selectedIDs.removeAll()
-        let homeURL = FileAccessManager.shared.loadBookmark()
         attachments = await Task.detached {
             MailAttachmentCleaner.shared.scan(homeURL: homeURL)
         }.value
         isScanning = false
+        toastIsError = false
         toastMessage = attachments.isEmpty
             ? "메일 첨부파일을 찾지 못했습니다"
             : "\(attachments.count)개 메일 첨부파일 발견"
     }
 
+    @MainActor
     private func deleteSelected() {
-        let paths = attachments.filter { selectedIDs.contains($0.id) }.map(\.path)
+        guard !isScanning else { return }
+        let targets = attachments.filter { selectedIDs.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        isScanning = true
         Task {
             let result = await Task.detached {
-                MailAttachmentCleaner.shared.clean(paths: paths)
+                MailAttachmentCleaner.shared.clean(items: targets)
             }.value
-            selectedIDs.removeAll()
-            attachments.removeAll { att in paths.contains(att.path) }
-            toastMessage = "삭제 완료! \(formatSize(result.freed)) 확보"
+            selectedIDs.subtract(result.movedIDs)
+            attachments.removeAll { result.movedIDs.contains($0.id) }
+            if result.freed > 0 {
+                HealthMonitor.shared.recordClean()
+                CleanHistory.shared.record(freed: result.freed, type: "manual")
+            }
+            toastIsError = !result.errors.isEmpty
+            toastMessage = trashResultMessage(movedSize: result.freed, errors: result.errors)
+            isScanning = false
         }
     }
 }
@@ -240,6 +260,7 @@ struct BrokenDownloadsSection: View {
     @State private var isScanning = false
     @State private var showConfirm = false
     @State private var toastMessage: String?
+    @State private var toastIsError = false
 
     private var totalSize: Int64 {
         downloads.reduce(Int64(0)) { $0 + $1.size }
@@ -265,10 +286,10 @@ struct BrokenDownloadsSection: View {
                 .buttonStyle(.bordered)
                 .disabled(isScanning)
 
-                Button("선택 항목 삭제") { showConfirm = true }
+                Button("선택 항목 휴지통으로 이동") { showConfirm = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(selectedIDs.isEmpty)
+                    .disabled(selectedIDs.isEmpty || isScanning)
             }
             .padding(24)
 
@@ -295,7 +316,7 @@ struct BrokenDownloadsSection: View {
         }
         .overlay(alignment: .bottom) {
             if let msg = toastMessage {
-                ToastBanner(message: msg)
+                ToastBanner(message: msg, isError: toastIsError)
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             withAnimation { toastMessage = nil }
@@ -303,37 +324,56 @@ struct BrokenDownloadsSection: View {
                     }
             }
         }
-        .alert("깨진 다운로드 삭제", isPresented: $showConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showConfirm) {
             Button("취소", role: .cancel) {}
             Button("휴지통으로 이동", role: .destructive) { deleteSelected() }
         } message: {
-            Text("\(selectedIDs.count)개 파일을 휴지통으로 이동하시겠습니까?")
+            Text(
+                "\(selectedIDs.count)개 다운로드 파일을 휴지통으로 이동합니다. " +
+                "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 
     @MainActor
     private func scan() async {
+        guard let homeURL = FileAccessManager.shared.loadBookmark()
+                ?? FileAccessManager.shared.requestHomeAccess() else {
+            toastIsError = true
+            toastMessage = "홈 폴더 접근 권한이 필요합니다"
+            return
+        }
         isScanning = true
         selectedIDs.removeAll()
-        let homeURL = FileAccessManager.shared.loadBookmark()
         downloads = await Task.detached {
             BrokenDownloadCleaner.shared.scan(homeURL: homeURL)
         }.value
         isScanning = false
+        toastIsError = false
         toastMessage = downloads.isEmpty
             ? "깨진 다운로드를 찾지 못했습니다"
             : "\(downloads.count)개 깨진 다운로드 발견"
     }
 
+    @MainActor
     private func deleteSelected() {
-        let paths = downloads.filter { selectedIDs.contains($0.id) }.map(\.path)
+        guard !isScanning else { return }
+        let targets = downloads.filter { selectedIDs.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        isScanning = true
         Task {
             let result = await Task.detached {
-                BrokenDownloadCleaner.shared.clean(paths: paths)
+                BrokenDownloadCleaner.shared.clean(items: targets)
             }.value
-            selectedIDs.removeAll()
-            downloads.removeAll { dl in paths.contains(dl.path) }
-            toastMessage = "삭제 완료! \(formatSize(result.freed)) 확보"
+            selectedIDs.subtract(result.movedIDs)
+            downloads.removeAll { result.movedIDs.contains($0.id) }
+            if result.freed > 0 {
+                HealthMonitor.shared.recordClean()
+                CleanHistory.shared.record(freed: result.freed, type: "manual")
+            }
+            toastIsError = !result.errors.isEmpty
+            toastMessage = trashResultMessage(movedSize: result.freed, errors: result.errors)
+            isScanning = false
         }
     }
 }
@@ -457,9 +497,9 @@ struct AppVersionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(nsImage: app.icon ?? NSImage())
-                .resizable()
-                .interpolation(.high)
+            Image(systemName: "app.dashed")
+                .font(.title2)
+                .foregroundStyle(.secondary)
                 .frame(width: 32, height: 32)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -500,8 +540,8 @@ struct LanguageCleanerSection: View {
     @State private var resources: [LanguageCleaner.LanguageResource] = []
     @State private var selectedIDs: Set<UUID> = []
     @State private var isScanning = false
-    @State private var showConfirm = false
     @State private var toastMessage: String?
+    @State private var toastIsError = false
     @State private var scanProgress: Double = 0
     @State private var scanMessage = ""
 
@@ -545,9 +585,10 @@ struct LanguageCleanerSection: View {
                 Button("스캔") { Task { await scan() } }
                     .buttonStyle(.bordered)
                     .disabled(isScanning)
-                Button("선택 항목 삭제 (\(formatSize(selectedSize)))") { showConfirm = true }
+                Button("선택 항목 Finder에서 검토 (\(formatSize(selectedSize)))") {
+                    revealSelectedInFinder()
+                }
                     .buttonStyle(.borderedProminent)
-                    .tint(.red)
                     .disabled(selectedIDs.isEmpty)
             }
             .padding(24)
@@ -576,7 +617,7 @@ struct LanguageCleanerSection: View {
                     VStack(spacing: 6) {
                         Text("언어 파일 정리")
                             .font(.title3.bold())
-                        Text("한국어/영어 외의 불필요한 언어 리소스를 제거합니다")
+                        Text("앱 서명에 영향을 줄 수 있는 언어 리소스를 Finder에서 검토합니다")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -634,19 +675,13 @@ struct LanguageCleanerSection: View {
         }
         .overlay(alignment: .bottom) {
             if let msg = toastMessage {
-                ToastBanner(message: msg)
+                ToastBanner(message: msg, isError: toastIsError)
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             withAnimation { toastMessage = nil }
                         }
                     }
             }
-        }
-        .alert("언어 파일 삭제", isPresented: $showConfirm) {
-            Button("취소", role: .cancel) {}
-            Button("삭제", role: .destructive) { deleteSelected() }
-        } message: {
-            Text("\(selectedIDs.count)개 언어 파일을 삭제하시겠습니까?\n(\(formatSize(selectedSize)))\n\n한국어·영어는 보존됩니다.")
         }
     }
 
@@ -663,21 +698,20 @@ struct LanguageCleanerSection: View {
             }
         }.value
         isScanning = false
+        toastIsError = false
         toastMessage = resources.isEmpty
             ? "불필요한 언어 파일이 없습니다"
             : "\(resources.count)개 언어 파일 발견 (\(formatSize(totalSize)))"
     }
 
-    private func deleteSelected() {
-        let targets = resources.filter { selectedIDs.contains($0.id) }
-        Task {
-            let result = await Task.detached {
-                LanguageCleaner.shared.clean(resources: targets)
-            }.value
-            selectedIDs.removeAll()
-            resources.removeAll { r in targets.contains(where: { $0.id == r.id }) }
-            toastMessage = "삭제 완료! \(formatSize(result.freed)) 확보"
-        }
+    private func revealSelectedInFinder() {
+        let urls = resources
+            .filter { selectedIDs.contains($0.id) }
+            .map { URL(fileURLWithPath: $0.path) }
+        guard !urls.isEmpty else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+        toastIsError = false
+        toastMessage = "앱 서명이 손상될 수 있으므로 자동 이동하지 않았습니다"
     }
 }
 
@@ -689,6 +723,7 @@ struct BrokenPlistSection: View {
     @State private var isScanning = false
     @State private var showConfirm = false
     @State private var toastMessage: String?
+    @State private var toastIsError = false
 
     private var totalSize: Int64 {
         plists.reduce(Int64(0)) { $0 + $1.size }
@@ -710,10 +745,10 @@ struct BrokenPlistSection: View {
                 Button("스캔") { Task { await scan() } }
                     .buttonStyle(.bordered)
                     .disabled(isScanning)
-                Button("선택 항목 삭제") { showConfirm = true }
+                Button("선택 항목 휴지통으로 이동") { showConfirm = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(selectedIDs.isEmpty)
+                    .disabled(selectedIDs.isEmpty || isScanning)
             }
             .padding(24)
 
@@ -729,7 +764,7 @@ struct BrokenPlistSection: View {
                     VStack(spacing: 6) {
                         Text("설정 파일 검사")
                             .font(.title3.bold())
-                        Text("파싱 불가하거나 삭제된 앱의 고아 plist를 찾습니다")
+                        Text("파싱 불가 파일과 설치 앱에서 확인되지 않은 plist를 구분해 보여줍니다")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -747,6 +782,7 @@ struct BrokenPlistSection: View {
                         ))
                         .toggleStyle(.checkbox)
                         .labelsHidden()
+                        .disabled(plist.reason != .parseError)
 
                         Image(systemName: plist.reason == .parseError ? "exclamationmark.triangle.fill" : "questionmark.circle.fill")
                             .font(.title3)
@@ -766,6 +802,11 @@ struct BrokenPlistSection: View {
                                     in: Capsule()
                                 )
                                 .foregroundStyle(plist.reason == .parseError ? .red : .orange)
+                            if plist.reason == .orphaned {
+                                Text("helper·CLI·중첩 앱 설정일 수 있어 Finder 검토 전용")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
 
                         Spacer()
@@ -778,8 +819,12 @@ struct BrokenPlistSection: View {
                     .padding(.vertical, 2)
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        if selectedIDs.contains(plist.id) { selectedIDs.remove(plist.id) }
-                        else { selectedIDs.insert(plist.id) }
+                        if plist.reason == .parseError {
+                            if selectedIDs.contains(plist.id) { selectedIDs.remove(plist.id) }
+                            else { selectedIDs.insert(plist.id) }
+                        } else {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: plist.path)])
+                        }
                     }
                 }
                 .listStyle(.inset(alternatesRowBackgrounds: true))
@@ -787,7 +832,7 @@ struct BrokenPlistSection: View {
         }
         .overlay(alignment: .bottom) {
             if let msg = toastMessage {
-                ToastBanner(message: msg)
+                ToastBanner(message: msg, isError: toastIsError)
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                             withAnimation { toastMessage = nil }
@@ -795,37 +840,56 @@ struct BrokenPlistSection: View {
                     }
             }
         }
-        .alert("설정 파일 삭제", isPresented: $showConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showConfirm) {
             Button("취소", role: .cancel) {}
-            Button("삭제", role: .destructive) { deleteSelected() }
+            Button("휴지통으로 이동", role: .destructive) { deleteSelected() }
         } message: {
-            Text("\(selectedIDs.count)개 파일을 삭제하시겠습니까?")
+            Text(
+                "\(selectedIDs.count)개 설정 파일을 휴지통으로 이동합니다. " +
+                "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 
     @MainActor
     private func scan() async {
+        guard let homeURL = FileAccessManager.shared.loadBookmark()
+                ?? FileAccessManager.shared.requestHomeAccess() else {
+            toastIsError = true
+            toastMessage = "홈 폴더 접근 권한이 필요합니다"
+            return
+        }
         isScanning = true
         selectedIDs.removeAll()
-        let homeURL = FileAccessManager.shared.loadBookmark()
         plists = await Task.detached {
             BrokenPlistCleaner.shared.scan(homeURL: homeURL, progressCallback: nil)
         }.value
         isScanning = false
+        toastIsError = false
         toastMessage = plists.isEmpty
             ? "깨진 설정 파일이 없습니다"
             : "\(plists.count)개 깨진 설정 파일 발견"
     }
 
+    @MainActor
     private func deleteSelected() {
+        guard !isScanning else { return }
         let targets = plists.filter { selectedIDs.contains($0.id) }
+        guard !targets.isEmpty else { return }
+        isScanning = true
         Task {
             let result = await Task.detached {
                 BrokenPlistCleaner.shared.clean(plists: targets)
             }.value
-            selectedIDs.removeAll()
-            plists.removeAll { p in targets.contains(where: { $0.id == p.id }) }
-            toastMessage = "삭제 완료! \(formatSize(result.freed)) 확보"
+            selectedIDs.subtract(result.movedIDs)
+            plists.removeAll { result.movedIDs.contains($0.id) }
+            if result.freed > 0 {
+                HealthMonitor.shared.recordClean()
+                CleanHistory.shared.record(freed: result.freed, type: "manual")
+            }
+            toastIsError = !result.errors.isEmpty
+            toastMessage = trashResultMessage(movedSize: result.freed, errors: result.errors)
+            isScanning = false
         }
     }
 }
@@ -866,15 +930,24 @@ private struct EmptyPlaceholder: View {
 
 private struct ToastBanner: View {
     let message: String
+    let isError: Bool
 
     var body: some View {
         Text(message)
             .font(.callout.bold())
             .padding(.horizontal, 24)
             .padding(.vertical, 12)
-            .background(.green, in: Capsule())
+            .background(isError ? Color.red : Color.green, in: Capsule())
             .foregroundStyle(.white)
             .padding(.bottom, 24)
             .transition(.move(edge: .bottom).combined(with: .opacity))
     }
+}
+
+private func trashResultMessage(movedSize: Int64, errors: [String]) -> String {
+    let moved = "휴지통으로 이동한 논리 용량: \(formatSize(movedSize))"
+    if let firstError = errors.first {
+        return "\(moved) · \(errors.count)개 실패: \(firstError)"
+    }
+    return "\(moved). 휴지통을 비워야 디스크 여유가 늘어납니다."
 }

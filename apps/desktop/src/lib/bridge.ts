@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { decideFileInspection } from "./fileInspectionPolicy";
 import type {
   DirectoryScanProgress,
   DirectoryScanReport,
@@ -28,7 +29,30 @@ import type {
   FileCatalogSearchReport,
   FileCatalogSearchRequest,
   FileCatalogStatus,
+  FileCatalogEntryKind,
+  ControlStatus,
+  ControlSearchAccessRequest,
+  ControlScanAccessRequest,
+  ControlScanProgressEvent,
+  ControlScanCompletedEvent,
+  ScanReportSnapshot,
 } from "../types";
+
+export function getControlStatus(): Promise<ControlStatus> {
+  return invoke<ControlStatus>("get_control_status");
+}
+
+export function configureControlSearchAccess(
+  request: ControlSearchAccessRequest,
+): Promise<ControlStatus> {
+  return invoke<ControlStatus>("configure_control_search_access", { request });
+}
+
+export function configureControlScanAccess(
+  request: ControlScanAccessRequest,
+): Promise<ControlStatus> {
+  return invoke<ControlStatus>("configure_control_scan_access", { request });
+}
 
 export function getSystemOverview(): Promise<SystemOverview> {
   return invoke<SystemOverview>("get_system_overview");
@@ -36,6 +60,12 @@ export function getSystemOverview(): Promise<SystemOverview> {
 
 export function startScan(root: string, config: ScanConfig): Promise<ScanReport> {
   return invoke<ScanReport>("start_scan", { root, config });
+}
+
+export function getScanReportSnapshot(
+  scanGeneration: number,
+): Promise<ScanReportSnapshot> {
+  return invoke<ScanReportSnapshot>("get_scan_report_snapshot", { scanGeneration });
 }
 
 export function startDriveScan(root: string): Promise<DriveScanReport> {
@@ -158,6 +188,30 @@ export function listenToFileCatalogProgress(
   );
 }
 
+export function listenToControlStatus(
+  handler: (status: ControlStatus) => void,
+): Promise<UnlistenFn> {
+  return listen<ControlStatus>("control-status-changed", (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listenToControlScanProgress(
+  handler: (event: ControlScanProgressEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ControlScanProgressEvent>("control-scan-progress", (event) =>
+    handler(event.payload),
+  );
+}
+
+export function listenToControlScanCompleted(
+  handler: (event: ControlScanCompletedEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<ControlScanCompletedEvent>("control-scan-completed", (event) =>
+    handler(event.payload),
+  );
+}
+
 export async function selectDirectory(): Promise<string | null> {
   const selection = await open({
     directory: true,
@@ -168,12 +222,13 @@ export async function selectDirectory(): Promise<string | null> {
   return typeof selection === "string" ? selection : null;
 }
 
-const executableOrScriptPattern = /\.(?:bat|cmd|com|exe|js|jse|lnk|msi|msp|ps1|reg|scr|url|vbs|wsf|wsh)$/i;
-
 export type FileInspectionOutcome = "opened" | "revealed";
 
-export async function inspectFile(path: string): Promise<FileInspectionOutcome> {
-  if (executableOrScriptPattern.test(path)) {
+export async function inspectFile(
+  path: string,
+  kind: FileCatalogEntryKind = "file",
+): Promise<FileInspectionOutcome> {
+  if (decideFileInspection(path, kind) === "reveal") {
     await revealItemInDir(path);
     return "revealed";
   }

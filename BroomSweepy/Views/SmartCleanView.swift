@@ -53,8 +53,11 @@ struct SmartCleanView: View {
     @State private var scanMessage = ""
     @State private var scanProgress: Double = 0
     @State private var freedAmount: Int64 = 0
+    @State private var cleanErrors: [String] = []
     @State private var celebrateBounce = 0
     @State private var expandedGroupID: UUID?
+    @State private var showCleanConfirmation = false
+    @State private var activeLease: CleanerOperationLease?
 
     enum Phase { case scanning, result, cleaning, done }
 
@@ -63,7 +66,25 @@ struct SmartCleanView: View {
     }
 
     private var allCheckedTotal: Int64 {
-        groups.reduce(0) { $0 + $1.checkedSize }
+        var seenPaths: Set<String> = []
+        return groups.flatMap(\.files).reduce(Int64(0)) { total, file in
+            guard file.isChecked, seenPaths.insert(file.path).inserted else { return total }
+            return total + file.size
+        }
+    }
+
+    private var allCheckedCount: Int {
+        Set(groups.flatMap(\.files).filter(\.isChecked).map(\.path)).count
+    }
+
+    private var highestCheckedRisk: SmartCleanGroup.Safety {
+        if groups.contains(where: { $0.safety == .caution && $0.checkedCount > 0 }) {
+            return .caution
+        }
+        if groups.contains(where: { $0.safety == .review && $0.checkedCount > 0 }) {
+            return .review
+        }
+        return .safe
     }
 
     var body: some View {
@@ -94,6 +115,24 @@ struct SmartCleanView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await runSmartScan() }
+        .onDisappear {
+            if let lease = activeLease {
+                viewModel.cancelCoordinatedOperation(lease)
+                activeLease = nil
+            }
+        }
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showCleanConfirmation) {
+            Button("취소", role: .cancel) {}
+            Button("휴지통으로 이동", role: .destructive) {
+                Task { await performSmartClean() }
+            }
+        } message: {
+            Text(
+                "\(allCheckedCount)개 항목, \(formatSize(allCheckedTotal))\n" +
+                "가장 높은 위험도: \(highestCheckedRisk.rawValue)\n\n" +
+                "선택 항목을 휴지통으로 이동합니다. 휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
+        }
     }
 
     // MARK: - Scanning
@@ -125,6 +164,14 @@ struct SmartCleanView: View {
             ProgressView(value: scanProgress)
                 .frame(maxWidth: 400)
                 .tint(.blue)
+
+            if let lease = activeLease {
+                Button("검사 중단 요청") {
+                    viewModel.cancelCoordinatedOperation(lease)
+                }
+                .buttonStyle(.bordered)
+                .disabled(lease.isCancelled)
+            }
         }
         .padding(32)
     }
@@ -200,11 +247,11 @@ struct SmartCleanView: View {
                 Spacer()
 
                 Button {
-                    Task { await performSmartClean() }
+                    showCleanConfirmation = true
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: "sparkles")
-                        Text("선택 항목 정리 (\(formatSize(allCheckedTotal)))")
+                        Image(systemName: "trash")
+                        Text("선택 항목 휴지통으로 이동 (\(formatSize(allCheckedTotal)))")
                             .font(.headline)
                     }
                     .padding(.horizontal, 24)
@@ -228,10 +275,18 @@ struct SmartCleanView: View {
                 .font(.system(size: 56))
                 .foregroundStyle(.green)
                 .symbolEffect(.bounce, value: celebrateBounce)
-            Text("정리 중...")
+            Text("휴지통으로 이동 중...")
                 .font(.title3.bold())
             ProgressView()
                 .scaleEffect(1.5)
+
+            if let lease = activeLease {
+                Button("현재 항목 후 중단") {
+                    viewModel.cancelCoordinatedOperation(lease)
+                }
+                .buttonStyle(.bordered)
+                .disabled(lease.isCancelled)
+            }
         }
     }
 
@@ -247,34 +302,26 @@ struct SmartCleanView: View {
                 .contentTransition(.numericText())
                 .foregroundStyle(.green)
 
-            Text("정리 완료!")
+            Text("휴지통으로 이동한 논리 용량")
                 .font(.title3)
                 .foregroundStyle(.secondary)
 
-            // Before/After
-            if let latest = CleanHistory.shared.records.first {
-                HStack(spacing: 24) {
-                    VStack(spacing: 2) {
-                        Text("정리 전 사용량")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(formatSize(latest.diskBefore))
-                            .font(.callout.bold())
-                            .foregroundStyle(.orange)
-                    }
-                    Image(systemName: "arrow.right")
-                        .foregroundStyle(.tertiary)
-                    VStack(spacing: 2) {
-                        Text("정리 후 사용량")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(formatSize(latest.diskAfter))
-                            .font(.callout.bold())
-                            .foregroundStyle(.green)
-                    }
+            Text("휴지통을 비워야 디스크 여유가 늘어납니다.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !cleanErrors.isEmpty {
+                VStack(spacing: 4) {
+                    Text("\(cleanErrors.count)개 항목은 이동하지 못했습니다")
+                        .font(.callout.bold())
+                        .foregroundStyle(.red)
+                    Text(cleanErrors[0])
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 .padding(12)
-                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .background(.red.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
             }
 
             Button("대시보드로 돌아가기") {
@@ -290,6 +337,17 @@ struct SmartCleanView: View {
 
     @MainActor
     private func runSmartScan() async {
+        guard let lease = viewModel.beginCoordinatedOperation(
+            message: "스마트 정리 검사 중..."
+        ) else {
+            isPresented = false
+            return
+        }
+        activeLease = lease
+        defer {
+            viewModel.finishCoordinatedOperation(lease)
+            if activeLease?.id == lease.id { activeLease = nil }
+        }
         let scanURL: URL
         if let bookmark = FileAccessManager.shared.loadBookmark() {
             scanURL = bookmark
@@ -306,25 +364,59 @@ struct SmartCleanView: View {
         scanMessage = "캐시 분석 중..."
         scanProgress = 0.1
 
-        async let cacheTask = Task.detached {
-            engine.scanCache(homeURL: scanURL, progressCallback: nil)
-        }.value
-
-        async let largeTask = Task.detached {
-            engine.scanLargeFiles(scanURL: scanURL, minSizeMB: 50, progressCallback: nil)
-        }.value
-
-        let cacheItems = await cacheTask
+        let (cacheItems, largeFiles) = await withTaskCancellationHandler {
+            async let cacheTask = Task.detached {
+                engine.scanCache(
+                    homeURL: scanURL,
+                    progressCallback: nil,
+                    shouldCancel: { lease.isCancelled }
+                )
+            }.value
+            async let largeTask = Task.detached {
+                engine.scanLargeFiles(
+                    scanURL: scanURL,
+                    minSizeMB: 50,
+                    progressCallback: nil,
+                    shouldCancel: { lease.isCancelled }
+                )
+            }.value
+            return await (cacheTask, largeTask)
+        } onCancel: {
+            lease.token.cancel()
+        }
+        guard activeLease?.id == lease.id,
+              viewModel.shouldContinueCoordinatedOperation(lease) else {
+            if activeLease?.id == lease.id {
+                viewModel.toastMessage = "스마트 검사를 중단했습니다"
+                isPresented = false
+            }
+            return
+        }
         scanProgress = 0.4
         scanMessage = "대용량 파일 분석 중..."
-
-        let largeFiles = await largeTask
         scanProgress = 0.6
         scanMessage = "중복 파일 분석 중..."
 
-        let duplicates = await Task.detached {
-            engine.scanDuplicates(scanURL: scanURL, minSizeKB: 100, progressCallback: nil)
-        }.value
+        let duplicates = await withTaskCancellationHandler {
+            await Task.detached {
+                engine.scanDuplicates(
+                    scanURL: scanURL,
+                    minSizeKB: 100,
+                    progressCallback: nil,
+                    shouldCancel: { lease.isCancelled }
+                )
+            }.value
+        } onCancel: {
+            lease.token.cancel()
+        }
+        guard activeLease?.id == lease.id,
+              viewModel.shouldContinueCoordinatedOperation(lease) else {
+            if activeLease?.id == lease.id {
+                viewModel.toastMessage = "스마트 검사를 중단했습니다"
+                isPresented = false
+            }
+            return
+        }
 
         scanProgress = 0.9
         scanMessage = "안전성 분석 중..."
@@ -336,23 +428,29 @@ struct SmartCleanView: View {
         // 그룹 생성 (파일 레벨 데이터 포함)
         var result: [SmartCleanGroup] = []
 
-        // 캐시
-        if !cacheItems.isEmpty {
+        // 폴더 캐시는 하위 항목 전체 명세가 없어 Smart Clean에서 자동
+        // 이동 후보로 내보내지 않는다. 개별 일반 파일만 안전 후보가 된다.
+        let movableCacheItems = cacheItems.filter { $0.snapshot.kind == .regularFile }
+        if !movableCacheItems.isEmpty {
             result.append(SmartCleanGroup(
                 icon: "internaldrive.fill", name: "캐시/임시파일",
-                safety: .safe, detail: "앱이 자동으로 다시 생성하므로 안전합니다",
-                files: cacheItems.map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size) }
+                safety: .safe, detail: "검토 당시와 같은 개별 캐시 파일만 이동합니다",
+                files: movableCacheItems.map {
+                    SmartCleanFile(name: $0.name, path: $0.path, size: $0.size)
+                }
             ))
         }
 
-        // 중복 (원본 제외 복사본)
+        // 중복 (보관할 파일 제외 복사본)
         let dupeFiles = duplicates.flatMap { group in
-            group.files.dropFirst().map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size) }
+            group.files.sorted { $0.path < $1.path }.dropFirst().map {
+                SmartCleanFile(name: $0.name, path: $0.path, size: $0.size, isChecked: false)
+            }
         }
         if !dupeFiles.isEmpty {
             result.append(SmartCleanGroup(
                 icon: "doc.on.doc.fill", name: "중복 파일 (복사본)",
-                safety: .safe, detail: "원본은 보존하고 복사본만 삭제합니다",
+                safety: .review, detail: "전체 내용이 같은 복사본을 확인한 뒤 휴지통으로 이동합니다",
                 files: dupeFiles
             ))
         }
@@ -360,23 +458,23 @@ struct SmartCleanView: View {
         // 오래된 설치파일 (90일+)
         let oldInstallers = largeFiles
             .filter { ($0.category == .installer || $0.category == .archive) && $0.ageDays > 90 }
-            .map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size) }
+            .map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size, isChecked: false) }
         if !oldInstallers.isEmpty {
             result.append(SmartCleanGroup(
                 icon: "arrow.down.circle.fill", name: "오래된 설치/압축파일",
-                safety: .safe, detail: "90일+ 된 설치파일 (이미 설치 완료)",
+                safety: .review, detail: "90일+ 수정되지 않은 설치·압축파일입니다. 필요한 원본인지 확인하세요",
                 files: oldInstallers
             ))
         }
 
-        // 6개월+ 미사용 대용량
+        // 6개월+ 수정 없음 대용량
         let oldLarge = largeFiles
             .filter { $0.category != .installer && $0.category != .archive && $0.ageDays > 180 }
-            .map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size) }
+            .map { SmartCleanFile(name: $0.name, path: $0.path, size: $0.size, isChecked: false) }
         if !oldLarge.isEmpty {
             result.append(SmartCleanGroup(
-                icon: "doc.richtext.fill", name: "6개월+ 미사용 대용량",
-                safety: .review, detail: "오래 사용하지 않았지만 중요할 수 있습니다",
+                icon: "doc.richtext.fill", name: "6개월+ 수정 없음 대용량",
+                safety: .review, detail: "수정 시각 기준 참고 항목이며 중요할 수 있습니다",
                 files: oldLarge
             ))
         }
@@ -405,47 +503,120 @@ struct SmartCleanView: View {
 
     @MainActor
     private func performSmartClean() async {
+        guard let lease = viewModel.beginCoordinatedOperation(
+            message: "선택 항목을 휴지통으로 이동 중..."
+        ) else { return }
+        activeLease = lease
+        defer {
+            viewModel.finishCoordinatedOperation(lease)
+            if activeLease?.id == lease.id { activeLease = nil }
+        }
         withAnimation(.spring(duration: 0.3)) { phase = .cleaning }
         celebrateBounce += 1
+        cleanErrors = []
+        var operationErrors: [String] = []
 
         // 체크된 파일 경로만 수집
         var cachePaths: [CacheItem] = []
-        var filePaths: [String] = []
+        var filePaths: Set<String> = []
+        var duplicatePaths: Set<String> = []
 
         for group in groups {
+            guard !lease.isCancelled else { break }
             let checkedFiles = group.files.filter(\.isChecked)
             if group.name.contains("캐시") {
                 // 캐시는 CacheItem으로 매핑
                 cachePaths = viewModel.cacheItems.filter { item in
                     checkedFiles.contains(where: { $0.path == item.path })
                 }
+            } else if group.name.contains("중복 파일") {
+                duplicatePaths.formUnion(checkedFiles.map(\.path))
             } else {
-                filePaths.append(contentsOf: checkedFiles.map(\.path))
+                filePaths.formUnion(checkedFiles.map(\.path))
             }
         }
 
+        let duplicateGroups = viewModel.duplicateGroups
+        let protectedKeeperPaths = Set(duplicateGroups.compactMap { group in
+            let ordered = group.files.sorted { $0.path < $1.path }
+            guard ordered.dropFirst().contains(where: { duplicatePaths.contains($0.path) }) else {
+                return nil
+            }
+            return ordered.first?.path
+        })
+
+        // 같은 파일이 다른 추천 그룹에도 보이면 중복 전용 최종 검증을 우선하고,
+        // 해당 그룹의 보관할 파일은 이번 작업에서 반드시 남긴다.
+        filePaths.subtract(duplicatePaths)
+        filePaths.subtract(protectedKeeperPaths)
+        let duplicateIDs = Set(duplicateGroups
+            .flatMap(\.files)
+            .filter { duplicatePaths.contains($0.path) }
+            .map(\.id))
+
         var totalFreed: Int64 = 0
 
-        if !cachePaths.isEmpty {
-            let r = await Task.detached {
-                CleanerEngine.shared.cleanCache(items: cachePaths)
-            }.value
+        if !cachePaths.isEmpty, !lease.isCancelled {
+            let r = await withTaskCancellationHandler {
+                await Task.detached {
+                    CleanerEngine.shared.cleanCache(
+                        items: cachePaths,
+                        shouldCancel: { lease.isCancelled }
+                    )
+                }.value
+            } onCancel: {
+                lease.token.cancel()
+            }
             totalFreed += r.freed
+            operationErrors.append(contentsOf: r.errors)
         }
 
-        if !filePaths.isEmpty {
-            let r = await Task.detached {
-                CleanerEngine.shared.deleteFiles(paths: filePaths)
-            }.value
+        if !filePaths.isEmpty, !lease.isCancelled {
+            let largeTargets = viewModel.largeFiles.filter { filePaths.contains($0.path) }
+            let r = await withTaskCancellationHandler {
+                await Task.detached {
+                    CleanerEngine.shared.trashVerifiedLargeFiles(
+                        files: largeTargets,
+                        shouldCancel: { lease.isCancelled }
+                    )
+                }.value
+            } onCancel: {
+                lease.token.cancel()
+            }
             totalFreed += r.freed
+            operationErrors.append(contentsOf: r.errors)
         }
+
+        if !duplicateIDs.isEmpty, !lease.isCancelled {
+            let r = await withTaskCancellationHandler {
+                await Task.detached {
+                    CleanerEngine.shared.trashVerifiedDuplicates(
+                        groups: duplicateGroups,
+                        selectedFileIDs: duplicateIDs,
+                        shouldCancel: { lease.isCancelled }
+                    )
+                }.value
+            } onCancel: {
+                lease.token.cancel()
+            }
+            totalFreed += r.freed
+            operationErrors.append(contentsOf: r.errors)
+        }
+
+        if lease.isCancelled { operationErrors.append("현재 항목 처리 후 중단했습니다") }
+        if totalFreed > 0 {
+            HealthMonitor.shared.recordClean()
+            CleanHistory.shared.record(freed: totalFreed, type: "smart")
+        }
+        guard activeLease?.id == lease.id,
+              viewModel.isCoordinatedOperationActive(lease) else { return }
 
         freedAmount = totalFreed
-        viewModel.toastMessage = "스마트 정리 완료! \(formatSize(totalFreed)) 확보"
-
-        // 이력 기록
-        if totalFreed > 0 {
-            CleanHistory.shared.record(freed: totalFreed, type: "smart")
+        cleanErrors = operationErrors
+        if cleanErrors.isEmpty {
+            viewModel.toastMessage = "휴지통으로 이동한 논리 용량: \(formatSize(totalFreed))"
+        } else {
+            viewModel.toastMessage = "휴지통으로 이동한 논리 용량: \(formatSize(totalFreed)), \(cleanErrors.count)개 실패"
         }
 
         withAnimation(.spring(duration: 0.5, bounce: 0.3)) {

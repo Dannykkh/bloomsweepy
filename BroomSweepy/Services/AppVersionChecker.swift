@@ -1,14 +1,12 @@
 import Foundation
-import AppKit
 
-struct AppVersionInfo: Identifiable {
+struct AppVersionInfo: Identifiable, Sendable {
     let id = UUID()
     let name: String
     let bundleIdentifier: String
     let version: String
     let buildNumber: String
     let path: String
-    let icon: NSImage?
     let size: Int64
 
     var sizeFormatted: String { formatSize(size) }
@@ -36,7 +34,6 @@ final class AppVersionChecker {
             let bundleId = bundle.bundleIdentifier ?? item
             let version = info["CFBundleShortVersionString"] as? String ?? "알 수 없음"
             let build = info["CFBundleVersion"] as? String ?? ""
-            let icon = NSWorkspace.shared.icon(forFile: appPath)
             let size = dirSize(appPath)
 
             apps.append(AppVersionInfo(
@@ -45,7 +42,6 @@ final class AppVersionChecker {
                 version: version,
                 buildNumber: build,
                 path: appPath,
-                icon: icon,
                 size: size
             ))
         }

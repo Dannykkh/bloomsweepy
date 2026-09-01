@@ -79,6 +79,8 @@ struct StartupManagerView: View {
             Text(viewModel.scanMessage.isEmpty ? "스캔 중..." : viewModel.scanMessage)
                 .font(.headline)
                 .foregroundStyle(.secondary)
+            Button("취소") { viewModel.cancelCurrentTask() }
+                .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .transition(.opacity)

@@ -13,20 +13,22 @@
 ## Current Shape
 
 - Projects: 0
-- Files: 240
-- Documents: 29
-- Routes/API/UI signals: 0 / 0 / 76
+- Files: 290
+- Documents: 40
+- Routes/API/UI signals: 0 / 0 / 79
 
 ## Areas To Scan First
 
 | Area | Files | Why it matters |
 |------|-------|----------------|
-| [views](../views.md) | 36 | WPF View/Window/Panel |
-| [apps-desktop](../apps-desktop.md) | 21 | .tsx×10, .rs×6, .ts×5 |
-| [services](../services.md) | 21 | 서비스 클래스/메서드 |
+| [views](../views.md) | 37 | WPF View/Window/Panel |
+| [apps-desktop](../apps-desktop.md) | 27 | .tsx×12, .rs×8, .ts×7 |
+| [services](../services.md) | 22 | 서비스 클래스/메서드 |
 | [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |
+| [apps-bloomsweepy-mcp](../apps-bloomsweepy-mcp.md) | 3 | .rs×3 |
 | [broomsweepy](../broomsweepy.md) | 2 | .swift×2 |
 | [broomsweepy-models](../broomsweepy-models.md) | 2 | .swift×2 |
+| [crates-bloomsweepy-control](../crates-bloomsweepy-control.md) | 1 | .rs×1 |
 | [viewmodels](../viewmodels.md) | 1 | ViewModel 클래스/속성/명령 |
 
 ## Operating Rule

@@ -1,24 +1,24 @@
 import Foundation
-import AppKit
 
-struct InstalledApp: Identifiable {
+struct InstalledApp: Identifiable, Sendable {
     let id = UUID()
     let name: String
     let bundleIdentifier: String
     let path: String
-    let icon: NSImage?
     let size: Int64
-    let lastUsed: Date?
+    let bundleModified: Date?
+    let snapshot: FileIdentitySnapshot
     var relatedFiles: [String]
     var relatedFilesSize: Int64
 
-    var totalSize: Int64 { size + relatedFilesSize }
+    var totalSize: Int64 { size }
     var sizeFormatted: String { ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file) }
 
-    /// True when the app bundle was not modified in 180+ days (used as a proxy for "unused").
-    var isUnused: Bool {
-        guard let last = lastUsed else { return true }
-        return Calendar.current.dateComponents([.day], from: last, to: Date()).day ?? 0 > 180
+    /// Bundle modification age only. This is reference information, not proof
+    /// that the user no longer needs the app.
+    var isUnmodifiedFor180Days: Bool {
+        guard let modified = bundleModified else { return false }
+        return Calendar.current.dateComponents([.day], from: modified, to: Date()).day ?? 0 > 180
     }
 }
 
@@ -28,37 +28,49 @@ final class AppUninstaller {
 
     // MARK: - Scan
 
-    func scanApps(homeURL: URL? = nil) -> [InstalledApp] {
-        let home = homeURL?.path ?? ("/Users/" + NSUserName())
+    func scanApps(
+        homeURL: URL? = nil,
+        shouldCancel: () -> Bool = { false }
+    ) -> [InstalledApp] {
+        let home = homeURL?.path ?? actualUserHomeURL().path
         var apps: [InstalledApp] = []
 
         let appDirs = ["/Applications"]
 
         for dir in appDirs {
+            guard !shouldCancel() else { return [] }
             guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
             for item in contents where item.hasSuffix(".app") {
+                guard !shouldCancel() else { return [] }
                 let appPath = "\(dir)/\(item)"
-                guard let bundle = Bundle(path: appPath) else { continue }
+                guard let snapshot = FileIdentitySnapshot.capture(path: appPath),
+                      snapshot.kind == .directory,
+                      let bundle = Bundle(path: appPath),
+                      let bundleId = bundle.bundleIdentifier,
+                      !bundleId.isEmpty else { continue }
 
-                let bundleId = bundle.bundleIdentifier ?? item
                 let name = bundle.infoDictionary?["CFBundleDisplayName"] as? String
                     ?? bundle.infoDictionary?["CFBundleName"] as? String
                     ?? item.replacingOccurrences(of: ".app", with: "")
 
-                let icon = NSWorkspace.shared.icon(forFile: appPath)
-                let appSize = dirSize(appPath)
-                let lastUsed = (try? fm.attributesOfItem(atPath: appPath))?[.modificationDate] as? Date
+                let appSize = dirSize(appPath, shouldCancel: shouldCancel)
+                guard !shouldCancel() else { return [] }
+                let bundleModified = (try? fm.attributesOfItem(atPath: appPath))?[.modificationDate] as? Date
 
-                let relatedPaths = findRelatedFiles(bundleId: bundleId, appName: name, home: home)
-                let relatedSize = relatedPaths.reduce(Int64(0)) { $0 + fileOrDirSize($1) }
+                let relatedPaths = findRelatedFiles(bundleId: bundleId, home: home)
+                var relatedSize: Int64 = 0
+                for path in relatedPaths {
+                    guard !shouldCancel() else { return [] }
+                    relatedSize += fileOrDirSize(path, shouldCancel: shouldCancel)
+                }
 
                 apps.append(InstalledApp(
                     name: name,
                     bundleIdentifier: bundleId,
                     path: appPath,
-                    icon: icon,
                     size: appSize,
-                    lastUsed: lastUsed,
+                    bundleModified: bundleModified,
+                    snapshot: snapshot,
                     relatedFiles: relatedPaths,
                     relatedFilesSize: relatedSize
                 ))
@@ -70,84 +82,69 @@ final class AppUninstaller {
 
     // MARK: - Uninstall
 
-    /// Moves the app bundle and all related files to Trash.
-    /// Returns the total freed size and any per-path errors.
-    func uninstall(app: InstalledApp) -> (freedSize: Int64, errors: [String]) {
-        var freed: Int64 = 0
-        var errors: [String] = []
-
-        // 앱 본체 삭제 시도 (샌드박스에서 /Applications는 실패할 수 있음)
-        do {
-            try fm.trashItem(at: URL(fileURLWithPath: app.path), resultingItemURL: nil)
-            freed += app.size
-        } catch {
-            errors.append("앱 삭제에 권한이 필요합니다. Finder에서 직접 삭제해주세요.")
+    /// App bundles are directories whose children can change while an app is
+    /// running or updating. Until scan-time recursive manifests are available,
+    /// both the bundle and exact bundle-ID related paths remain review-only.
+    func uninstall(app: InstalledApp) -> (freedSize: Int64, errors: [String], appMoved: Bool) {
+        guard app.snapshot.kind == .directory,
+              Bundle(path: app.path)?.bundleIdentifier == app.bundleIdentifier,
+              app.snapshot.exactlyMatches(path: app.path) else {
+            return (0, ["\(app.name): 스캔 뒤 앱 또는 bundle ID가 변경되어 이동하지 않았습니다"], false)
         }
-
-        // 관련 파일 (~/Library 하위) — 샌드박스에서 삭제 가능
-        for path in app.relatedFiles {
-            do {
-                let size = fileOrDirSize(path)
-                try fm.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-                freed += size
-            } catch {
-                // 삭제 실패한 관련 파일은 무시 (권한 문제)
-            }
-        }
-
-        return (freed, errors)
+        return (
+            0,
+            ["\(app.name): 앱 폴더 전체가 검토 당시와 같은지 확인할 수 없어 Finder 검토 전용입니다"],
+            false
+        )
     }
 
     // MARK: - Helpers
 
-    private func findRelatedFiles(bundleId: String, appName: String, home: String) -> [String] {
+    private func findRelatedFiles(bundleId: String, home: String) -> [String] {
         var paths: [String] = []
 
         let candidates = [
             "\(home)/Library/Caches/\(bundleId)",
             "\(home)/Library/Preferences/\(bundleId).plist",
             "\(home)/Library/Application Support/\(bundleId)",
-            "\(home)/Library/Application Support/\(appName)",
             "\(home)/Library/Logs/\(bundleId)",
-            "\(home)/Library/Logs/\(appName)",
             "\(home)/Library/Containers/\(bundleId)",
             "\(home)/Library/Saved Application State/\(bundleId).savedState",
             "\(home)/Library/WebKit/\(bundleId)",
             "\(home)/Library/HTTPStorages/\(bundleId)",
         ]
 
-        for path in candidates where fm.fileExists(atPath: path) {
+        for path in candidates where FileIdentitySnapshot.capture(path: path) != nil {
             paths.append(path)
-        }
-
-        // Group Containers: scan once and match by bundleId
-        let groupPath = "\(home)/Library/Group Containers"
-        if let groups = try? fm.contentsOfDirectory(atPath: groupPath) {
-            for group in groups where group.contains(bundleId) {
-                paths.append("\(groupPath)/\(group)")
-            }
         }
 
         return paths
     }
 
-    private func dirSize(_ path: String) -> Int64 {
+    private func dirSize(
+        _ path: String,
+        shouldCancel: () -> Bool = { false }
+    ) -> Int64 {
         var total: Int64 = 0
-        guard let enumerator = fm.enumerator(atPath: path) else { return fileOrDirSize(path) }
+        guard let enumerator = fm.enumerator(atPath: path) else { return 0 }
         while let file = enumerator.nextObject() as? String {
+            guard !shouldCancel() else { return 0 }
             let fullPath = (path as NSString).appendingPathComponent(file)
-            if let attrs = try? fm.attributesOfItem(atPath: fullPath),
-               attrs[.type] as? FileAttributeType != .typeDirectory {
-                total += (attrs[.size] as? Int64) ?? 0
-            }
+            guard let snapshot = FileIdentitySnapshot.capture(path: fullPath),
+                  snapshot.kind == .regularFile else { continue }
+            total += snapshot.size
         }
         return total
     }
 
-    private func fileOrDirSize(_ path: String) -> Int64 {
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return 0 }
-        if isDir.boolValue { return dirSize(path) }
-        return (try? fm.attributesOfItem(atPath: path))?[.size] as? Int64 ?? 0
+    private func fileOrDirSize(
+        _ path: String,
+        shouldCancel: () -> Bool = { false }
+    ) -> Int64 {
+        guard let snapshot = FileIdentitySnapshot.capture(path: path) else { return 0 }
+        if snapshot.kind == .directory {
+            return dirSize(path, shouldCancel: shouldCancel)
+        }
+        return snapshot.size
     }
 }

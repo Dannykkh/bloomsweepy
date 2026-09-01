@@ -120,7 +120,7 @@ struct OnboardingView: View {
                 FeatureRow(icon: "doc.on.doc.fill", color: .orange,
                            text: "중복 파일 탐색 및 제거")
                 FeatureRow(icon: "shield.checkered", color: .green,
-                           text: "악성코드 검사 및 보안 관리")
+                           text: "의심 항목 검토 및 보안 관리")
                 FeatureRow(icon: "gauge.with.dots.needle.33percent", color: .blue,
                            text: "실시간 시스템 모니터링")
             }

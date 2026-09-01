@@ -56,7 +56,7 @@ enum MainCategory: String, CaseIterable, Identifiable {
         case .dashboard: return ""
         case .space: return "캐시, 대용량, 중복 파일"
         case .speed: return "메모리, 시작프로그램"
-        case .security: return "악성코드, 앱 권한"
+        case .security: return "의심 항목, 앱 권한"
         case .privacy: return "브라우저, 클라우드"
         case .files: return "정리, 규칙, 앱 관리"
         case .settings: return "스캔 설정, 자동 관리"

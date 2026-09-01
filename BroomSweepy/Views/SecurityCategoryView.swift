@@ -5,7 +5,7 @@ struct SecurityCategoryView: View {
     @State private var selectedTab: Tab = .malware
 
     enum Tab: String, CaseIterable, Identifiable {
-        case malware = "악성코드 탐지"
+        case malware = "의심 항목 검토"
         case permissions = "앱 권한"
         var id: String { rawValue }
     }

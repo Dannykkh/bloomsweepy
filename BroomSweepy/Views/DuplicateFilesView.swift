@@ -17,11 +17,11 @@ struct DuplicateFilesView: View {
                         .buttonStyle(.bordered)
                         .disabled(viewModel.isScanning)
                 }
-                Button("선택 항목 삭제") { showConfirm = true }
+                Button("선택 항목 휴지통으로 이동") { showConfirm = true }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
-                    .disabled(viewModel.selectedDuplicateFileIDs.isEmpty)
-                    .help("원본을 보존하고 선택한 복사본만 삭제합니다")
+                    .disabled(viewModel.selectedDuplicateFileIDs.isEmpty || viewModel.isScanning)
+                    .help("경로순으로 정한 보관할 파일을 남기고 선택한 복사본만 휴지통으로 이동합니다")
             }
             .padding(24)
 
@@ -85,11 +85,11 @@ struct DuplicateFilesView: View {
                                 VStack(spacing: 8) {
                                     Text("클릭하여 중복 파일 스캔")
                                         .font(.title3.bold())
-                                    Text("내용이 같은 파일이 여러 곳에 있는지 확인합니다\n원본은 보호하고 복사본만 선택하여 삭제할 수 있습니다")
+                                    Text("파일 전체 내용이 같은지 확인합니다\n경로순 보관할 파일을 남기고 복사본만 휴지통으로 이동할 수 있습니다")
                                         .font(.callout)
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
-                                    Text("✅ 원본 자동 보호 — 복사본만 삭제")
+                                    Text("보관할 파일 자동 보호 — 선택한 복사본만 휴지통으로 이동")
                                         .font(.caption)
                                         .foregroundStyle(.green)
                                 }
@@ -114,11 +114,21 @@ struct DuplicateFilesView: View {
                 }
             }
         }
-        .alert("중복 파일 삭제", isPresented: $showConfirm) {
+        .alert("휴지통으로 이동하기 전 최종 확인", isPresented: $showConfirm) {
             Button("취소", role: .cancel) {}
-            Button("삭제", role: .destructive) { Task { await viewModel.deleteSelectedDuplicates() } }
+            Button("휴지통으로 이동", role: .destructive) {
+                Task { await viewModel.deleteSelectedDuplicates() }
+            }
         } message: {
-            Text("\(viewModel.selectedDuplicateFileIDs.count)개 중복 파일을 삭제하시겠습니까?")
+            let selectedSize = viewModel.duplicateGroups
+                .flatMap(\.files)
+                .filter { viewModel.selectedDuplicateFileIDs.contains($0.id) }
+                .reduce(Int64(0)) { $0 + $1.size }
+            Text(
+                "\(viewModel.selectedDuplicateFileIDs.count)개 복사본, \(formatSize(selectedSize))를 휴지통으로 이동합니다.\n\n" +
+                "경로순으로 정한 보관할 파일과 선택 파일의 전체 내용을 이동 직전에 다시 확인합니다. " +
+                "휴지통을 비우기 전에는 복원할 수 있으며 디스크 여유는 늘어나지 않습니다."
+            )
         }
     }
 }
@@ -127,12 +137,16 @@ struct DuplicateGroupCard: View {
     let group: DuplicateGroup
     @Binding var selectedIDs: Set<UUID>
 
+    private var orderedFiles: [DuplicateFile] {
+        group.files.sorted { $0.path < $1.path }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Group Header
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(group.files.first?.name ?? "")
+                    Text(orderedFiles.first?.name ?? "")
                         .font(.headline)
                     Text("\(group.count)개 복사본 · 각 \(group.eachSizeFormatted)")
                         .font(.caption)
@@ -150,7 +164,7 @@ struct DuplicateGroupCard: View {
 
             // Files
             VStack(spacing: 0) {
-                ForEach(Array(group.files.enumerated()), id: \.element.id) { index, file in
+                ForEach(Array(orderedFiles.enumerated()), id: \.element.id) { index, file in
                     HStack(spacing: 12) {
                         if index > 0 {
                             Toggle("", isOn: Binding(
@@ -177,7 +191,7 @@ struct DuplicateGroupCard: View {
                         Spacer()
 
                         if index == 0 {
-                            Text("원본")
+                            Text("보관할 파일")
                                 .font(.system(size: 10, weight: .bold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -197,7 +211,7 @@ struct DuplicateGroupCard: View {
                         }
                     }
 
-                    if index < group.files.count - 1 {
+                    if index < orderedFiles.count - 1 {
                         Divider().padding(.leading, 44)
                     }
                 }

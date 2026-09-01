@@ -1,17 +1,19 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  Files,
+  ChevronDown,
+  ChevronRight,
+  Copy,
   FolderOpen,
+  HardDrive,
+  ListChecks,
+  Map,
   Search,
-  ShieldCheck,
   X,
 } from "lucide-react";
-import { FileTable } from "../components/FileTable";
 import { DriveStoragePanel } from "../components/DriveStoragePanel";
 import { StorageTreemapPanel } from "../components/StorageTreemapPanel";
-import { StorageRing } from "../components/StorageRing";
-import { formatBytes, formatCount, formatDuration } from "../lib/format";
+import { formatBytes, formatCount } from "../lib/format";
 import type {
   DirectoryBreadcrumb,
   DirectoryScanProgress,
@@ -36,7 +38,6 @@ interface OverviewViewProps {
   driveProgress: DriveScanProgress | null;
   driveState: ScanUiState;
   driveError: string | null;
-  directoryRoot: string | null;
   directoryReport: DirectoryScanReport | null;
   directoryProgress: DirectoryScanProgress | null;
   directoryState: ScanUiState;
@@ -50,6 +51,9 @@ interface OverviewViewProps {
   onCancelDriveScan: () => void;
   onStartDirectoryScan: (path: string, breadcrumbs?: DirectoryBreadcrumb[]) => void;
   onCancelDirectoryScan: () => void;
+  onOpenLargeFiles: () => void;
+  onOpenDuplicates: () => void;
+  onOpenCleanup: () => void;
 }
 
 export function OverviewView({
@@ -64,7 +68,6 @@ export function OverviewView({
   driveProgress,
   driveState,
   driveError,
-  directoryRoot,
   directoryReport,
   directoryProgress,
   directoryState,
@@ -78,243 +81,227 @@ export function OverviewView({
   onCancelDriveScan,
   onStartDirectoryScan,
   onCancelDirectoryScan,
+  onOpenLargeFiles,
+  onOpenDuplicates,
+  onOpenCleanup,
 }: OverviewViewProps) {
   const scanning = state === "scanning";
-  const cancelled = state === "cancelled";
+  const mapScanning = directoryState === "scanning";
+  const driveScanning = driveState === "scanning";
+  const mapReady = Boolean(directoryReport);
+  const detailReady = Boolean(report);
   const largeBytes = report?.largeFiles.reduce(
     (total, file) => total + file.logicalBytes,
     0,
-  );
+  ) ?? 0;
+  const actionBlocked = blocked || driveScanning;
+
+  function runNextStep() {
+    if (!root) {
+      onPickFolder();
+      return;
+    }
+    if (!mapReady) {
+      onStartDirectoryScan(root);
+      return;
+    }
+    if (!detailReady) {
+      onStartScan();
+      return;
+    }
+    onOpenLargeFiles();
+  }
+
+  const nextLabel = !root
+    ? "폴더 선택"
+    : !mapReady
+      ? "폴더 용량 지도 만들기"
+      : !detailReady
+        ? "큰 파일·중복 찾기"
+        : "큰 파일 보기";
 
   return (
-    <div className="view-stack">
-      <section className={`state-banner ${error ? "is-error" : ""}`} aria-live="polite">
-        <span className="state-banner__icon" aria-hidden="true">
-          {error ? (
-            <AlertTriangle size={20} />
-          ) : scanning ? (
-            <Search size={20} />
-          ) : cancelled ? (
-            <X size={20} />
-          ) : report ? (
-            <CheckCircle2 size={20} />
-          ) : (
-            <ShieldCheck size={20} />
-          )}
-        </span>
-        <div>
-          <strong>
-            {error
-              ? "스캔을 완료하지 못했습니다"
-              : scanning
-                ? "저장공간을 분석하고 있습니다"
-                : cancelled
-                  ? "스캔을 취소했습니다"
-                : report
-                  ? "분석이 완료됐습니다"
-                  : "검사 후 선택하는 안전 모드입니다"}
-          </strong>
+    <div className="view-stack storage-overview">
+      <section
+        className={`storage-guide ${mapReady && !mapScanning ? "is-compact" : ""}`}
+        aria-labelledby="storage-guide-title"
+      >
+        <div className="storage-guide__copy">
+          <p className="eyebrow">{mapReady ? "용량 지도 준비됨" : "처음이라면 여기부터"}</p>
+          <h2 id="storage-guide-title">
+            {mapReady ? "큰 사각형부터 눌러 안쪽 폴더를 보세요" : "폴더를 고르고 용량 지도를 만드세요"}
+          </h2>
           <p>
-            {error
-              ? error
-              : scanning
-                ? progress?.message ?? "스캔 작업을 준비하고 있습니다"
-                : cancelled
-                  ? "취소된 스캔 결과는 삭제 판단에 사용하지 않습니다."
-                : report
-                  ? `${formatDuration(report.durationMs)} 동안 ${formatCount(report.totalFiles)}개 파일을 확인했습니다.`
-                  : "파일을 이동하거나 삭제하지 않고 크기와 중복 여부만 확인합니다."}
+            {mapReady
+              ? "사각형이 클수록 더 많은 용량을 사용합니다."
+              : "지도에서 큰 사각형을 누르면 하위 폴더로 이동합니다."}
           </p>
         </div>
+
+        {!mapReady || mapScanning ? (
+          <ol className="storage-guide__steps" aria-label="용량 관리 순서">
+            <GuideStep
+              number="1"
+              label="폴더 선택"
+              detail={root ? "선택됨" : "먼저 선택"}
+              state={root ? "complete" : "active"}
+            />
+            <GuideStep
+              number="2"
+              label="용량 지도"
+              detail={mapScanning ? "분석 중" : root ? "다음 단계" : "대기"}
+              state={root ? "active" : "pending"}
+            />
+            <GuideStep
+              number="3"
+              label="큰 파일·중복"
+              detail={scanning ? "검사 중" : "대기"}
+              state="pending"
+            />
+          </ol>
+        ) : null}
+
+        <div className="storage-guide__actions">
+          {mapScanning ? (
+            <button className="secondary-button danger-outline" type="button" onClick={onCancelDirectoryScan}>
+              <X size={17} aria-hidden="true" />
+              지도 만들기 취소
+            </button>
+          ) : scanning ? (
+            <button className="secondary-button danger-outline" type="button" onClick={onCancelScan}>
+              <X size={17} aria-hidden="true" />
+              자세한 검사 취소
+            </button>
+          ) : (
+            <button className="primary-button" type="button" disabled={actionBlocked} onClick={runNextStep}>
+              {!root ? (
+                <FolderOpen size={17} aria-hidden="true" />
+              ) : !mapReady ? (
+                <Map size={17} aria-hidden="true" />
+              ) : !detailReady ? (
+                <Search size={17} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={17} aria-hidden="true" />
+              )}
+              {nextLabel}
+            </button>
+          )}
+          {root && !mapScanning && !scanning ? (
+            <button className="storage-guide__change" type="button" disabled={actionBlocked} onClick={onPickFolder}>
+              폴더 바꾸기
+            </button>
+          ) : null}
+        </div>
+
+        {scanning ? (
+          <div className="storage-guide__progress" role="status">
+            <span>{progress?.message ?? "큰 파일과 중복을 확인하고 있습니다"}</span>
+            <strong>{formatCount(progress?.processedFiles ?? 0)}개 · {formatBytes(progress?.processedBytes ?? 0)}</strong>
+          </div>
+        ) : null}
+
+        {error ? (
+          <p className="storage-guide__error" role="alert">
+            <AlertTriangle size={16} aria-hidden="true" />
+            {error}
+          </p>
+        ) : state === "cancelled" ? (
+          <p className="storage-guide__notice" role="status">자세한 검사를 취소했습니다. 이전 완료 결과가 있으면 그대로 유지됩니다.</p>
+        ) : null}
       </section>
 
-      <DriveStoragePanel
-        platform={platform}
-        volume={volume}
-        report={driveReport}
-        progress={driveProgress}
-        state={driveState}
-        error={driveError}
-        blocked={blocked || state === "scanning" || directoryState === "scanning"}
-        onStart={onStartDriveScan}
-        onCancel={onCancelDriveScan}
-        onExplorePath={(location) =>
-          onStartDirectoryScan(location.path, [
-            { name: location.name, path: location.path },
-          ])
-        }
-      />
-
       <StorageTreemapPanel
-        root={directoryRoot}
+        root={root}
         report={directoryReport}
         progress={directoryProgress}
         state={directoryState}
         error={directoryError}
         breadcrumbs={directoryBreadcrumbs}
-        blocked={blocked || state === "scanning" || driveState === "scanning"}
+        blocked={blocked || scanning || driveScanning}
+        showAction={false}
+        onPickFolder={onPickFolder}
         onStart={onStartDirectoryScan}
         onCancel={onCancelDirectoryScan}
       />
 
-      <section className="scan-grid" aria-label="저장공간 스캔">
-        <div className="scan-stage glass-panel">
-          <StorageRing volume={volume} report={report} scanning={scanning} />
-          <div className="scan-stage__copy">
-            <p className="eyebrow">파일 내용까지 확인</p>
-            <h2>{root ? "선택한 범위를 정밀하게 확인합니다" : "먼저 분석할 폴더를 선택하세요"}</h2>
-            <p>
-              큰 파일은 크기순으로 정렬하고, 중복 후보는 일부 내용을 먼저 확인한 뒤 전체 내용을 끝까지 비교합니다.
-            </p>
+      {report ? (
+        <section className="storage-result-links" aria-labelledby="storage-result-links-title">
+          <div className="storage-result-links__heading">
+            <p className="eyebrow">검사 결과</p>
+            <h2 id="storage-result-links-title">확인할 항목을 고르세요</h2>
           </div>
-
-          <div className="scan-actions">
-            {scanning ? (
-              <button className="secondary-button danger-outline" type="button" onClick={onCancelScan}>
-                <X size={17} aria-hidden="true" />
-                스캔 취소
-              </button>
-            ) : (
-              <button
-                className="primary-button"
-                type="button"
-                disabled={blocked}
-                onClick={root ? onStartScan : onPickFolder}
-              >
-                {root ? <Search size={17} aria-hidden="true" /> : <FolderOpen size={17} aria-hidden="true" />}
-                {root ? "스캔 시작" : "폴더 선택"}
-              </button>
-            )}
-            {root && !scanning ? (
-              <button className="secondary-button" type="button" disabled={blocked} onClick={onPickFolder}>
-                범위 변경
-              </button>
-            ) : null}
-          </div>
-
-          {scanning ? (
-            <div className="progress-block" role="status" aria-live="polite">
-              <div className="progress-block__meta">
-                <span>{progress?.message ?? "스캔 준비 중"}</span>
-                <strong>{formatCount(progress?.processedFiles ?? 0)}개</strong>
-              </div>
-              <div
-                className={`progress-track ${progress?.fraction == null ? "is-indeterminate" : ""}`}
-                role="progressbar"
-                aria-label="스캔 진행률"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-valuenow={
-                  progress?.fraction == null
-                    ? undefined
-                    : Math.round(progress.fraction * 100)
-                }
-              >
-                <span
-                  style={
-                    progress?.fraction == null
-                      ? undefined
-                      : { transform: `scaleX(${progress.fraction})` }
-                  }
-                />
-              </div>
-              <small>{formatBytes(progress?.processedBytes ?? 0)} 확인</small>
-            </div>
-          ) : null}
-        </div>
-
-        <aside className="evidence-rail" aria-label="스캔 요약">
-          <SummaryMetric
-            label="확인한 파일"
-            value={report ? formatCount(report.totalFiles) : "—"}
-            detail={report ? formatBytes(report.totalLogicalBytes) : "스캔 후 표시"}
-            icon={<Files size={18} />}
-          />
-          <SummaryMetric
-            label="큰 파일"
-            value={report ? formatCount(report.largeFiles.length) : "—"}
-            detail={report ? formatBytes(largeBytes ?? 0) : "설정 기준 이상"}
-            icon={<Search size={18} />}
-          />
-          <SummaryMetric
-            label="중복 낭비"
-            value={report ? formatBytes(report.duplicateWasteBytes) : "—"}
-            detail={report ? `${formatCount(report.duplicateGroups.length)}개 그룹` : "전체 내용 검증"}
-            icon={<ShieldCheck size={18} />}
-          />
-          <SummaryMetric
-            label="읽지 못한 항목"
-            value={report ? formatCount(report.unreadableEntries) : "—"}
-            detail={report?.hardLinksSkipped ? `하드링크 ${formatCount(report.hardLinksSkipped)}개 제외` : "권한 오류를 별도 기록"}
-            icon={<AlertTriangle size={18} />}
-            tone={report?.unreadableEntries ? "warning" : "neutral"}
-          />
-        </aside>
-      </section>
-
-      <section className="results-section">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">가장 큰 파일</p>
-            <h2>가장 큰 파일</h2>
-          </div>
-          {report ? (
+          <button type="button" onClick={onOpenLargeFiles}>
+            <HardDrive size={19} aria-hidden="true" />
             <span>
-              {report.largeFiles.length === 0
-                ? "조건에 맞는 파일 없음"
-                : `${report.largeFiles.length}개 중 상위 ${Math.min(6, report.largeFiles.length)}개`}
+              <strong>큰 파일</strong>
+              <small>{formatCount(report.largeFiles.length)}개 · {formatBytes(largeBytes)}</small>
             </span>
-          ) : null}
-        </div>
-        {report ? (
-          <FileTable
-            files={report.largeFiles.slice(0, 6)}
-            emptyMessage="설정한 기준보다 큰 파일이 없습니다."
-          />
-        ) : (
-          <div className="empty-panel">
-            <Search size={24} aria-hidden="true" />
-            <strong>아직 스캔 결과가 없습니다</strong>
-            <p>폴더를 선택하고 스캔하면 실제 파일 경로와 크기가 여기에 표시됩니다.</p>
-          </div>
-        )}
-      </section>
-
-      {report?.candidateLimitReached ? (
-        <div className="notice-panel" role="alert">
-          <AlertTriangle size={18} aria-hidden="true" />
-          <p>중복 후보 안전 한도에 도달했습니다. 설정에서 후보 한도를 높인 뒤 다시 스캔하세요.</p>
-        </div>
+            <ChevronRight size={17} aria-hidden="true" />
+          </button>
+          <button type="button" onClick={onOpenDuplicates}>
+            <Copy size={19} aria-hidden="true" />
+            <span>
+              <strong>중복 파일</strong>
+              <small>{formatCount(report.duplicateGroups.length)}그룹 · {formatBytes(report.duplicateWasteBytes)}</small>
+            </span>
+            <ChevronRight size={17} aria-hidden="true" />
+          </button>
+          <button type="button" onClick={onOpenCleanup}>
+            <ListChecks size={19} aria-hidden="true" />
+            <span>
+              <strong>정리 후보</strong>
+              <small>임시 파일과 삭제 후 남은 흔적</small>
+            </span>
+            <ChevronRight size={17} aria-hidden="true" />
+          </button>
+        </section>
       ) : null}
+
+      <details className="storage-advanced">
+        <summary>
+          <span aria-hidden="true"><HardDrive size={19} /></span>
+          <span>
+            <strong>컴퓨터 전체 용량을 종류별로 보기</strong>
+            <small>설치된 앱, 임시 파일, 문서, 사진처럼 시스템 드라이브를 나눠 봅니다.</small>
+          </span>
+          <ChevronDown size={18} aria-hidden="true" />
+        </summary>
+        <DriveStoragePanel
+          platform={platform}
+          volume={volume}
+          report={driveReport}
+          progress={driveProgress}
+          state={driveState}
+          error={driveError}
+          blocked={blocked || scanning || mapScanning}
+          onStart={onStartDriveScan}
+          onCancel={onCancelDriveScan}
+          onExplorePath={(location) =>
+            onStartDirectoryScan(location.path, [
+              { name: location.name, path: location.path },
+            ])
+          }
+        />
+      </details>
     </div>
   );
 }
 
-interface SummaryMetricProps {
+interface GuideStepProps {
+  number: string;
   label: string;
-  value: string;
   detail: string;
-  icon: React.ReactNode;
-  tone?: "neutral" | "warning";
+  state: "pending" | "active" | "complete";
 }
 
-function SummaryMetric({
-  label,
-  value,
-  detail,
-  icon,
-  tone = "neutral",
-}: SummaryMetricProps) {
+function GuideStep({ number, label, detail, state }: GuideStepProps) {
   return (
-    <div className={`summary-metric ${tone === "warning" ? "is-warning" : ""}`}>
-      <span className="summary-metric__icon" aria-hidden="true">
-        {icon}
-      </span>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
+    <li className={`is-${state}`} aria-current={state === "active" ? "step" : undefined}>
+      <span>{state === "complete" ? <CheckCircle2 size={15} aria-hidden="true" /> : number}</span>
+      <span>
+        <strong>{label}</strong>
         <small>{detail}</small>
-      </div>
-    </div>
+      </span>
+    </li>
   );
 }

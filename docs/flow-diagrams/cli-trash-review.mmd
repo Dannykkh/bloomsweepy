@@ -1,0 +1,33 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    Start([CLI가 휴지통 이동 검토 요청]) --> CandidateIds[검사 번호와 후보 번호만 앱에 전달]
+    CandidateIds --> PlanValid{현재 완료 검사에 속한 후보인가?}
+    PlanValid -->|아니요| Rescan[요청 거부 후 다시 검사 안내]
+    PlanValid -->|예| MakePlan[앱이 만료 시각이 있는 확인 계획 생성]
+    MakePlan --> Assistant[AI 도우미에 확인 대기 표시]
+    Assistant --> ShowList[앱이 정확한 경로·용량·추천 이유 표시]
+    ShowList --> Approve{사용자가 앱에서 최종 확인했는가?}
+    Approve -->|취소| Cancelled[계획을 취소하고 파일을 변경하지 않음]
+    Approve -->|예| AppData{프로그램 설정 후보가 포함됐는가?}
+    AppData -->|예| ExtraCheck{추가 확인을 선택했는가?}
+    ExtraCheck -->|아니요| ShowList
+    ExtraCheck -->|예| Revalidate[[기존 전체 사전검사와 항목별 직전 재검사]]
+    AppData -->|아니요| Revalidate
+    Revalidate --> Changed{파일 상태가 그대로인가?}
+    Changed -->|아니요| Rescan
+    Changed -->|예| Journal[작업 계획과 이동 시작을 디스크에 기록]
+    Journal --> Trash[[운영체제 휴지통으로 이동]]
+    Trash --> SaveResult[결과와 작업 기록을 마무리]
+    SaveResult --> Report[AI 도우미와 CLI에 완료·실패·건너뜀 반환]
+    Report --> End([CLI가 결과를 요약하고 복원 위치 안내])
+
+    classDef accent fill:#eef3ff,stroke:#3478d4,stroke-width:2px,color:#182235
+    class ShowList,End accent

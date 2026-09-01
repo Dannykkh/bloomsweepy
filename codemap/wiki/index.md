@@ -14,9 +14,9 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 - Project: `bloomsweepy`
 - Detected projects: 0
-- Source categories: 7
-- Files: 240, documents: 29, assets: 210
-- Routes: 0, API signals: 0, UI signals: 76
+- Source categories: 9
+- Files: 290, documents: 40, assets: 239
+- Routes: 0, API signals: 0, UI signals: 79
 
 ## Start Here
 
@@ -44,12 +44,14 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 | Area | Files | Why it matters |
 |------|-------|----------------|
-| [views](../views.md) | 36 | WPF View/Window/Panel |
-| [apps-desktop](../apps-desktop.md) | 21 | .tsx×10, .rs×6, .ts×5 |
-| [services](../services.md) | 21 | 서비스 클래스/메서드 |
+| [views](../views.md) | 37 | WPF View/Window/Panel |
+| [apps-desktop](../apps-desktop.md) | 27 | .tsx×12, .rs×8, .ts×7 |
+| [services](../services.md) | 22 | 서비스 클래스/메서드 |
 | [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |
+| [apps-bloomsweepy-mcp](../apps-bloomsweepy-mcp.md) | 3 | .rs×3 |
 | [broomsweepy](../broomsweepy.md) | 2 | .swift×2 |
 | [broomsweepy-models](../broomsweepy-models.md) | 2 | .swift×2 |
+| [crates-bloomsweepy-control](../crates-bloomsweepy-control.md) | 1 | .rs×1 |
 | [viewmodels](../viewmodels.md) | 1 | ViewModel 클래스/속성/명령 |
 
 ## Project Memory

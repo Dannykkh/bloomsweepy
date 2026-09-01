@@ -1,10 +1,13 @@
 ﻿# UI
 
 > 웹 컴포넌트, XAML View/Window/Control, 모바일 Widget/View 빠른 색인.
-> total: 76 signals
+> total: 79 signals
 
 ## apps/desktop/src/components/AppShell.tsx
-- **component** `AppShell` (L121) — `apps/desktop/src/components/AppShell.tsx:121`
+- **component** `AppShell` (L129) — `apps/desktop/src/components/AppShell.tsx:129`
+
+## apps/desktop/src/components/ControlStatusPanel.tsx
+- **component** `ControlStatusPanel` (L91) — `apps/desktop/src/components/ControlStatusPanel.tsx:91`
 
 ## apps/desktop/src/components/DriveStoragePanel.tsx
 - **component** `DriveStoragePanel` (L126) — `apps/desktop/src/components/DriveStoragePanel.tsx:126`
@@ -22,12 +25,18 @@
 ## apps/desktop/src/components/StorageRing.tsx
 - **component** `StorageRing` (L10) — `apps/desktop/src/components/StorageRing.tsx:10`
 
+## apps/desktop/src/components/StorageSectionNav.tsx
+- **component** `StorageSectionNav` (L14) — `apps/desktop/src/components/StorageSectionNav.tsx:14`
+
 ## apps/desktop/src/components/StorageTreemapPanel.tsx
-- **component** `StorageTreemapPanel` (L52) — `apps/desktop/src/components/StorageTreemapPanel.tsx:52`
-- **component** `StorageMapMetric` (L317) — `apps/desktop/src/components/StorageTreemapPanel.tsx:317`
+- **component** `StorageTreemapPanel` (L54) — `apps/desktop/src/components/StorageTreemapPanel.tsx:54`
+- **component** `StorageMapMetric` (L339) — `apps/desktop/src/components/StorageTreemapPanel.tsx:339`
 
 ## apps/desktop/src/components/TrashResultPanel.tsx
 - **component** `TrashResultPanel` (L9) — `apps/desktop/src/components/TrashResultPanel.tsx:9`
+
+## apps/desktop/src/views/AssistantView.tsx
+- **component** `AssistantView` (L18) — `apps/desktop/src/views/AssistantView.tsx:18`
 
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70) — `apps/desktop/src/views/CleanupView.tsx:70`
@@ -47,14 +56,14 @@
 - **component** `LargeFilesView` (L12) — `apps/desktop/src/views/LargeFilesView.tsx:12`
 
 ## apps/desktop/src/views/OverviewView.tsx
-- **component** `OverviewView` (L54) — `apps/desktop/src/views/OverviewView.tsx:54`
-- **component** `SummaryMetric` (L300) — `apps/desktop/src/views/OverviewView.tsx:300`
+- **component** `OverviewView` (L58) — `apps/desktop/src/views/OverviewView.tsx:58`
+- **component** `GuideStep` (L296) — `apps/desktop/src/views/OverviewView.tsx:296`
 
 ## apps/desktop/src/views/SettingsView.tsx
 - **component** `SettingsView` (L10) — `apps/desktop/src/views/SettingsView.tsx:10`
 
 ## BroomSweepy/BroomSweepyApp.swift
-- **view** `MenuBarPopover` : View (L136) — `BroomSweepy/BroomSweepyApp.swift:136`
+- **view** `MenuBarPopover` : View (L231) — `BroomSweepy/BroomSweepyApp.swift:231`
 
 ## BroomSweepy/ContentView.swift
 - **view** `RootView` : View (L4) — `BroomSweepy/ContentView.swift:4`
@@ -62,34 +71,34 @@
 
 ## BroomSweepy/Views/AppUninstallerView.swift
 - **view** `AppUninstallerView` : View (L3) — `BroomSweepy/Views/AppUninstallerView.swift:3`
-- **view** `AppRow` : View (L158) — `BroomSweepy/Views/AppUninstallerView.swift:158`
+- **view** `AppRow` : View (L155) — `BroomSweepy/Views/AppUninstallerView.swift:155`
 
 ## BroomSweepy/Views/CacheCleanerView.swift
-- **view** `CacheCleanerView` : View (L2) — `BroomSweepy/Views/CacheCleanerView.swift:2`
+- **view** `CacheCleanerView` : View (L3) — `BroomSweepy/Views/CacheCleanerView.swift:3`
 - **view** `CacheRow` : View (L208) — `BroomSweepy/Views/CacheCleanerView.swift:208`
-- **view** `SafetyBadge` : View (L270) — `BroomSweepy/Views/CacheCleanerView.swift:270`
+- **view** `SafetyBadge` : View (L290) — `BroomSweepy/Views/CacheCleanerView.swift:290`
 
 ## BroomSweepy/Views/CleanupToolsView.swift
 - **view** `CleanupToolsView` : View (L3) — `BroomSweepy/Views/CleanupToolsView.swift:3`
 - **view** `MailAttachmentsSection` : View (L83) — `BroomSweepy/Views/CleanupToolsView.swift:83`
-- **view** `MailAttachmentRow` : View (L189) — `BroomSweepy/Views/CleanupToolsView.swift:189`
-- **view** `BrokenDownloadsSection` : View (L236) — `BroomSweepy/Views/CleanupToolsView.swift:236`
-- **view** `BrokenDownloadRow` : View (L342) — `BroomSweepy/Views/CleanupToolsView.swift:342`
-- **view** `AppVersionsSection` : View (L393) — `BroomSweepy/Views/CleanupToolsView.swift:393`
-- **view** `AppVersionRow` : View (L454) — `BroomSweepy/Views/CleanupToolsView.swift:454`
-- **view** `LanguageCleanerSection` : View (L498) — `BroomSweepy/Views/CleanupToolsView.swift:498`
-- **view** `BrokenPlistSection` : View (L685) — `BroomSweepy/Views/CleanupToolsView.swift:685`
+- **view** `MailAttachmentRow` : View (L209) — `BroomSweepy/Views/CleanupToolsView.swift:209`
+- **view** `BrokenDownloadsSection` : View (L256) — `BroomSweepy/Views/CleanupToolsView.swift:256`
+- **view** `BrokenDownloadRow` : View (L382) — `BroomSweepy/Views/CleanupToolsView.swift:382`
+- **view** `AppVersionsSection` : View (L433) — `BroomSweepy/Views/CleanupToolsView.swift:433`
+- **view** `AppVersionRow` : View (L494) — `BroomSweepy/Views/CleanupToolsView.swift:494`
+- **view** `LanguageCleanerSection` : View (L538) — `BroomSweepy/Views/CleanupToolsView.swift:538`
+- **view** `BrokenPlistSection` : View (L719) — `BroomSweepy/Views/CleanupToolsView.swift:719`
 
 ## BroomSweepy/Views/CloudStorageView.swift
 - **view** `CloudStorageView` : View (L2) — `BroomSweepy/Views/CloudStorageView.swift:2`
 
 ## BroomSweepy/Views/DashboardView.swift
 - **view** `DashboardView` : View (L3) — `BroomSweepy/Views/DashboardView.swift:3`
-- **view** `SummaryCard` : View (L592) — `BroomSweepy/Views/DashboardView.swift:592`
+- **view** `SummaryCard` : View (L593) — `BroomSweepy/Views/DashboardView.swift:593`
 
 ## BroomSweepy/Views/DuplicateFilesView.swift
 - **view** `DuplicateFilesView` : View (L2) — `BroomSweepy/Views/DuplicateFilesView.swift:2`
-- **view** `DuplicateGroupCard` : View (L125) — `BroomSweepy/Views/DuplicateFilesView.swift:125`
+- **view** `DuplicateGroupCard` : View (L135) — `BroomSweepy/Views/DuplicateFilesView.swift:135`
 
 ## BroomSweepy/Views/FeatureInfoBanner.swift
 - **view** `FeatureInfoBanner` : View (L4) — `BroomSweepy/Views/FeatureInfoBanner.swift:4`
@@ -102,14 +111,14 @@
 
 ## BroomSweepy/Views/LargeFilesView.swift
 - **view** `LargeFilesView` : View (L2) — `BroomSweepy/Views/LargeFilesView.swift:2`
-- **view** `LargeFileRow` : View (L155) — `BroomSweepy/Views/LargeFilesView.swift:155`
-- **view** `FilterChip` : View (L225) — `BroomSweepy/Views/LargeFilesView.swift:225`
+- **view** `LargeFileRow` : View (L203) — `BroomSweepy/Views/LargeFilesView.swift:203`
+- **view** `FilterChip` : View (L294) — `BroomSweepy/Views/LargeFilesView.swift:294`
 
 ## BroomSweepy/Views/MaintenanceView.swift
-- **view** `MaintenanceView` : View (L2) — `BroomSweepy/Views/MaintenanceView.swift:2`
+- **view** `MaintenanceView` : View (L9) — `BroomSweepy/Views/MaintenanceView.swift:9`
 
 ## BroomSweepy/Views/MalwareScannerView.swift
-- **view** `MalwareScannerView` : View (L2) — `BroomSweepy/Views/MalwareScannerView.swift:2`
+- **view** `MalwareScannerView` : View (L3) — `BroomSweepy/Views/MalwareScannerView.swift:3`
 
 ## BroomSweepy/Views/MemoryCleanerView.swift
 - **view** `MemoryCleanerView` : View (L2) — `BroomSweepy/Views/MemoryCleanerView.swift:2`
@@ -133,7 +142,7 @@
 - **view** `PrivacyCategoryView` : View (L2) — `BroomSweepy/Views/PrivacyCategoryView.swift:2`
 
 ## BroomSweepy/Views/PrivacyCleanerView.swift
-- **view** `PrivacyCleanerView` : View (L2) — `BroomSweepy/Views/PrivacyCleanerView.swift:2`
+- **view** `PrivacyCleanerView` : View (L3) — `BroomSweepy/Views/PrivacyCleanerView.swift:3`
 
 ## BroomSweepy/Views/RuleBuilderView.swift
 - **view** `RuleBuilderView` : View (L2) — `BroomSweepy/Views/RuleBuilderView.swift:2`
@@ -148,8 +157,8 @@
 
 ## BroomSweepy/Views/SimilarImagesView.swift
 - **view** `SimilarImagesView` : View (L2) — `BroomSweepy/Views/SimilarImagesView.swift:2`
-- **view** `SimilarImageGroupCard` : View (L182) — `BroomSweepy/Views/SimilarImagesView.swift:182`
-- **view** `SimilarImageCell` : View (L236) — `BroomSweepy/Views/SimilarImagesView.swift:236`
+- **view** `SimilarImageGroupCard` : View (L286) — `BroomSweepy/Views/SimilarImagesView.swift:286`
+- **view** `SimilarImageCell` : View (L340) — `BroomSweepy/Views/SimilarImagesView.swift:340`
 
 ## BroomSweepy/Views/SmartCleanView.swift
 - **view** `SmartCleanView` : View (L46) — `BroomSweepy/Views/SmartCleanView.swift:46`
@@ -162,10 +171,10 @@
 
 ## BroomSweepy/Views/StartupManagerView.swift
 - **view** `StartupManagerView` : View (L2) — `BroomSweepy/Views/StartupManagerView.swift:2`
-- **view** `LoginItemRow` : View (L105) — `BroomSweepy/Views/StartupManagerView.swift:105`
+- **view** `LoginItemRow` : View (L107) — `BroomSweepy/Views/StartupManagerView.swift:107`
 
 ## BroomSweepy/Views/StorageTreemapView.swift
-- **view** `StorageTreemapView` : View (L27) — `BroomSweepy/Views/StorageTreemapView.swift:27`
+- **view** `StorageTreemapView` : View (L38) — `BroomSweepy/Views/StorageTreemapView.swift:38`
 
 ## BroomSweepy/Views/SystemMonitorView.swift
 - **view** `SystemMonitorView` : View (L2) — `BroomSweepy/Views/SystemMonitorView.swift:2`

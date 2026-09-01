@@ -25,8 +25,10 @@ const MAX_DOCUMENTS: usize = 500_000;
 const MAX_ISSUES: usize = 1_000;
 const MAX_SEARCH_RESULTS: usize = 250;
 const MAX_QUERY_CHARS: usize = 256;
+const MAX_SNIPPET_CHARS: usize = 512;
 const READ_CHUNK_BYTES: usize = 256 * 1024;
 const PROGRESS_FILE_INTERVAL: u64 = 256;
+const SEARCH_PROGRESS_OPS: i32 = 1_000;
 const SNIPPET_OPEN: char = '\u{e000}';
 const SNIPPET_CLOSE: char = '\u{e001}';
 
@@ -667,6 +669,26 @@ pub fn search_document_index(
     database_path: impl AsRef<Path>,
     request: DocumentSearchRequest,
 ) -> Result<DocumentSearchReport, DocumentSearchError> {
+    search_document_index_inner(database_path.as_ref(), request, None)
+}
+
+pub fn search_document_index_with_cancellation(
+    database_path: impl AsRef<Path>,
+    request: DocumentSearchRequest,
+    should_cancel: impl FnMut() -> bool + Send + 'static,
+) -> Result<DocumentSearchReport, DocumentSearchError> {
+    search_document_index_inner(
+        database_path.as_ref(),
+        request,
+        Some(Box::new(should_cancel)),
+    )
+}
+
+fn search_document_index_inner(
+    database_path: &Path,
+    request: DocumentSearchRequest,
+    mut should_cancel: Option<Box<dyn FnMut() -> bool + Send>>,
+) -> Result<DocumentSearchReport, DocumentSearchError> {
     let query = request.query.trim();
     if query.is_empty() {
         return Err(DocumentSearchError::EmptyQuery);
@@ -675,11 +697,18 @@ pub fn search_document_index(
         return Err(DocumentSearchError::QueryTooLong);
     }
 
-    let database_path = database_path.as_ref();
     if !database_path.exists() {
         return Err(DocumentSearchError::IndexUnavailable);
     }
     let connection = open_existing_index(database_path)?;
+    if should_cancel.as_mut().is_some_and(|cancel| cancel()) {
+        return Err(DocumentSearchError::Index("search cancelled".to_owned()));
+    }
+    if let Some(cancel) = should_cancel {
+        connection
+            .progress_handler(SEARCH_PROGRESS_OPS, Some(cancel))
+            .map_err(index_error)?;
+    }
     ensure_existing_schema(&connection)?;
     let meta = read_meta(&connection)?.ok_or(DocumentSearchError::IndexUnavailable)?;
     let searched_documents = connection
@@ -1388,6 +1417,8 @@ fn parse_marked_snippet(snippet: &str) -> Vec<DocumentSnippetPart> {
     let mut parts = Vec::new();
     let mut buffer = String::new();
     let mut highlighted = false;
+    let mut visible_chars = 0;
+    let mut truncated = false;
     for character in snippet.chars() {
         if character == SNIPPET_OPEN || character == SNIPPET_CLOSE {
             if !buffer.is_empty() {
@@ -1398,13 +1429,24 @@ fn parse_marked_snippet(snippet: &str) -> Vec<DocumentSnippetPart> {
             }
             highlighted = character == SNIPPET_OPEN;
         } else {
+            if visible_chars >= MAX_SNIPPET_CHARS {
+                truncated = true;
+                break;
+            }
             buffer.push(character);
+            visible_chars += 1;
         }
     }
     if !buffer.is_empty() {
         parts.push(DocumentSnippetPart {
             text: buffer,
             highlighted,
+        });
+    }
+    if truncated {
+        parts.push(DocumentSnippetPart {
+            text: " …".to_owned(),
+            highlighted: false,
         });
     }
     parts
@@ -1574,6 +1616,42 @@ mod tests {
     use std::io::Write;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn cancellable_search_stops_before_querying() {
+        let fixture = tempfile::tempdir().expect("fixture");
+        let database = fixture.path().join("index.sqlite3");
+        fs::write(&database, []).expect("empty database file");
+        let request = DocumentSearchRequest {
+            query: "report".to_owned(),
+            extensions: Vec::new(),
+            max_results: 20,
+        };
+
+        let error = search_document_index_with_cancellation(&database, request, || true)
+            .expect_err("cancelled search");
+
+        assert!(
+            matches!(error, DocumentSearchError::Index(message) if message == "search cancelled")
+        );
+    }
+
+    #[test]
+    fn marked_snippet_is_bounded_even_for_one_giant_token() {
+        let raw = format!(
+            "{SNIPPET_OPEN}{}{SNIPPET_CLOSE}",
+            "가".repeat(MAX_SNIPPET_CHARS + 100)
+        );
+
+        let parts = parse_marked_snippet(&raw);
+        let visible_chars = parts
+            .iter()
+            .map(|part| part.text.chars().count())
+            .sum::<usize>();
+
+        assert!(parts.iter().any(|part| part.highlighted));
+        assert!(visible_chars <= MAX_SNIPPET_CHARS + 2);
+    }
 
     #[test]
     fn indexes_plain_text_searches_korean_and_reuses_unchanged_documents() {

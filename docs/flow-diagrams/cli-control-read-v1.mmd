@@ -1,0 +1,41 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    Start([사용자가 채팅으로 상태·검색 지시]) --> Interpret[CLI·공급자가 읽기 기능 선택]
+    Interpret --> Allowlist{허용된 네 기능인가?}
+    Allowlist -->|아니요| RejectTool[도구를 제공하지 않음]
+    Allowlist -->|예| Descriptor{실행 중인 앱 연결 정보가 있는가?}
+    Descriptor -->|아니요| Offline[앱 실행 안내 후 파일 작업 없이 종료]
+    Descriptor -->|예| LocalOnly{로컬 주소와 규격이 맞는가?}
+    LocalOnly -->|아니요| RejectConnection[연결 거부]
+    LocalOnly -->|예| Authenticate{앱이 발급한 토큰이 일치하는가?}
+    Authenticate -->|아니요| RejectConnection
+    Authenticate -->|예| Route{요청 종류}
+    Route -->|앱 상태| AppState[앱이 연결 상태 반환]
+    Route -->|드라이브 상태| DriveState[앱이 드라이브 정보 수집]
+    Route -->|파일·문서 검색| Scope{이번 앱 실행에서 해당 목록을 허용했는가?}
+    Scope -->|아니요| ScopeRequired[AI 도우미에서 검색 허용 안내]
+    Scope -->|예| Validate{검색 조건이 안전한가?}
+    Validate -->|아니요| RejectSearch[검색 거부와 쉬운 이유 반환]
+    Validate -->|예| Busy{앱 검사 또는 다른 채팅 검색 중인가?}
+    Busy -->|예| Retry[잠시 뒤 다시 시도 안내]
+    Busy -->|아니요| ExistingIndex[허용한 앱 검색 목록만 조회]
+    ExistingIndex --> Deadline{8초 안이며 앱이 실행 중인가?}
+    Deadline -->|아니요| CancelQuery[SQLite 조회 중단]
+    Deadline -->|예| ScopeCheck{목록 기준 폴더와 결과 경로가 허용 범위 안인가?}
+    ScopeCheck -->|아니요| ScopeChanged[다시 허용 안내]
+    ScopeCheck -->|예| Assistant
+    AppState --> Assistant[AI 도우미에 연결 상태 갱신]
+    DriveState --> Assistant
+    Assistant --> BoundedResult[크기가 제한된 구조화 결과 반환]
+    BoundedResult --> Summarize([CLI·공급자가 쉬운 말로 요약])
+
+    classDef accent fill:#eef3ff,stroke:#3478d4,stroke-width:2px,color:#182235
+    class Assistant,Summarize accent

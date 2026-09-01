@@ -17,9 +17,11 @@ name = "bloomsweepy_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
+embed-resource = "3"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+bloomsweepy-control = { path = "../../../crates/bloomsweepy-control" }
 bloomsweepy-core = { path = "../../../crates/bloomsweepy-core" }
 dirs = { workspace = true }
 tauri = { version = "2", features = [] }
@@ -34,4 +36,8 @@ trash = "5.2.6"
 tempfile = "3.23"
 
 [target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
 winreg = "0.55"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1.10.0"

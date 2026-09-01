@@ -1,0 +1,33 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    Start([BroomSweepy 실행]) --> Platform{운영체제}
+    Platform -->|Windows| Tray[시스템 트레이 아이콘 생성]
+    Platform -->|macOS 기존 Swift 앱| MenuBar[메뉴 막대 항목 생성]
+
+    Tray --> WinStatus[트레이 메뉴에 검사 상태 표시]
+    MenuBar --> MacStatus[메모리·CPU·디스크 상태 표시]
+
+    WinStatus --> WinAction{사용자 동작}
+    WinAction -->|아이콘 또는 열기| ShowWindow[창을 표시하고 앞으로 가져오기]
+    WinAction -->|창 닫기| HideWindow[작업을 유지한 채 창만 숨기기]
+    HideWindow --> WinStatus
+    WinAction -->|종료| Shutdown[실행 중 작업 취소 요청과 제어 서버 종료]
+
+    MacStatus --> MacAction{사용자 동작}
+    MacAction -->|BroomSweepy 열기| ShowMac[기존 창 표시 또는 새 창 열기]
+    MacAction -->|창 닫기| KeepResident[메뉴 막대에서 계속 실행]
+    KeepResident --> MacStatus
+    MacAction -->|종료| Shutdown
+
+    Shutdown --> Exit([프로세스 종료])
+
+    classDef accent fill:#eef3ff,stroke:#3478d4,stroke-width:2px,color:#182235
+    class Tray,MenuBar,ShowWindow,ShowMac accent

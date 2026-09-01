@@ -1,8 +1,57 @@
+import Darwin
 import Foundation
+
+// MARK: - File Identity
+
+/// A no-follow snapshot used to ensure that a reviewed filesystem entry is the
+/// same entry immediately before it is moved to Trash. Symbolic links and
+/// unsupported node kinds are deliberately not representable.
+struct FileIdentitySnapshot: Hashable, Codable, Sendable {
+    enum Kind: String, Hashable, Codable, Sendable {
+        case regularFile
+        case directory
+    }
+
+    let device: UInt64
+    let inode: UInt64
+    let kind: Kind
+    let size: Int64
+    let modificationSeconds: Int64
+    let modificationNanoseconds: Int64
+
+    static func capture(path: String) -> FileIdentitySnapshot? {
+        var value = stat()
+        guard lstat(path, &value) == 0 else { return nil }
+
+        let type = value.st_mode & mode_t(S_IFMT)
+        let kind: Kind
+        switch type {
+        case mode_t(S_IFREG):
+            kind = .regularFile
+        case mode_t(S_IFDIR):
+            kind = .directory
+        default:
+            return nil
+        }
+
+        return FileIdentitySnapshot(
+            device: UInt64(truncatingIfNeeded: value.st_dev),
+            inode: UInt64(truncatingIfNeeded: value.st_ino),
+            kind: kind,
+            size: Int64(value.st_size),
+            modificationSeconds: Int64(value.st_mtimespec.tv_sec),
+            modificationNanoseconds: Int64(value.st_mtimespec.tv_nsec)
+        )
+    }
+
+    func exactlyMatches(path: String) -> Bool {
+        Self.capture(path: path) == self
+    }
+}
 
 // MARK: - Cache Item
 
-struct CacheItem: Identifiable, Hashable {
+struct CacheItem: Identifiable, Hashable, Sendable {
     let id = UUID()
     let name: String
     let path: String
@@ -11,17 +60,18 @@ struct CacheItem: Identifiable, Hashable {
     let size: Int64
     let fileCount: Int
     let type: CacheType
+    let snapshot: FileIdentitySnapshot
 
     var sizeFormatted: String { formatSize(size) }
 
-    enum CacheType: String {
+    enum CacheType: String, Sendable {
         case cache, dsStore, log, temp
     }
 }
 
 // MARK: - Large File
 
-struct LargeFile: Identifiable, Hashable {
+struct LargeFile: Identifiable, Hashable, Sendable {
     let id = UUID()
     let name: String
     let path: String
@@ -29,6 +79,7 @@ struct LargeFile: Identifiable, Hashable {
     let modified: Date
     let ext: String
     let category: FileCategory
+    let snapshot: FileIdentitySnapshot
 
     var sizeFormatted: String { formatSize(size) }
 
@@ -36,7 +87,7 @@ struct LargeFile: Identifiable, Hashable {
         Calendar.current.dateComponents([.day], from: modified, to: Date()).day ?? 0
     }
 
-    enum FileCategory: String, CaseIterable {
+    enum FileCategory: String, CaseIterable, Sendable {
         case video = "동영상"
         case image = "이미지"
         case music = "음악"
@@ -83,7 +134,7 @@ struct LargeFile: Identifiable, Hashable {
 
 // MARK: - Duplicate Group
 
-struct DuplicateGroup: Identifiable {
+struct DuplicateGroup: Identifiable, Sendable {
     let id = UUID()
     let hash: String
     let files: [DuplicateFile]
@@ -95,12 +146,13 @@ struct DuplicateGroup: Identifiable {
     var wastedSizeFormatted: String { formatSize(wastedSize) }
 }
 
-struct DuplicateFile: Identifiable, Hashable {
+struct DuplicateFile: Identifiable, Hashable, Sendable {
     let id = UUID()
     let name: String
     let path: String
     let size: Int64
     let modified: Date
+    let snapshot: FileIdentitySnapshot
 }
 
 // MARK: - Scan Summary

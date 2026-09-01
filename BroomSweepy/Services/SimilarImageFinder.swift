@@ -1,23 +1,21 @@
 import Foundation
 import CoreImage
-import AppKit
-import ImageIO
 
 // MARK: - Models
 
-struct SimilarImageGroup: Identifiable {
+struct SimilarImageGroup: Identifiable, Sendable {
     let id = UUID()
     let images: [SimilarImage]
     var wastedSize: Int64 { images.dropFirst().reduce(Int64(0)) { $0 + $1.size } }
     var wastedSizeFormatted: String { formatSize(wastedSize) }
 }
 
-struct SimilarImage: Identifiable, Hashable {
+struct SimilarImage: Identifiable, Hashable, Sendable {
     let id = UUID()
     let path: String
     let name: String
     let size: Int64
-    let thumbnail: NSImage?
+    let snapshot: FileIdentitySnapshot
 
     var sizeFormatted: String { formatSize(size) }
 
@@ -46,10 +44,16 @@ final class SimilarImageFinder {
 
         progressCallback?("이미지 파일 검색 중...", 0.0)
 
+        let rootPath = folderURL.standardizedFileURL.path
+        let trashPath = actualUserHomeURL().appendingPathComponent(".Trash").standardizedFileURL.path
+        guard !isSameOrDescendant(rootPath, of: trashPath),
+              let rootSnapshot = FileIdentitySnapshot.capture(path: rootPath),
+              rootSnapshot.kind == .directory else { return [] }
+
         // 1. Find all image files
         var imageURLs: [URL] = []
         let enumerator = fm.enumerator(
-            at: folderURL,
+            at: URL(fileURLWithPath: rootPath),
             includingPropertiesForKeys: [.fileSizeKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) { _, _ in true }
@@ -57,11 +61,16 @@ final class SimilarImageFinder {
         let skipDirs: Set<String> = [".git", "node_modules", ".Trash", "Library", ".npm"]
 
         while let url = enumerator?.nextObject() as? URL {
+            let normalized = url.standardizedFileURL.path
+            guard rootSnapshot.exactlyMatches(path: rootPath),
+                  isSameOrDescendant(normalized, of: rootPath) else { return [] }
             if skipDirs.contains(url.lastPathComponent) {
                 enumerator?.skipDescendants()
                 continue
             }
-            guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey]),
+            guard let snapshot = FileIdentitySnapshot.capture(path: url.path),
+                  snapshot.kind == .regularFile,
+                  let values = try? url.resourceValues(forKeys: [.isDirectoryKey]),
                   values.isDirectory == false else { continue }
 
             if imageExtensions.contains(url.pathExtension.lowercased()) {
@@ -74,7 +83,7 @@ final class SimilarImageFinder {
         progressCallback?("\(imageURLs.count)개 이미지 해시 계산 중...", 0.2)
 
         // 2. Compute perceptual hash (autoreleasepool로 메모리 즉시 회수)
-        var hashes: [(url: URL, hash: UInt64, size: Int64)] = []
+        var hashes: [(url: URL, hash: UInt64, size: Int64, snapshot: FileIdentitySnapshot)] = []
         let total = Double(imageURLs.count)
 
         for (i, url) in imageURLs.enumerated() {
@@ -83,9 +92,13 @@ final class SimilarImageFinder {
                     progressCallback?("해시 계산 중... \(i)/\(imageURLs.count)", 0.2 + 0.5 * Double(i) / total)
                 }
 
-                guard let hash = averageHash(for: url) else { return }
+                guard let before = FileIdentitySnapshot.capture(path: url.path),
+                      before.kind == .regularFile,
+                      let hash = averageHash(for: url),
+                      before.exactlyMatches(path: url.path) else { return }
                 let fileSize = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
-                hashes.append((url, hash, Int64(fileSize)))
+                guard before.size == Int64(fileSize) else { return }
+                hashes.append((url, hash, Int64(fileSize), before))
             }
         }
 
@@ -112,17 +125,13 @@ final class SimilarImageFinder {
 
             let images = groupIndices.map { idx -> SimilarImage in
                 let item = hashes[idx]
-                // 썸네일도 autoreleasepool 안에서 생성
-                let thumbnail = autoreleasepool {
-                    downsampledThumbnail(for: item.url, maxPixels: 128)
-                }
                 return SimilarImage(
                     path: item.url.path,
                     name: item.url.lastPathComponent,
                     size: item.size,
-                    thumbnail: thumbnail
+                    snapshot: item.snapshot
                 )
-            }
+            }.sorted { $0.path < $1.path }
 
             groups.append(SimilarImageGroup(images: images))
         }
@@ -183,28 +192,8 @@ final class SimilarImageFinder {
         (a ^ b).nonzeroBitCount
     }
 
-    // MARK: - Downsampled Thumbnail (메모리 효율적)
-    // 원본 전체를 로딩하지 않고 ImageIO로 다운샘플된 썸네일만 읽음
-
-    private func downsampledThumbnail(for url: URL, maxPixels: Int) -> NSImage? {
-        let options: [CFString: Any] = [
-            kCGImageSourceShouldCache: false  // 원본 캐싱 안 함
-        ]
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, options as CFDictionary) else {
-            return nil
-        }
-
-        let thumbnailOptions: [CFString: Any] = [
-            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: false  // 즉시 캐싱 안 함
-        ]
-
-        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions as CFDictionary) else {
-            return nil
-        }
-
-        return NSImage(cgImage: cgImage, size: NSSize(width: maxPixels, height: maxPixels))
+    private func isSameOrDescendant(_ path: String, of root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
+
 }

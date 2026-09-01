@@ -1,15 +1,32 @@
 import Foundation
 
-struct BrowserData: Identifiable {
+struct BrowserData: Identifiable, Sendable {
     let id = UUID()
     let browserName: String
     let icon: String // SF Symbol
     let dataType: BrowserDataType
     let path: String
     let size: Int64
+    let snapshot: FileIdentitySnapshot
     var sizeFormatted: String { ByteCountFormatter.string(fromByteCount: size, countStyle: .file) }
 
-    enum BrowserDataType: String, CaseIterable {
+    init?(
+        browserName: String,
+        icon: String,
+        dataType: BrowserDataType,
+        path: String,
+        size: Int64
+    ) {
+        guard let snapshot = FileIdentitySnapshot.capture(path: path) else { return nil }
+        self.browserName = browserName
+        self.icon = icon
+        self.dataType = dataType
+        self.path = path
+        self.size = size
+        self.snapshot = snapshot
+    }
+
+    enum BrowserDataType: String, CaseIterable, Sendable {
         case history = "방문 기록"
         case cookies = "쿠키"
         case cache = "캐시"
@@ -48,7 +65,7 @@ final class PrivacyCleaner {
     private init() {}
 
     func scan(homeURL: URL? = nil) -> [BrowserData] {
-        let home = homeURL?.path ?? ("/Users/" + NSUserName())
+        let home = homeURL?.path ?? actualUserHomeURL().path
         var results: [BrowserData] = []
 
         // Chrome
@@ -63,7 +80,9 @@ final class PrivacyCleaner {
         for (type, path) in chromeTargets {
             let size = sizeOf(path)
             if size > 0 {
-                results.append(BrowserData(browserName: "Chrome", icon: "globe", dataType: type, path: path, size: size))
+                if let item = BrowserData(browserName: "Chrome", icon: "globe", dataType: type, path: path, size: size) {
+                    results.append(item)
+                }
             }
         }
 
@@ -77,14 +96,19 @@ final class PrivacyCleaner {
         for (type, path) in safariTargets {
             let size = sizeOf(path)
             if size > 0 {
-                results.append(BrowserData(browserName: "Safari", icon: "safari", dataType: type, path: path, size: size))
+                if let item = BrowserData(browserName: "Safari", icon: "safari", dataType: type, path: path, size: size) {
+                    results.append(item)
+                }
             }
         }
 
         // Firefox
         let firefoxProfiles = "\(home)/Library/Application Support/Firefox/Profiles"
-        if let profiles = try? fm.contentsOfDirectory(atPath: firefoxProfiles) {
+        if let profilesSnapshot = FileIdentitySnapshot.capture(path: firefoxProfiles),
+           profilesSnapshot.kind == .directory,
+           let profiles = try? fm.contentsOfDirectory(atPath: firefoxProfiles) {
             for profile in profiles {
+                guard profilesSnapshot.exactlyMatches(path: firefoxProfiles) else { break }
                 let profilePath = "\(firefoxProfiles)/\(profile)"
                 let ffTargets: [(BrowserData.BrowserDataType, String)] = [
                     (.history, "\(profilePath)/places.sqlite"),
@@ -95,7 +119,9 @@ final class PrivacyCleaner {
                 for (type, path) in ffTargets {
                     let size = sizeOf(path)
                     if size > 0 {
-                        results.append(BrowserData(browserName: "Firefox", icon: "flame", dataType: type, path: path, size: size))
+                        if let item = BrowserData(browserName: "Firefox", icon: "flame", dataType: type, path: path, size: size) {
+                            results.append(item)
+                        }
                     }
                 }
             }
@@ -111,7 +137,9 @@ final class PrivacyCleaner {
         for (type, path) in edgeTargets {
             let size = sizeOf(path)
             if size > 0 {
-                results.append(BrowserData(browserName: "Edge", icon: "globe", dataType: type, path: path, size: size))
+                if let item = BrowserData(browserName: "Edge", icon: "globe", dataType: type, path: path, size: size) {
+                    results.append(item)
+                }
             }
         }
 
@@ -121,7 +149,9 @@ final class PrivacyCleaner {
         for (type, path) in [(.cache, arcCache), (.localStorage, "\(arcBase)/StorageData")] as [(BrowserData.BrowserDataType, String)] {
             let size = sizeOf(path)
             if size > 0 {
-                results.append(BrowserData(browserName: "Arc", icon: "globe", dataType: type, path: path, size: size))
+                if let item = BrowserData(browserName: "Arc", icon: "globe", dataType: type, path: path, size: size) {
+                    results.append(item)
+                }
             }
         }
 
@@ -136,54 +166,98 @@ final class PrivacyCleaner {
         for (type, path) in braveTargets {
             let size = sizeOf(path)
             if size > 0 {
-                results.append(BrowserData(browserName: "Brave", icon: "shield", dataType: type, path: path, size: size))
+                if let item = BrowserData(browserName: "Brave", icon: "shield", dataType: type, path: path, size: size) {
+                    results.append(item)
+                }
             }
         }
 
         return results.sorted { $0.size > $1.size }
     }
 
-    func clean(items: [BrowserData]) -> (freed: Int64, errors: [String]) {
+    func clean(
+        items: [BrowserData],
+        runningBrowsers: Set<String>
+    ) -> (freed: Int64, errors: [String], movedIDs: Set<UUID>) {
         var freed: Int64 = 0
         var errors: [String] = []
+        var movedIDs: Set<UUID> = []
 
-        for item in items {
-            do {
-                let size = item.size
-                if fm.fileExists(atPath: item.path) {
-                    var isDir: ObjCBool = false
-                    fm.fileExists(atPath: item.path, isDirectory: &isDir)
-                    if isDir.boolValue {
-                        // Delete contents but keep folder
-                        if let contents = try? fm.contentsOfDirectory(atPath: item.path) {
-                            for file in contents {
-                                try? fm.removeItem(atPath: "\(item.path)/\(file)")
-                            }
-                        }
-                    } else {
-                        try fm.removeItem(atPath: item.path)
-                    }
-                    freed += size
+        var acceptedPaths: [String] = []
+        let candidates = items.sorted { pathDepth($0.path) < pathDepth($1.path) }
+        let approvedHome = normalizedPath(actualUserHomeURL().path)
+
+        for item in candidates {
+            if runningBrowsers.contains(item.browserName) {
+                errors.append("\(item.browserName) \(item.dataType.rawValue): 브라우저가 실행 중이라 캐시를 포함해 이동하지 않았습니다")
+                continue
+            }
+            let normalized = normalizedPath(item.path)
+            let resolved = URL(fileURLWithPath: normalized)
+                .resolvingSymlinksInPath().standardizedFileURL.path
+            guard isSameOrDescendant(normalized, of: approvedHome),
+                  isSameOrDescendant(resolved, of: approvedHome) else {
+                errors.append("\(item.browserName) \(item.dataType.rawValue): 승인된 홈 폴더 밖의 항목은 이동하지 않았습니다")
+                continue
+            }
+            if acceptedPaths.contains(where: { isSameOrDescendant(normalized, of: $0) }) {
+                continue
+            }
+            acceptedPaths.append(normalized)
+
+            guard item.snapshot.exactlyMatches(path: normalized) else {
+                errors.append("\(item.browserName) \(item.dataType.rawValue): 스캔 뒤 항목이 변경되어 이동하지 않았습니다")
+                continue
+            }
+
+            if item.snapshot.kind == .directory {
+                errors.append(
+                    "\(item.browserName) \(item.dataType.rawValue): 폴더 내부 전체를 검토 당시와 " +
+                    "동일하다고 증명할 수 없어 자동 이동하지 않았습니다. Finder에서 검토해 주세요"
+                )
+            } else {
+                guard item.snapshot.exactlyMatches(path: normalized) else {
+                    errors.append("\(item.browserName) \(item.dataType.rawValue): 최종 확인 중 변경되어 이동하지 않았습니다")
+                    continue
                 }
-            } catch {
-                errors.append("\(item.browserName) \(item.dataType.rawValue): \(error.localizedDescription)")
+                let result = VerifiedFileMover.shared.moveToTrash(
+                    path: normalized,
+                    expectedSnapshot: item.snapshot
+                )
+                if result.succeeded {
+                    freed += item.snapshot.size
+                    movedIDs.insert(item.id)
+                } else {
+                    errors.append("\(item.browserName) \(item.dataType.rawValue): \(result.error ?? "휴지통으로 이동하지 못했습니다")")
+                }
             }
         }
-        return (freed, errors)
+        return (freed, errors, movedIDs)
     }
 
     private func sizeOf(_ path: String) -> Int64 {
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return 0 }
-        if !isDir.boolValue {
-            return (try? fm.attributesOfItem(atPath: path))?[.size] as? Int64 ?? 0
-        }
+        guard let rootSnapshot = FileIdentitySnapshot.capture(path: path) else { return 0 }
+        if rootSnapshot.kind == .regularFile { return rootSnapshot.size }
         var total: Int64 = 0
         guard let enumerator = fm.enumerator(atPath: path) else { return 0 }
         while let file = enumerator.nextObject() as? String {
             let full = (path as NSString).appendingPathComponent(file)
-            total += (try? fm.attributesOfItem(atPath: full))?[.size] as? Int64 ?? 0
+            guard let snapshot = FileIdentitySnapshot.capture(path: full),
+                  snapshot.kind == .regularFile else { continue }
+            total += snapshot.size
         }
         return total
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private func pathDepth(_ path: String) -> Int {
+        (normalizedPath(path) as NSString).pathComponents.count
+    }
+
+    private func isSameOrDescendant(_ path: String, of root: String) -> Bool {
+        path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
     }
 }
