@@ -1,6 +1,6 @@
 [package]
 name = "bloomsweepy-desktop"
-version = "0.1.0"
+version = "1.1.0"
 description = "Cross-platform BroomSweepy storage scanner"
 authors = ["BroomSweepy contributors"]
 edition.workspace = true

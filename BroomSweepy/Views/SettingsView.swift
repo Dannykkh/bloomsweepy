@@ -165,13 +165,13 @@ struct SettingsView: View {
                     HStack {
                         Text("버전")
                         Spacer()
-                        Text("1.0.0")
+                        Text("1.1.0")
                             .foregroundStyle(.secondary)
                     }
                     HStack {
                         Text("빌드")
                         Spacer()
-                        Text("1")
+                        Text("2")
                             .foregroundStyle(.secondary)
                     }
                     HStack {

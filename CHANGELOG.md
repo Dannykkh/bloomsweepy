@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-09-01
+
+### Bug Fixes
+
+- **ci**: Gate NTFS-only catalog helpers so the Rust workspace builds cleanly on macOS. (`32dd698`)
+- **macos**: Keep parallel cache and large-file scans inside the cancellation operation. (`be630f9`)
+- **macos**: Add explicit result types to the concurrent Swift scan pipeline. (`ea08cb2`)
+- **macos**: Resolve Swift tuple-return and duplicate-keeper type inference errors found by Xcode. (`2741073`)
+
 ## [0.1.0] - 2026-09-01
 
 ### Features
