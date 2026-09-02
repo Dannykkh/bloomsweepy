@@ -18,6 +18,7 @@ const MAX_REPORT_OPERATIONS: usize = 50;
 const MAX_RECOVERY_ISSUES: usize = 50;
 const TRASH_TIME_TOLERANCE_MS: u128 = 15_000;
 const MAX_RECOVERY_JOURNAL_BYTES: u64 = MAX_ACTION_JOURNAL_BYTES * 2;
+const MAX_ACTION_HISTORY_ENTRIES: usize = 8;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +29,38 @@ pub(crate) struct ActionRecoveryReport {
     trash_lookup_performed: bool,
     incomplete_operations: Vec<RecoveryOperation>,
     issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ActionHistoryReport {
+    checked_at_unix_ms: u128,
+    journal_path: String,
+    entries: Vec<ActionHistoryEntry>,
+    issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ActionHistoryEntry {
+    operation_id: String,
+    action_kind: ActionHistoryKind,
+    started_at_unix_ms: u128,
+    completed_at_unix_ms: u128,
+    requested_count: usize,
+    moved_count: usize,
+    moved_bytes: u64,
+    cancelled: bool,
+    stopped_early: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ActionHistoryKind {
+    DuplicateFiles,
+    CleanupCandidates,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,6 +111,33 @@ struct JournalRecord {
     path: Option<String>,
     logical_bytes: Option<u64>,
     message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryJournalRecord {
+    operation_id: String,
+    event: String,
+    #[serde(default)]
+    timestamp_unix_ms: u128,
+    #[serde(default)]
+    action_kind: ActionHistoryKind,
+    #[serde(default)]
+    requested_count: usize,
+    #[serde(default)]
+    moved_count: usize,
+    #[serde(default)]
+    moved_bytes: u64,
+    #[serde(default)]
+    cancelled: bool,
+    #[serde(default)]
+    stopped_early: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct HistoryOperationStart {
+    started_at_unix_ms: u128,
+    action_kind: ActionHistoryKind,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -149,6 +209,14 @@ pub(crate) async fn get_action_recovery_status(
     tauri::async_runtime::spawn_blocking(move || inspect_action_recovery(journal_path))
         .await
         .map_err(|error| format!("이전 휴지통 작업 확인을 실행하지 못했습니다: {error}"))?
+}
+
+#[tauri::command]
+pub(crate) async fn get_action_history(app: AppHandle) -> Result<ActionHistoryReport, String> {
+    let journal_path = action_journal_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || inspect_action_history(journal_path))
+        .await
+        .map_err(|error| format!("최근 정리 기록 조회를 실행하지 못했습니다: {error}"))?
 }
 
 #[tauri::command]
@@ -268,6 +336,146 @@ fn inspect_action_recovery(journal_path: PathBuf) -> Result<ActionRecoveryReport
         trash_lookup_supported: trash_lookup.supported,
         trash_lookup_performed: trash_lookup.performed,
         incomplete_operations: report_operations,
+        issues,
+    })
+}
+
+fn inspect_action_history(journal_path: PathBuf) -> Result<ActionHistoryReport, String> {
+    let journal_files = [
+        journal_path.with_extension("previous.jsonl"),
+        journal_path.clone(),
+    ];
+    let mut issues = Vec::new();
+    let mut starts = HashMap::<String, HistoryOperationStart>::new();
+    let mut completed = HashMap::<String, ActionHistoryEntry>::new();
+
+    for journal_file in journal_files {
+        let file = match File::open(&journal_file) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                push_issue(
+                    &mut issues,
+                    format!(
+                        "최근 정리 기록을 열지 못했습니다 ({}): {error}",
+                        journal_file.display()
+                    ),
+                );
+                continue;
+            }
+        };
+        match file.metadata() {
+            Ok(metadata) if metadata.len() > MAX_RECOVERY_JOURNAL_BYTES => {
+                push_issue(
+                    &mut issues,
+                    format!(
+                        "최근 정리 기록이 안전한 읽기 한도 {}바이트를 넘었습니다 ({})",
+                        MAX_RECOVERY_JOURNAL_BYTES,
+                        journal_file.display()
+                    ),
+                );
+                continue;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                push_issue(
+                    &mut issues,
+                    format!(
+                        "최근 정리 기록 크기를 확인하지 못했습니다 ({}): {error}",
+                        journal_file.display()
+                    ),
+                );
+                continue;
+            }
+        }
+
+        for (line_index, line) in BufReader::new(file).lines().enumerate() {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    push_issue(
+                        &mut issues,
+                        format!(
+                            "최근 정리 기록 {}의 {}번째 줄을 읽지 못했습니다: {error}",
+                            journal_file.display(),
+                            line_index + 1
+                        ),
+                    );
+                    continue;
+                }
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: HistoryJournalRecord = match serde_json::from_str(&line) {
+                Ok(record) => record,
+                Err(error) => {
+                    push_issue(
+                        &mut issues,
+                        format!(
+                            "최근 정리 기록 {}의 {}번째 줄 형식이 손상됐습니다: {error}",
+                            journal_file.display(),
+                            line_index + 1
+                        ),
+                    );
+                    continue;
+                }
+            };
+            match record.event.as_str() {
+                "planned" => {
+                    starts.insert(
+                        record.operation_id,
+                        HistoryOperationStart {
+                            started_at_unix_ms: record.timestamp_unix_ms,
+                            action_kind: record.action_kind,
+                        },
+                    );
+                }
+                "completed" => {
+                    let start = starts
+                        .get(&record.operation_id)
+                        .copied()
+                        .unwrap_or_default();
+                    completed.insert(
+                        record.operation_id.clone(),
+                        ActionHistoryEntry {
+                            operation_id: record.operation_id,
+                            action_kind: match record.action_kind {
+                                ActionHistoryKind::Unknown => start.action_kind,
+                                action_kind => action_kind,
+                            },
+                            started_at_unix_ms: if start.started_at_unix_ms > 0 {
+                                start.started_at_unix_ms.min(record.timestamp_unix_ms)
+                            } else {
+                                record.timestamp_unix_ms
+                            },
+                            completed_at_unix_ms: record.timestamp_unix_ms,
+                            requested_count: record.requested_count,
+                            moved_count: record.moved_count,
+                            moved_bytes: record.moved_bytes,
+                            cancelled: record.cancelled,
+                            stopped_early: record.stopped_early,
+                        },
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut entries = completed.into_values().collect::<Vec<_>>();
+    entries.sort_unstable_by(|left, right| {
+        right
+            .completed_at_unix_ms
+            .cmp(&left.completed_at_unix_ms)
+            .then_with(|| right.operation_id.cmp(&left.operation_id))
+    });
+    entries.truncate(MAX_ACTION_HISTORY_ENTRIES);
+
+    Ok(ActionHistoryReport {
+        checked_at_unix_ms: unix_time_ms(),
+        journal_path: journal_path.to_string_lossy().into_owned(),
+        entries,
         issues,
     })
 }
@@ -930,6 +1138,33 @@ mod tests {
             )]),
             ..OperationState::default()
         }
+    }
+
+    #[test]
+    fn action_history_returns_only_bounded_completed_summaries() {
+        let temp = tempfile::tempdir().expect("create temp directory");
+        let journal_path = temp.path().join("action-journal.jsonl");
+        fs::write(
+            &journal_path,
+            concat!(
+                "{\"schemaVersion\":1,\"timestampUnixMs\":100,\"operationId\":\"one\",\"event\":\"planned\",\"actionKind\":\"duplicateFiles\",\"items\":[{\"path\":\"secret-a\",\"logicalBytes\":10}]}\n",
+                "{\"timestampUnixMs\":120,\"operationId\":\"one\",\"event\":\"completed\",\"actionKind\":\"duplicateFiles\",\"requestedCount\":1,\"movedCount\":1,\"movedBytes\":10,\"cancelled\":false,\"stoppedEarly\":false}\n",
+                "{\"schemaVersion\":1,\"timestampUnixMs\":200,\"operationId\":\"two\",\"event\":\"planned\",\"actionKind\":\"cleanupCandidates\",\"items\":[{\"path\":\"secret-b\",\"logicalBytes\":20}]}\n",
+                "{\"timestampUnixMs\":220,\"operationId\":\"two\",\"event\":\"completed\",\"actionKind\":\"cleanupCandidates\",\"requestedCount\":2,\"movedCount\":1,\"movedBytes\":20,\"cancelled\":true,\"stoppedEarly\":true}\n"
+            ),
+        )
+        .expect("write history fixture");
+
+        let report = inspect_action_history(journal_path).expect("inspect history");
+
+        assert_eq!(report.entries.len(), 2);
+        assert_eq!(report.entries[0].operation_id, "two");
+        assert!(matches!(
+            report.entries[0].action_kind,
+            ActionHistoryKind::CleanupCandidates
+        ));
+        assert!(report.entries[0].cancelled);
+        assert_eq!(report.entries[1].moved_bytes, 10);
     }
 
     #[test]

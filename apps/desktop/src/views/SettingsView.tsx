@@ -1,14 +1,30 @@
 import { Database, HardDrive, ShieldCheck } from "lucide-react";
-import type { ScanConfig } from "../types";
+import { DockerManagementPanel } from "../components/DockerManagementPanel";
+import type { DockerManagementStatus, ScanConfig } from "../types";
 
 interface SettingsViewProps {
   config: ScanConfig;
+  dockerStatus: DockerManagementStatus | null;
+  dockerLoading: boolean;
+  dockerChanging: boolean;
+  dockerError: string | null;
   onConfigChange: (config: ScanConfig) => void;
+  onDockerEnabledChange: (enabled: boolean) => Promise<void>;
+  onOpenDocker: () => void;
 }
 
 const megabyte = 1024 * 1024;
 
-export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
+export function SettingsView({
+  config,
+  dockerStatus,
+  dockerLoading,
+  dockerChanging,
+  dockerError,
+  onConfigChange,
+  onDockerEnabledChange,
+  onOpenDocker,
+}: SettingsViewProps) {
   function update<Key extends keyof ScanConfig>(key: Key, value: ScanConfig[Key]) {
     onConfigChange({ ...config, [key]: value });
   }
@@ -98,6 +114,15 @@ export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
         </label>
       </section>
 
+      <DockerManagementPanel
+        status={dockerStatus}
+        loading={dockerLoading}
+        changing={dockerChanging}
+        error={dockerError}
+        onEnabledChange={onDockerEnabledChange}
+        onOpenDocker={onOpenDocker}
+      />
+
       <section className="safety-contract">
         <ShieldCheck size={22} aria-hidden="true" />
         <div>
@@ -107,7 +132,8 @@ export function SettingsView({ config, onConfigChange }: SettingsViewProps) {
             <li>같은 저장공간을 가리키는 여러 파일 이름은 중복 낭비로 세지 않습니다.</li>
             <li>일부 내용으로 후보를 줄인 뒤 전체 내용을 끝까지 비교해 중복을 확정합니다.</li>
             <li>선택 항목은 실행 직전 재검증하고 운영체제 휴지통으로만 이동합니다.</li>
-            <li>영구 삭제와 Windows 설치 정보 변경은 제공하지 않습니다.</li>
+            <li>일반 파일은 영구 삭제하지 않으며 Windows 설치 정보도 변경하지 않습니다.</li>
+            <li>Docker 정리는 예외적으로 휴지통을 거치지 않아 별도 확인 뒤에만 실행합니다.</li>
           </ul>
         </div>
       </section>

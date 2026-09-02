@@ -1,5 +1,7 @@
 export type ViewId =
+  | "dashboard"
   | "overview"
+  | "docker"
   | "files"
   | "documents"
   | "cleanup"
@@ -7,6 +9,239 @@ export type ViewId =
   | "duplicates"
   | "assistant"
   | "settings";
+
+export type AssistantProviderKind =
+  | "codex"
+  | "claudeCode"
+  | "grok"
+  | "antigravity"
+  | "ollama";
+
+export type AssistantScopeKind = "folder" | "docker";
+
+export type AssistantAuthentication =
+  | "authenticated"
+  | "required"
+  | "notRequired";
+
+export interface AssistantProviderModel {
+  id: string;
+  label: string;
+}
+
+export interface AssistantProviderStatus {
+  provider: AssistantProviderKind;
+  label: string;
+  installed: boolean;
+  authentication: AssistantAuthentication;
+  available: boolean;
+  busy: boolean;
+  detail: string;
+  models: AssistantProviderModel[];
+}
+
+export interface AssistantChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface AssistantFolderChild {
+  name: string;
+  kind: "file" | "directory";
+  logicalBytes: number;
+  fileCount: number;
+  directoryCount: number;
+}
+
+export interface AssistantFolderSummary {
+  scopeName: string;
+  completedAtUnixMs: number;
+  totalLogicalBytes: number;
+  totalFiles: number;
+  totalDirectories: number;
+  unreadableEntries: number;
+  emptyDirectoryCount: number;
+  childrenTruncated: boolean;
+  children: AssistantFolderChild[];
+}
+
+export interface AssistantChatRequest {
+  provider: AssistantProviderKind;
+  model: string | null;
+  message: string;
+  history: AssistantChatTurn[];
+  summary: AssistantFolderSummary;
+  scopeKind: AssistantScopeKind;
+  includeDockerStatus: boolean;
+}
+
+export interface AssistantChatResponse {
+  provider: AssistantProviderKind;
+  label: string;
+  model: string | null;
+  message: string;
+  dockerContext: AssistantDockerContext | null;
+}
+
+export interface AssistantSessionSummary {
+  id: string;
+  scopeKind: AssistantScopeKind;
+  scopeRoot: string;
+  scopeName: string;
+  createdAtUnixMs: number;
+  updatedAtUnixMs: number;
+  messageCount: number;
+  lastProvider: AssistantProviderKind | null;
+  lastModel: string | null;
+}
+
+export interface AssistantStoredMessage extends AssistantChatTurn {
+  sequence: number;
+  provider: AssistantProviderKind | null;
+  providerLabel: string | null;
+  model: string | null;
+  createdAtUnixMs: number;
+}
+
+export interface AssistantSessionDetail {
+  session: AssistantSessionSummary;
+  folderSummary: AssistantFolderSummary;
+  messages: AssistantStoredMessage[];
+}
+
+export interface CreateAssistantSessionRequest {
+  scopeKind: AssistantScopeKind;
+  scopeRoot: string;
+  folderSummary: AssistantFolderSummary;
+}
+
+export interface AppendAssistantMessageRequest {
+  sessionId: string;
+  role: "user" | "assistant";
+  content: string;
+  provider: AssistantProviderKind | null;
+  model: string | null;
+}
+
+export interface AssistantMessageMutation {
+  session: AssistantSessionSummary;
+  message: AssistantStoredMessage;
+}
+
+export type DockerUsageKind =
+  | "images"
+  | "containers"
+  | "volumes"
+  | "buildCache";
+
+export interface DockerUsageCategory {
+  kind: DockerUsageKind;
+  label: string;
+  totalCount: number;
+  activeCount: number;
+  sizeBytes: number;
+  reclaimableBytes: number;
+  sizeDisplay: string;
+  reclaimableDisplay: string;
+  cleanupSupported: boolean;
+}
+
+export type DockerCleanupKind =
+  | "buildCache"
+  | "danglingImages"
+  | "stoppedContainers";
+
+export type DockerCleanupOutcome =
+  | "completed"
+  | "partial"
+  | "cancelled"
+  | "failed";
+
+export interface DockerCleanupHistorySummary {
+  operationId: string;
+  finishedAtUnixMs: number;
+  kinds: DockerCleanupKind[];
+  outcome: DockerCleanupOutcome;
+  reportedReclaimedBytes: number;
+  message: string;
+}
+
+export interface DockerManagementStatus {
+  enabled: boolean;
+  cliInstalled: boolean | null;
+  daemonRunning: boolean | null;
+  busy: boolean;
+  detail: string;
+  clientVersion: string | null;
+  serverVersion: string | null;
+  capturedAtUnixMs: number | null;
+  totalSizeBytes: number;
+  reclaimableBytes: number;
+  categories: DockerUsageCategory[];
+  lastCleanup: DockerCleanupHistorySummary | null;
+}
+
+export interface AssistantDockerContext {
+  enabled: boolean;
+  available: boolean;
+  detail: string;
+  capturedAtUnixMs: number | null;
+  totalSizeBytes: number;
+  reclaimableBytes: number;
+  volumesExcluded: boolean;
+  categories: DockerUsageCategory[];
+}
+
+export interface DockerCleanupPreviewItem {
+  kind: DockerCleanupKind;
+  label: string;
+  description: string;
+  estimatedReclaimableBytes: number;
+  estimateDisplay: string;
+  commandDisplay: string;
+  defaultSelected: boolean;
+}
+
+export interface DockerCleanupPreview {
+  previewId: string;
+  createdAtUnixMs: number;
+  expiresAtUnixMs: number;
+  items: DockerCleanupPreviewItem[];
+  volumesExcluded: boolean;
+}
+
+export interface ExecuteDockerCleanupRequest {
+  previewId: string;
+  selectedKinds: DockerCleanupKind[];
+  irreversibleAcknowledged: boolean;
+}
+
+export interface DockerCleanupStepResult {
+  kind: DockerCleanupKind;
+  label: string;
+  completed: boolean;
+  cancelled: boolean;
+  reportedReclaimedBytes: number;
+  message: string;
+}
+
+export interface DockerCleanupResult {
+  operationId: string;
+  outcome: DockerCleanupOutcome;
+  startedAtUnixMs: number;
+  finishedAtUnixMs: number;
+  reportedReclaimedBytes: number;
+  steps: DockerCleanupStepResult[];
+  statusAfter: DockerManagementStatus;
+  historyRecorded: boolean;
+  message: string;
+}
+
+export interface DockerCleanupProgress {
+  message: string;
+  completedSteps: number;
+  totalSteps: number;
+}
 
 export interface ControlOperationStatus {
   operationId: string;
@@ -445,6 +680,27 @@ export interface ActionRecoveryReport {
   issues: string[];
 }
 
+export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "unknown";
+
+export interface ActionHistoryEntry {
+  operationId: string;
+  actionKind: ActionHistoryKind;
+  startedAtUnixMs: number;
+  completedAtUnixMs: number;
+  requestedCount: number;
+  movedCount: number;
+  movedBytes: number;
+  cancelled: boolean;
+  stoppedEarly: boolean;
+}
+
+export interface ActionHistoryReport {
+  checkedAtUnixMs: number;
+  journalPath: string;
+  entries: ActionHistoryEntry[];
+  issues: string[];
+}
+
 export type DocumentIndexPhase = "discovering" | "indexing" | "finalizing";
 
 export interface DocumentIndexProgress {
@@ -600,4 +856,23 @@ export interface FileCatalogSearchReport {
   searchDurationMs: number;
   resultsTruncated: boolean;
   results: FileCatalogSearchResult[];
+}
+
+export interface FileCatalogRecentEntry {
+  name: string;
+  path: string;
+  parent: string;
+  extension: string;
+  logicalBytes: number;
+  modifiedAtUnixMs: number | null;
+  firstSeenAtUnixMs: number;
+}
+
+export interface FileCatalogRecentReport {
+  root: string;
+  completedAtUnixMs: number;
+  comparisonReady: boolean;
+  totalNewFiles: number;
+  resultsTruncated: boolean;
+  results: FileCatalogRecentEntry[];
 }

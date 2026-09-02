@@ -53,16 +53,16 @@ flowchart LR
 ## Current CodeMap Shape
 
 - Projects: 0
-- Files: 290
-- Documents/assets: 40 / 239
-- Routes/API/UI signals: 0 / 0 / 79
+- Files: 325
+- Documents/assets: 41 / 295
+- Routes/API/UI signals: 0 / 0 / 89
 
 ## Main Implementation Areas
 
 | Area | Files | Why it matters |
 |------|-------|----------------|
-| [views](../views.md) | 37 | WPF View/Window/Panel |
-| [apps-desktop](../apps-desktop.md) | 27 | .tsx×12, .rs×8, .ts×7 |
+| [apps-desktop](../apps-desktop.md) | 41 | .ts×16, .tsx×14, .rs×11 |
+| [views](../views.md) | 39 | WPF View/Window/Panel |
 | [services](../services.md) | 22 | 서비스 클래스/메서드 |
 | [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |
 | [apps-bloomsweepy-mcp](../apps-bloomsweepy-mcp.md) | 3 | .rs×3 |

@@ -1,0 +1,21 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    A([설정 기본 꺼짐]) --> B{사용자가 Docker 관리를 켰나?}
+    B -->|아니요| C[Docker CLI 탐색과 전용 메뉴 없음]
+    B -->|예| D[사이드바에 Docker 용량 메뉴 표시]
+    D --> E[전용 화면에서 Docker 사용량 조회]
+    E --> F[필요하면 Docker 대상 대화 시작]
+    F --> G[앱이 허용 범주의 일회성 미리보기 생성]
+    G --> H{복구 불가와 대상을 최종 확인했나?}
+    H -->|아니요| I([변경 없이 취소])
+    H -->|예| J([앱이 고정 Docker 명령 실행 후 재조회])
+    classDef accent stroke:#4c7ff7,stroke-width:2px
+    class J accent

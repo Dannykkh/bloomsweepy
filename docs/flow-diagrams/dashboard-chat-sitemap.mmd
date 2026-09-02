@@ -1,0 +1,20 @@
+flowchart LR
+    App["BroomSweepy"] --> Dashboard["대시보드"]
+    App --> Storage["용량 관리"]
+    App --> Files["파일 찾기"]
+    App --> Documents["문서 찾기"]
+    App --> Chat["대화"]
+    App --> Settings["설정"]
+
+    Dashboard --> Volumes["드라이브 용량"]
+    Dashboard --> CleanupHistory["최근 정리"]
+    Dashboard --> RecentFiles["최근 추가 파일"]
+
+    Storage --> Map["폴더 용량 지도"]
+    Storage --> Large["큰 파일"]
+    Storage --> Duplicates["중복 파일"]
+    Storage --> Cleanup["정리 후보"]
+
+    Chat --> Scope["선택 폴더"]
+    Chat --> Transcript["대화 기록"]
+    Chat --> Provider["로컬 Codex 상태와 접힌 권한 상세"]

@@ -6,7 +6,7 @@
 
 BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복 파일·문서 안의 문장을 찾는 데스크톱 도구입니다. 기존 macOS SwiftUI 앱은 유지하면서, Windows와 macOS에서 같은 분석 엔진과 UI를 사용할 수 있는 Tauri 2 기반 앱을 함께 개발합니다.
 
-현재 Tauri 앱은 분석 결과에서 사용자가 직접 선택한 중복 파일과 Temp·캐시·AppData 후보를 운영체제 휴지통으로 이동할 수 있습니다. 영구 삭제와 휴지통 비우기는 제공하지 않으며, 제거 프로그램 레지스트리는 계속 읽기 전용입니다.
+현재 Tauri 앱은 분석 결과에서 사용자가 직접 선택한 중복 파일과 Temp·캐시·AppData 후보를 운영체제 휴지통으로 이동할 수 있습니다. 일반 파일 영구 삭제와 휴지통 비우기는 제공하지 않으며, 제거 프로그램 레지스트리는 계속 읽기 전용입니다. 선택형 Docker 정리는 예외적으로 휴지통을 거치지 않으므로 별도 확인과 제한된 고정 명령을 사용합니다.
 
 > 출처: [README.md](../../README.md)
 
@@ -15,8 +15,8 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 - Project: `bloomsweepy`
 - Detected projects: 0
 - Source categories: 9
-- Files: 290, documents: 40, assets: 239
-- Routes: 0, API signals: 0, UI signals: 79
+- Files: 325, documents: 41, assets: 295
+- Routes: 0, API signals: 0, UI signals: 89
 
 ## Start Here
 
@@ -44,8 +44,8 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 | Area | Files | Why it matters |
 |------|-------|----------------|
-| [views](../views.md) | 37 | WPF View/Window/Panel |
-| [apps-desktop](../apps-desktop.md) | 27 | .tsx×12, .rs×8, .ts×7 |
+| [apps-desktop](../apps-desktop.md) | 41 | .ts×16, .tsx×14, .rs×11 |
+| [views](../views.md) | 39 | WPF View/Window/Panel |
 | [services](../services.md) | 22 | 서비스 클래스/메서드 |
 | [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |
 | [apps-bloomsweepy-mcp](../apps-bloomsweepy-mcp.md) | 3 | .rs×3 |

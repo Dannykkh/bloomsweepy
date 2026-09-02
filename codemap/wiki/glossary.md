@@ -15,8 +15,8 @@
 | Knowledge Graph | 지식 그래프 | 코드/문서 관계를 그래프로 압축해 탐색하는 보조 지식 계층 | codemap/graph.json, graph.html |
 | Report Tab | 리포트 탭 | 프로젝트 문서, 메모리, 코드 위키를 WebView2로 읽는 보고서 표면 | ReportPanelViewModel |
 | Project Session | 프로젝트 세션 | 한 프로젝트 메인탭의 런타임 aggregate root | ProjectSessionViewModel |
+| apps-desktop | apps-desktop | .ts×16, .tsx×14, .rs×11 | codemap/apps-desktop.md |
 | views | views | WPF View/Window/Panel | codemap/views.md |
-| apps-desktop | apps-desktop | .tsx×12, .rs×8, .ts×7 | codemap/apps-desktop.md |
 | services | services | 서비스 클래스/메서드 | codemap/services.md |
 | crates-bloomsweepy-core | crates-bloomsweepy-core | .rs×11 | codemap/crates-bloomsweepy-core.md |
 | apps-bloomsweepy-mcp | apps-bloomsweepy-mcp | .rs×3 | codemap/apps-bloomsweepy-mcp.md |

@@ -3,8 +3,17 @@
 > WPF View/Window/Panel
 
 ## apps/desktop/src/views/AssistantView.tsx
-- **component** `AssistantView` (L18)
-- **type** `AssistantViewProps` (L4)
+- **component** `FolderScopeMetrics` (L813)
+- **component** `DockerScopeMetrics` (L832)
+- **component** `DriveShareIndicator` (L851)
+- **component** `AssistantEmptyState` (L897)
+- **hook** `userMutation()` (L412)
+- **type** `CSSProperties` (L21)
+- **type** `FormEvent` (L22)
+- **type** `KeyboardEvent` (L23)
+- **type** `AssistantDisplayTurn` (L60)
+- **type** `AssistantViewProps` (L68)
+- **type** `FolderDriveShare` (L846)
 
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70)
@@ -12,6 +21,21 @@
 - **type** `CleanupViewProps` (L33)
 - **type** `CleanupFilter` (L50)
 - **type** `CleanupMetricProps` (L454)
+
+## apps/desktop/src/views/DashboardView.tsx
+- **component** `DashboardView` (L39)
+- **component** `DashboardHeading` (L222)
+- **component** `VolumeRow` (L234)
+- **component** `HistoryRow` (L285)
+- **component** `DashboardEmpty` (L313)
+- **hook** `usedBytes()` (L244)
+- **hook** `usedPercent()` (L245)
+- **type** `DashboardViewProps` (L22)
+- **type** `DashboardHeadingProps` (L215)
+
+## apps/desktop/src/views/DockerManagementView.tsx
+- **component** `DockerManagementView` (L22)
+- **type** `DockerManagementViewProps` (L13)
 
 ## apps/desktop/src/views/DocumentSearchView.tsx
 - **component** `DocumentSearchView` (L111)
@@ -35,14 +59,12 @@
 - **type** `LargeFilesViewProps` (L6)
 
 ## apps/desktop/src/views/OverviewView.tsx
-- **component** `OverviewView` (L58)
-- **component** `GuideStep` (L296)
-- **type** `OverviewViewProps` (L28)
-- **type** `GuideStepProps` (L289)
+- **component** `OverviewView` (L55)
+- **type** `OverviewViewProps` (L25)
 
 ## apps/desktop/src/views/SettingsView.tsx
-- **component** `SettingsView` (L10)
-- **type** `SettingsViewProps` (L3)
+- **component** `SettingsView` (L17)
+- **type** `SettingsViewProps` (L4)
 
 ## BroomSweepy/Views/AppUninstallerView.swift
 - **view** `AppUninstallerView` : View (L3)

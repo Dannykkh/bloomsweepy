@@ -103,6 +103,13 @@ struct Journal {
     writer: BufWriter<File>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum TrashActionKind {
+    DuplicateFiles,
+    CleanupCandidates,
+}
+
 impl Journal {
     fn open(path: PathBuf) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
@@ -216,6 +223,7 @@ pub(crate) async fn trash_duplicate_files(
         execute_verified_items(
             verified,
             journal_path,
+            TrashActionKind::DuplicateFiles,
             &cancellation_for_worker,
             |progress| {
                 let _ = app_for_worker.emit("trash-progress", progress);
@@ -284,6 +292,7 @@ pub(crate) async fn trash_cleanup_candidates(
         execute_verified_items(
             verified,
             journal_path,
+            TrashActionKind::CleanupCandidates,
             &cancellation_for_worker,
             |progress| {
                 let _ = app_for_worker.emit("trash-progress", progress);
@@ -302,6 +311,7 @@ pub(crate) async fn trash_cleanup_candidates(
 fn execute_verified_items<B, F>(
     items: Vec<VerifiedTrashItem>,
     journal_path: PathBuf,
+    action_kind: TrashActionKind,
     cancellation: &AtomicBool,
     mut on_progress: F,
     backend: &B,
@@ -327,6 +337,7 @@ where
         "timestampUnixMs": unix_time_ms(),
         "operationId": operation_id,
         "event": "planned",
+        "actionKind": action_kind,
         "recovery": "osTrash",
         "items": planned_items,
     }))?;
@@ -470,6 +481,7 @@ where
                 "timestampUnixMs": unix_time_ms(),
                 "operationId": operation_id,
                 "event": "completed",
+                "actionKind": action_kind,
                 "requestedCount": requested_count,
                 "movedCount": moved_count,
                 "movedBytes": moved_bytes,
@@ -651,6 +663,7 @@ mod tests {
         let result = execute_verified_items(
             verified,
             journal_path.clone(),
+            TrashActionKind::DuplicateFiles,
             &AtomicBool::new(false),
             |_| {},
             &backend,
@@ -701,6 +714,7 @@ mod tests {
         let result = execute_verified_items(
             verified,
             temp.path().join("cancel-journal.jsonl"),
+            TrashActionKind::DuplicateFiles,
             &cancellation,
             |_| {},
             &backend,

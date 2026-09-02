@@ -5,11 +5,11 @@ use bloomsweepy_core::{
     DirectoryScanReport, DocumentIndexConfig, DocumentIndexProgress, DocumentIndexReport,
     DocumentIndexStatus, DocumentSearchReport, DocumentSearchRequest, DriveScanConfig,
     DriveScanProgress, DriveScanReport, DuplicateGroup, FileCatalogConfig, FileCatalogProgress,
-    FileCatalogReport, FileCatalogSearchReport, FileCatalogSearchRequest, FileCatalogStatus,
-    ScanConfig, ScanError, ScanProgress, ScanReport, build_document_index, build_file_catalog,
-    clear_file_catalog, document_index_status, file_catalog_status, scan_cleanup_candidates,
-    scan_directory_level, scan_drive, scan_path, search_document_index_with_cancellation,
-    search_file_catalog_with_cancellation,
+    FileCatalogRecentReport, FileCatalogReport, FileCatalogSearchReport, FileCatalogSearchRequest,
+    FileCatalogStatus, ScanConfig, ScanError, ScanProgress, ScanReport, build_document_index,
+    build_file_catalog, clear_file_catalog, document_index_status, file_catalog_status,
+    recent_file_catalog_entries, scan_cleanup_candidates, scan_directory_level, scan_drive,
+    scan_path, search_document_index_with_cancellation, search_file_catalog_with_cancellation,
 };
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,10 @@ use sysinfo::Disks;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod action_recovery;
+mod assistant_provider;
+mod assistant_sessions;
 mod control_server;
+mod docker_tools;
 mod system_inventory;
 mod trash_actions;
 #[cfg(windows)]
@@ -844,6 +847,17 @@ async fn get_file_catalog_status(app: AppHandle) -> Result<Option<FileCatalogSta
 }
 
 #[tauri::command]
+async fn get_recent_file_catalog_entries(
+    app: AppHandle,
+) -> Result<Option<FileCatalogRecentReport>, String> {
+    let database_path = file_catalog_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || recent_file_catalog_entries(database_path, 8))
+        .await
+        .map_err(|error| format!("최근 추가 파일 조회를 실행하지 못했습니다: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn start_file_catalog_build(
     app: AppHandle,
     state: State<'_, ScanRuntime>,
@@ -1022,6 +1036,8 @@ pub fn run() {
     let app = tauri::Builder::default()
         .manage(ScanRuntime::default())
         .manage(StoredReports::default())
+        .manage(assistant_provider::AssistantProviderState::default())
+        .manage(docker_tools::DockerManagerState::default())
         .manage(control_server::ControlStatusStore::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1045,6 +1061,19 @@ pub fn run() {
             control_server::get_control_status,
             control_server::configure_control_search_access,
             control_server::configure_control_scan_access,
+            assistant_provider::get_assistant_provider_status,
+            assistant_provider::ask_assistant,
+            assistant_provider::cancel_assistant,
+            assistant_sessions::list_assistant_sessions,
+            assistant_sessions::create_assistant_session,
+            assistant_sessions::get_assistant_session,
+            assistant_sessions::append_assistant_message,
+            assistant_sessions::delete_assistant_session,
+            docker_tools::get_docker_management_status,
+            docker_tools::set_docker_management_enabled,
+            docker_tools::create_docker_cleanup_preview,
+            docker_tools::execute_docker_cleanup,
+            docker_tools::cancel_docker_cleanup,
             get_system_overview,
             is_scan_running,
             start_scan,
@@ -1056,10 +1085,12 @@ pub fn run() {
             start_document_index,
             search_documents,
             get_file_catalog_status,
+            get_recent_file_catalog_entries,
             start_file_catalog_build,
             search_file_catalog_entries,
             clear_file_catalog_index,
             action_recovery::get_action_recovery_status,
+            action_recovery::get_action_history,
             action_recovery::open_system_trash,
             trash_actions::trash_duplicate_files,
             trash_actions::trash_cleanup_candidates,
@@ -1070,6 +1101,8 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            assistant_provider::shutdown(app_handle);
+            docker_tools::shutdown(app_handle);
             if let Some(runtime) = app_handle.try_state::<ScanRuntime>() {
                 runtime.close_and_cancel();
             }

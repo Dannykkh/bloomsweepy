@@ -2,6 +2,10 @@ const byteFormatter = new Intl.NumberFormat("ko-KR", {
   maximumFractionDigits: 1,
 });
 
+const dockerByteFormatter = new Intl.NumberFormat("ko-KR", {
+  maximumFractionDigits: 2,
+});
+
 const countFormatter = new Intl.NumberFormat("ko-KR");
 
 const dateFormatter = new Intl.DateTimeFormat("ko-KR", {
@@ -21,6 +25,18 @@ export function formatBytes(bytes: number): string {
   );
   const value = bytes / 1024 ** exponent;
   return `${byteFormatter.format(value)} ${units[exponent]}`;
+}
+
+export function formatDockerBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+
+  const units = ["B", "kB", "MB", "GB", "TB", "PB"];
+  const exponent = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1_000)),
+    units.length - 1,
+  );
+  const value = bytes / 1_000 ** exponent;
+  return `${dockerByteFormatter.format(value)} ${units[exponent]}`;
 }
 
 export function formatCount(value: number): string {

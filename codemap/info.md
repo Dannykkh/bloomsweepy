@@ -40,12 +40,12 @@
 - Project: `bloomsweepy`
 - Detected projects: 0
 - Source categories: 9
-- Files: 290
-- Documents: 40
-- Assets: 239
+- Files: 325
+- Documents: 41
+- Assets: 295
 - Routes: 0
 - API signals: 0
-- UI signals: 79
+- UI signals: 89
 
 ## Source Categories
 

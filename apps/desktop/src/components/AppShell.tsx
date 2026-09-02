@@ -1,11 +1,13 @@
 import { useEffect, type ReactNode } from "react";
 import {
-  Bot,
+  Boxes,
   FileSearch,
   FolderOpen,
   HardDrive,
+  LayoutDashboard,
   Map,
   Menu,
+  MessageSquare,
   Search,
   Settings,
   Sparkles,
@@ -26,23 +28,45 @@ interface AppShellProps {
   volume: VolumeInfo | null;
   mobileNavigationOpen: boolean;
   selectionBlocked: boolean;
+  dockerEnabled: boolean;
   onMobileNavigationChange: (open: boolean) => void;
   onNavigate: (view: ViewId) => void;
   onPickFolder: () => void;
 }
 
-const navigation: Array<{
+const navigationBeforeDocker: Array<{
   id: ViewId;
   label: string;
   description: string;
   icon: typeof Map;
 }> = [
   {
+    id: "dashboard",
+    label: "대시보드",
+    description: "디스크와 최근 변화",
+    icon: LayoutDashboard,
+  },
+  {
     id: "overview",
     label: "용량 관리",
     description: "지도·큰 파일·중복",
     icon: Map,
   },
+];
+
+const dockerNavigation = {
+  id: "docker" as ViewId,
+  label: "Docker 용량",
+  description: "이미지·캐시·컨테이너",
+  icon: Boxes,
+};
+
+const navigationAfterDocker: Array<{
+  id: ViewId;
+  label: string;
+  description: string;
+  icon: typeof Map;
+}> = [
   {
     id: "files",
     label: "파일 이름 찾기",
@@ -57,9 +81,9 @@ const navigation: Array<{
   },
   {
     id: "assistant",
-    label: "AI 도우미",
-    description: "선택 기능",
-    icon: Bot,
+    label: "대화",
+    description: "설치된 AI CLI",
+    icon: MessageSquare,
   },
   {
     id: "settings",
@@ -85,10 +109,20 @@ const folderViews = new Set<ViewId>([
 ]);
 
 const titles: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
+  dashboard: {
+    eyebrow: "오늘의 저장공간",
+    title: "대시보드",
+    description: "드라이브 상태와 최근 변화를 한 번에 확인합니다.",
+  },
   overview: {
     eyebrow: "용량 관리",
     title: "폴더 용량 지도",
     description: "큰 사각형부터 따라가며 용량이 늘어난 위치를 찾습니다.",
+  },
+  docker: {
+    eyebrow: "개발 도구",
+    title: "Docker 용량",
+    description: "Docker가 보고한 이미지·컨테이너·볼륨·빌드 캐시 사용량을 확인합니다.",
   },
   files: {
     eyebrow: "파일 찾기",
@@ -116,9 +150,9 @@ const titles: Record<ViewId, { eyebrow: string; title: string; description: stri
     description: "파일 내용을 끝까지 비교해 실제로 같은 결과만 표시합니다.",
   },
   assistant: {
-    eyebrow: "선택 기능",
-    title: "AI 도우미",
-    description: "로컬 CLI 연결 상태와 이번 실행의 허용 범위를 관리합니다.",
+    eyebrow: "선택한 대상과 대화",
+    title: "대화",
+    description: "폴더 또는 Docker를 고르면 앱이 확인하고 로컬 AI CLI가 결과를 설명합니다.",
   },
   settings: {
     eyebrow: "앱 설정",
@@ -135,10 +169,14 @@ export function AppShell({
   volume,
   mobileNavigationOpen,
   selectionBlocked,
+  dockerEnabled,
   onMobileNavigationChange,
   onNavigate,
   onPickFolder,
 }: AppShellProps) {
+  const navigation = dockerEnabled
+    ? [...navigationBeforeDocker, dockerNavigation, ...navigationAfterDocker]
+    : [...navigationBeforeDocker, ...navigationAfterDocker];
   const usedPercent = volume?.totalBytes
     ? ((volume.totalBytes - volume.availableBytes) / volume.totalBytes) * 100
     : 0;

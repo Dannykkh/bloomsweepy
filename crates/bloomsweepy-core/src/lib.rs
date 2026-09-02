@@ -42,10 +42,10 @@ pub use drive::{
 pub use file_catalog::{
     FileCatalogConfig, FileCatalogEntryKind, FileCatalogError, FileCatalogIssue,
     FileCatalogMatchSource, FileCatalogPhase, FileCatalogProgress, FileCatalogProvider,
-    FileCatalogRefreshMode, FileCatalogReport, FileCatalogSearchReport, FileCatalogSearchRequest,
-    FileCatalogSearchResult, FileCatalogSort, FileCatalogStatus, build_file_catalog,
-    clear_file_catalog, file_catalog_status, search_file_catalog,
-    search_file_catalog_with_cancellation,
+    FileCatalogRecentEntry, FileCatalogRecentReport, FileCatalogRefreshMode, FileCatalogReport,
+    FileCatalogSearchReport, FileCatalogSearchRequest, FileCatalogSearchResult, FileCatalogSort,
+    FileCatalogStatus, build_file_catalog, clear_file_catalog, file_catalog_status,
+    recent_file_catalog_entries, search_file_catalog, search_file_catalog_with_cancellation,
 };
 
 const HASH_CHUNK_BYTES: usize = 64 * 1024;

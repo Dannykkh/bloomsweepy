@@ -1,13 +1,19 @@
 ﻿# UI
 
 > 웹 컴포넌트, XAML View/Window/Control, 모바일 Widget/View 빠른 색인.
-> total: 79 signals
+> total: 89 signals
 
 ## apps/desktop/src/components/AppShell.tsx
-- **component** `AppShell` (L129) — `apps/desktop/src/components/AppShell.tsx:129`
+- **component** `AppShell` (L163) — `apps/desktop/src/components/AppShell.tsx:163`
 
 ## apps/desktop/src/components/ControlStatusPanel.tsx
 - **component** `ControlStatusPanel` (L91) — `apps/desktop/src/components/ControlStatusPanel.tsx:91`
+
+## apps/desktop/src/components/DockerCleanupDialog.tsx
+- **component** `DockerCleanupResultView` (L307) — `apps/desktop/src/components/DockerCleanupDialog.tsx:307`
+
+## apps/desktop/src/components/DockerManagementPanel.tsx
+- **component** `DockerManagementPanel` (L13) — `apps/desktop/src/components/DockerManagementPanel.tsx:13`
 
 ## apps/desktop/src/components/DriveStoragePanel.tsx
 - **component** `DriveStoragePanel` (L126) — `apps/desktop/src/components/DriveStoragePanel.tsx:126`
@@ -36,11 +42,24 @@
 - **component** `TrashResultPanel` (L9) — `apps/desktop/src/components/TrashResultPanel.tsx:9`
 
 ## apps/desktop/src/views/AssistantView.tsx
-- **component** `AssistantView` (L18) — `apps/desktop/src/views/AssistantView.tsx:18`
+- **component** `FolderScopeMetrics` (L813) — `apps/desktop/src/views/AssistantView.tsx:813`
+- **component** `DockerScopeMetrics` (L832) — `apps/desktop/src/views/AssistantView.tsx:832`
+- **component** `DriveShareIndicator` (L851) — `apps/desktop/src/views/AssistantView.tsx:851`
+- **component** `AssistantEmptyState` (L897) — `apps/desktop/src/views/AssistantView.tsx:897`
 
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70) — `apps/desktop/src/views/CleanupView.tsx:70`
 - **component** `CleanupMetric` (L461) — `apps/desktop/src/views/CleanupView.tsx:461`
+
+## apps/desktop/src/views/DashboardView.tsx
+- **component** `DashboardView` (L39) — `apps/desktop/src/views/DashboardView.tsx:39`
+- **component** `DashboardHeading` (L222) — `apps/desktop/src/views/DashboardView.tsx:222`
+- **component** `VolumeRow` (L234) — `apps/desktop/src/views/DashboardView.tsx:234`
+- **component** `HistoryRow` (L285) — `apps/desktop/src/views/DashboardView.tsx:285`
+- **component** `DashboardEmpty` (L313) — `apps/desktop/src/views/DashboardView.tsx:313`
+
+## apps/desktop/src/views/DockerManagementView.tsx
+- **component** `DockerManagementView` (L22) — `apps/desktop/src/views/DockerManagementView.tsx:22`
 
 ## apps/desktop/src/views/DocumentSearchView.tsx
 - **component** `DocumentSearchView` (L111) — `apps/desktop/src/views/DocumentSearchView.tsx:111`
@@ -56,11 +75,10 @@
 - **component** `LargeFilesView` (L12) — `apps/desktop/src/views/LargeFilesView.tsx:12`
 
 ## apps/desktop/src/views/OverviewView.tsx
-- **component** `OverviewView` (L58) — `apps/desktop/src/views/OverviewView.tsx:58`
-- **component** `GuideStep` (L296) — `apps/desktop/src/views/OverviewView.tsx:296`
+- **component** `OverviewView` (L55) — `apps/desktop/src/views/OverviewView.tsx:55`
 
 ## apps/desktop/src/views/SettingsView.tsx
-- **component** `SettingsView` (L10) — `apps/desktop/src/views/SettingsView.tsx:10`
+- **component** `SettingsView` (L17) — `apps/desktop/src/views/SettingsView.tsx:17`
 
 ## BroomSweepy/BroomSweepyApp.swift
 - **view** `MenuBarPopover` : View (L231) — `BroomSweepy/BroomSweepyApp.swift:231`

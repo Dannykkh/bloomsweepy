@@ -19,12 +19,13 @@ mod windows_ntfs;
 
 use query::{CatalogGlob, CatalogSelectorGroup, ParsedCatalogQuery, parse_catalog_query};
 
-const INDEX_SCHEMA_VERSION: i64 = 2;
+const INDEX_SCHEMA_VERSION: i64 = 3;
 const DEFAULT_MAX_ENTRIES: usize = 2_000_000;
 const DEFAULT_MAX_ISSUES: usize = 100;
 const MAX_ENTRIES: usize = 5_000_000;
 const MAX_ISSUES: usize = 1_000;
 const MAX_SEARCH_RESULTS: usize = 250;
+const MAX_RECENT_RESULTS: usize = 100;
 const MAX_QUERY_CHARS: usize = 256;
 const PROGRESS_ENTRY_INTERVAL: u64 = 512;
 const SEARCH_PROGRESS_OPS: i32 = 1_000;
@@ -246,6 +247,29 @@ pub struct FileCatalogSearchReport {
     pub search_duration_ms: u128,
     pub results_truncated: bool,
     pub results: Vec<FileCatalogSearchResult>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCatalogRecentEntry {
+    pub name: String,
+    pub path: String,
+    pub parent: String,
+    pub extension: String,
+    pub logical_bytes: u64,
+    pub modified_at_unix_ms: Option<u128>,
+    pub first_seen_at_unix_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileCatalogRecentReport {
+    pub root: String,
+    pub completed_at_unix_ms: u128,
+    pub comparison_ready: bool,
+    pub total_new_files: u64,
+    pub results_truncated: bool,
+    pub results: Vec<FileCatalogRecentEntry>,
 }
 
 #[derive(Debug, Error)]
@@ -485,13 +509,22 @@ where
             .execute("DELETE FROM file_catalog_entries", [])
             .map_err(index_error)? as u64;
     }
-    let generation = previous
+    let same_root_as_previous = previous
         .as_ref()
-        .map_or(1, |meta| meta.generation.saturating_add(1));
+        .is_some_and(|meta| same_root(&meta.root, root_string));
+    let generation = if same_root_as_previous {
+        previous
+            .as_ref()
+            .map_or(1, |meta| meta.generation.saturating_add(1))
+    } else {
+        1
+    };
+    let observed_at_ms = saturating_u128_to_i64(unix_time_ms());
     let statement = prepare_upsert(&transaction)?;
     let mut writer = CatalogWriter::new(
         statement,
         generation,
+        observed_at_ms,
         config.max_entries,
         config.max_issues,
         FileCatalogPhase::Discovering,
@@ -602,6 +635,7 @@ where
 struct CatalogWriter<'statement, 'progress> {
     upsert: Statement<'statement>,
     generation: i64,
+    observed_at_ms: i64,
     max_entries: usize,
     max_issues: usize,
     phase: FileCatalogPhase,
@@ -629,6 +663,7 @@ impl<'statement, 'progress> CatalogWriter<'statement, 'progress> {
     fn new(
         upsert: Statement<'statement>,
         generation: i64,
+        observed_at_ms: i64,
         max_entries: usize,
         max_issues: usize,
         phase: FileCatalogPhase,
@@ -639,6 +674,7 @@ impl<'statement, 'progress> CatalogWriter<'statement, 'progress> {
         Self {
             upsert,
             generation,
+            observed_at_ms,
             max_entries,
             max_issues,
             phase,
@@ -716,6 +752,7 @@ impl CatalogRecordSink for CatalogWriter<'_, '_> {
                 self.generation,
                 record.source_record_id.map(saturating_u64_to_i64),
                 record.source_parent_record_id.map(saturating_u64_to_i64),
+                self.observed_at_ms,
             ])
             .map_err(|error| error.to_string())?;
 
@@ -748,8 +785,21 @@ fn prepare_upsert<'statement>(
         .prepare(
             "INSERT INTO file_catalog_entries (
                 path, name, parent, extension, kind, logical_bytes, modified_at_ms, generation,
-                source_record_id, source_parent_record_id
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                source_record_id, source_parent_record_id, first_seen_at_ms,
+                first_seen_generation
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                COALESCE(
+                    (SELECT first_seen_at_ms FROM file_catalog_entries
+                     WHERE ?9 IS NOT NULL AND source_record_id = ?9 LIMIT 1),
+                    ?11
+                ),
+                COALESCE(
+                    (SELECT first_seen_generation FROM file_catalog_entries
+                     WHERE ?9 IS NOT NULL AND source_record_id = ?9 LIMIT 1),
+                    ?8
+                )
+             )
              ON CONFLICT(path) DO UPDATE SET
                 name = excluded.name,
                 parent = excluded.parent,
@@ -775,6 +825,7 @@ fn suspend_bulk_indexes(connection: &Connection) -> Result<(), FileCatalogError>
              DROP INDEX IF EXISTS file_catalog_extension_idx;
              DROP INDEX IF EXISTS file_catalog_size_idx;
              DROP INDEX IF EXISTS file_catalog_modified_idx;
+             DROP INDEX IF EXISTS file_catalog_first_seen_idx;
              DROP INDEX IF EXISTS file_catalog_source_record_idx;",
         )
         .map_err(index_error)
@@ -793,6 +844,8 @@ fn rebuild_bulk_indexes(connection: &Connection) -> Result<(), FileCatalogError>
                 ON file_catalog_entries(logical_bytes DESC);
              CREATE INDEX file_catalog_modified_idx
                 ON file_catalog_entries(modified_at_ms DESC);
+             CREATE INDEX file_catalog_first_seen_idx
+                ON file_catalog_entries(first_seen_generation DESC, first_seen_at_ms DESC);
              CREATE INDEX file_catalog_source_record_idx
                 ON file_catalog_entries(source_record_id);
              INSERT INTO file_catalog_fts(file_catalog_fts) VALUES ('rebuild');
@@ -1087,9 +1140,11 @@ where
     }
     let generation = previous.generation.saturating_add(1);
     let statement = prepare_upsert(&transaction)?;
+    let observed_at_ms = saturating_u128_to_i64(unix_time_ms());
     let mut writer = CatalogWriter::new(
         statement,
         generation,
+        observed_at_ms,
         config.max_entries,
         config.max_issues,
         FileCatalogPhase::ApplyingChanges,
@@ -1279,6 +1334,79 @@ pub fn file_catalog_status(
     let connection = open_existing_index(database_path)?;
     ensure_existing_schema(&connection)?;
     read_meta(&connection).map(|meta| meta.map(IndexMeta::into_status))
+}
+
+pub fn recent_file_catalog_entries(
+    database_path: impl AsRef<Path>,
+    max_results: usize,
+) -> Result<Option<FileCatalogRecentReport>, FileCatalogError> {
+    let database_path = database_path.as_ref();
+    if !database_path.exists() {
+        return Ok(None);
+    }
+    let connection = open_existing_index(database_path)?;
+    ensure_existing_schema(&connection)?;
+    let Some(meta) = read_meta(&connection)? else {
+        return Ok(None);
+    };
+    let max_results = max_results.clamp(1, MAX_RECENT_RESULTS);
+    let total_new_files = connection
+        .query_row(
+            "SELECT COUNT(*) FROM file_catalog_entries
+             WHERE kind = 'file' AND first_seen_generation > 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(index_error)?
+        .max(0) as u64;
+    let mut statement = connection
+        .prepare(
+            "SELECT name, path, parent, extension, logical_bytes, modified_at_ms,
+                    first_seen_at_ms
+             FROM file_catalog_entries
+             WHERE kind = 'file' AND first_seen_generation > 1
+             ORDER BY first_seen_at_ms DESC, logical_bytes DESC, name COLLATE NOCASE
+             LIMIT ?1",
+        )
+        .map_err(index_error)?;
+    let rows = statement
+        .query_map([max_results.saturating_add(1) as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })
+        .map_err(index_error)?;
+    let mut results = Vec::new();
+    for row in rows {
+        let (name, path, parent, extension, logical_bytes, modified_at_ms, first_seen_at_ms) =
+            row.map_err(index_error)?;
+        results.push(FileCatalogRecentEntry {
+            name,
+            path,
+            parent,
+            extension,
+            logical_bytes: logical_bytes.max(0) as u64,
+            modified_at_unix_ms: modified_at_ms.map(|value| value.max(0) as u128),
+            first_seen_at_unix_ms: first_seen_at_ms.max(0) as u128,
+        });
+    }
+    let results_truncated = results.len() > max_results;
+    results.truncate(max_results);
+
+    Ok(Some(FileCatalogRecentReport {
+        root: meta.root,
+        completed_at_unix_ms: meta.completed_at_ms.max(0) as u128,
+        comparison_ready: meta.generation > 1,
+        total_new_files,
+        results_truncated,
+        results,
+    }))
 }
 
 pub fn search_file_catalog(
@@ -1741,6 +1869,26 @@ fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
             )
             .map_err(index_error)?;
     }
+    if matches!(schema_version, 1 | 2) {
+        connection
+            .execute_batch(
+                "ALTER TABLE file_catalog_entries
+                    ADD COLUMN first_seen_at_ms INTEGER NOT NULL DEFAULT 0;
+                 ALTER TABLE file_catalog_entries
+                    ADD COLUMN first_seen_generation INTEGER NOT NULL DEFAULT 1;
+                 UPDATE file_catalog_entries
+                    SET first_seen_at_ms = COALESCE(
+                        (SELECT completed_at_ms FROM file_catalog_meta WHERE id = 1),
+                        0
+                    ),
+                        first_seen_generation = 1;
+                 UPDATE file_catalog_meta SET schema_version = 3;
+                 CREATE INDEX IF NOT EXISTS file_catalog_first_seen_idx
+                    ON file_catalog_entries(first_seen_generation DESC, first_seen_at_ms DESC);
+                 PRAGMA user_version = 3;",
+            )
+            .map_err(index_error)?;
+    }
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS file_catalog_meta (
@@ -1775,7 +1923,9 @@ fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
                 modified_at_ms INTEGER,
                 generation INTEGER NOT NULL,
                 source_record_id INTEGER,
-                source_parent_record_id INTEGER
+                source_parent_record_id INTEGER,
+                first_seen_at_ms INTEGER NOT NULL DEFAULT 0,
+                first_seen_generation INTEGER NOT NULL DEFAULT 1
              );
              CREATE INDEX IF NOT EXISTS file_catalog_generation_idx
                 ON file_catalog_entries(generation);
@@ -1787,6 +1937,8 @@ fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
                 ON file_catalog_entries(logical_bytes DESC);
              CREATE INDEX IF NOT EXISTS file_catalog_modified_idx
                 ON file_catalog_entries(modified_at_ms DESC);
+             CREATE INDEX IF NOT EXISTS file_catalog_first_seen_idx
+                ON file_catalog_entries(first_seen_generation DESC, first_seen_at_ms DESC);
              CREATE INDEX IF NOT EXISTS file_catalog_source_record_idx
                 ON file_catalog_entries(source_record_id);
              CREATE VIRTUAL TABLE IF NOT EXISTS file_catalog_fts USING fts5(
@@ -1814,7 +1966,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), FileCatalogError> {
                 INSERT INTO file_catalog_fts(rowid, name, path)
                 VALUES (new.id, new.name, new.path);
              END;
-             PRAGMA user_version = 2;",
+             PRAGMA user_version = 3;",
         )
         .map_err(index_error)
 }
@@ -2289,6 +2441,7 @@ mod tests {
                     'file_catalog_extension_idx',
                     'file_catalog_size_idx',
                     'file_catalog_modified_idx',
+                    'file_catalog_first_seen_idx',
                     'file_catalog_source_record_idx'
                  )",
                 [],
@@ -2305,7 +2458,7 @@ mod tests {
                 |row| row.get::<_, i64>(0),
             )
             .expect("count restored triggers");
-        assert_eq!(index_count, 6);
+        assert_eq!(index_count, 7);
         assert_eq!(trigger_count, 3);
         drop(connection);
 
@@ -2324,6 +2477,34 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn recent_files_use_the_first_catalog_as_a_baseline() {
+        let temporary = tempdir().expect("tempdir");
+        let root = temporary.path().join("root");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("baseline.txt"), b"baseline").expect("write baseline");
+        let database = temporary.path().join("catalog.sqlite3");
+
+        build(&root, &database);
+        let baseline = recent_file_catalog_entries(&database, 8)
+            .expect("baseline report")
+            .expect("baseline catalog");
+        assert!(!baseline.comparison_ready);
+        assert_eq!(baseline.total_new_files, 0);
+        assert!(baseline.results.is_empty());
+
+        fs::write(root.join("new-file.bin"), vec![7_u8; 64]).expect("write new file");
+        build(&root, &database);
+        let refreshed = recent_file_catalog_entries(&database, 8)
+            .expect("recent report")
+            .expect("refreshed catalog");
+        assert!(refreshed.comparison_ready);
+        assert_eq!(refreshed.total_new_files, 1);
+        assert_eq!(refreshed.results.len(), 1);
+        assert_eq!(refreshed.results[0].name, "new-file.bin");
+        assert!(refreshed.results[0].first_seen_at_unix_ms > 0);
     }
 
     #[test]

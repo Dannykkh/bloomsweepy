@@ -4,6 +4,14 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { decideFileInspection } from "./fileInspectionPolicy";
 import type {
+  AssistantChatRequest,
+  AssistantChatResponse,
+  AssistantSessionSummary,
+  AssistantSessionDetail,
+  CreateAssistantSessionRequest,
+  AppendAssistantMessageRequest,
+  AssistantMessageMutation,
+  AssistantProviderStatus,
   DirectoryScanProgress,
   DirectoryScanReport,
   CleanupScanProgress,
@@ -19,6 +27,7 @@ import type {
   TrashOperationResult,
   TrashProgress,
   ActionRecoveryReport,
+  ActionHistoryReport,
   DocumentIndexProgress,
   DocumentIndexReport,
   DocumentIndexStatus,
@@ -29,6 +38,7 @@ import type {
   FileCatalogSearchReport,
   FileCatalogSearchRequest,
   FileCatalogStatus,
+  FileCatalogRecentReport,
   FileCatalogEntryKind,
   ControlStatus,
   ControlSearchAccessRequest,
@@ -36,7 +46,74 @@ import type {
   ControlScanProgressEvent,
   ControlScanCompletedEvent,
   ScanReportSnapshot,
+  DockerManagementStatus,
+  DockerCleanupPreview,
+  ExecuteDockerCleanupRequest,
+  DockerCleanupResult,
+  DockerCleanupProgress,
 } from "../types";
+
+export function getAssistantProviderStatus(): Promise<AssistantProviderStatus[]> {
+  return invoke<AssistantProviderStatus[]>("get_assistant_provider_status");
+}
+
+export function askAssistant(
+  request: AssistantChatRequest,
+): Promise<AssistantChatResponse> {
+  return invoke<AssistantChatResponse>("ask_assistant", { request });
+}
+
+export function cancelAssistant(): Promise<boolean> {
+  return invoke<boolean>("cancel_assistant");
+}
+
+export function listAssistantSessions(): Promise<AssistantSessionSummary[]> {
+  return invoke<AssistantSessionSummary[]>("list_assistant_sessions");
+}
+
+export function createAssistantSession(
+  request: CreateAssistantSessionRequest,
+): Promise<AssistantSessionDetail> {
+  return invoke<AssistantSessionDetail>("create_assistant_session", { request });
+}
+
+export function getAssistantSession(sessionId: string): Promise<AssistantSessionDetail> {
+  return invoke<AssistantSessionDetail>("get_assistant_session", { sessionId });
+}
+
+export function appendAssistantMessage(
+  request: AppendAssistantMessageRequest,
+): Promise<AssistantMessageMutation> {
+  return invoke<AssistantMessageMutation>("append_assistant_message", { request });
+}
+
+export function deleteAssistantSession(sessionId: string): Promise<boolean> {
+  return invoke<boolean>("delete_assistant_session", { sessionId });
+}
+
+export function getDockerManagementStatus(): Promise<DockerManagementStatus> {
+  return invoke<DockerManagementStatus>("get_docker_management_status");
+}
+
+export function setDockerManagementEnabled(
+  enabled: boolean,
+): Promise<DockerManagementStatus> {
+  return invoke<DockerManagementStatus>("set_docker_management_enabled", { enabled });
+}
+
+export function createDockerCleanupPreview(): Promise<DockerCleanupPreview> {
+  return invoke<DockerCleanupPreview>("create_docker_cleanup_preview");
+}
+
+export function executeDockerCleanup(
+  request: ExecuteDockerCleanupRequest,
+): Promise<DockerCleanupResult> {
+  return invoke<DockerCleanupResult>("execute_docker_cleanup", { request });
+}
+
+export function cancelDockerCleanup(): Promise<boolean> {
+  return invoke<boolean>("cancel_docker_cleanup");
+}
 
 export function getControlStatus(): Promise<ControlStatus> {
   return invoke<ControlStatus>("get_control_status");
@@ -88,6 +165,10 @@ export function getActionRecoveryStatus(): Promise<ActionRecoveryReport> {
   return invoke<ActionRecoveryReport>("get_action_recovery_status");
 }
 
+export function getActionHistory(): Promise<ActionHistoryReport> {
+  return invoke<ActionHistoryReport>("get_action_history");
+}
+
 export function openSystemTrash(): Promise<void> {
   return invoke<void>("open_system_trash");
 }
@@ -108,6 +189,10 @@ export function searchDocuments(
 
 export function getFileCatalogStatus(): Promise<FileCatalogStatus | null> {
   return invoke<FileCatalogStatus | null>("get_file_catalog_status");
+}
+
+export function getRecentFileCatalogEntries(): Promise<FileCatalogRecentReport | null> {
+  return invoke<FileCatalogRecentReport | null>("get_recent_file_catalog_entries");
 }
 
 export function startFileCatalogBuild(root: string): Promise<FileCatalogReport> {
@@ -170,6 +255,14 @@ export function listenToTrashProgress(
   handler: (progress: TrashProgress) => void,
 ): Promise<UnlistenFn> {
   return listen<TrashProgress>("trash-progress", (event) => handler(event.payload));
+}
+
+export function listenToDockerCleanupProgress(
+  handler: (progress: DockerCleanupProgress) => void,
+): Promise<UnlistenFn> {
+  return listen<DockerCleanupProgress>("docker-cleanup-progress", (event) =>
+    handler(event.payload),
+  );
 }
 
 export function listenToDocumentIndexProgress(

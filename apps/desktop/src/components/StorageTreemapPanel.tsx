@@ -118,7 +118,7 @@ export function StorageTreemapPanel({
               ) : (
                 <FolderOpen size={16} aria-hidden="true" />
               )}
-              {report ? "처음부터 다시 보기" : root ? "폴더 용량 지도 만들기" : "폴더 선택"}
+              {report ? "처음 폴더 다시 보기" : root ? "지도 다시 만들기" : "폴더 선택"}
             </button>
           )}
         </div> : <span className="storage-map__mode">읽기 전용</span>}
@@ -320,7 +320,7 @@ export function StorageTreemapPanel({
             <Folder size={18} />
           </span>
           <strong>{root ? "큰 사각형부터 폴더 안쪽으로 이동합니다" : "먼저 검사할 폴더를 선택하세요"}</strong>
-          <small>{root ? "용량 지도와 빈 폴더 목록을 만들려면 분석을 시작하세요." : "폴더를 고른 뒤 용량 지도를 만들 수 있습니다."}</small>
+          <small>{root ? "지도를 다시 만들 수 있습니다." : "폴더를 고르면 용량 지도를 바로 만듭니다."}</small>
         </button>
       ) : (
         <div className="storage-map__start is-static">

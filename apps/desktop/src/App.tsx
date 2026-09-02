@@ -9,10 +9,13 @@ import {
   clearFileCatalog,
   configureControlScanAccess,
   configureControlSearchAccess,
+  getActionHistory,
   getActionRecoveryStatus,
   getControlStatus,
   getDocumentIndexStatus,
+  getDockerManagementStatus,
   getFileCatalogStatus,
+  getRecentFileCatalogEntries,
   getScanReportSnapshot,
   getSystemOverview,
   listenToCleanupScanProgress,
@@ -26,6 +29,8 @@ import {
   listenToScanProgress,
   listenToTrashProgress,
   openSystemTrash,
+  revealPath,
+  setDockerManagementEnabled,
   selectDirectory,
   startDirectoryScan,
   startCleanupScan,
@@ -56,13 +61,16 @@ import type {
   ViewId,
   VolumeInfo,
   ActionRecoveryReport,
+  ActionHistoryReport,
   DocumentIndexProgress,
   DocumentIndexReport,
   DocumentIndexStatus,
   FileCatalogProgress,
   FileCatalogReport,
+  FileCatalogRecentReport,
   FileCatalogStatus,
   ControlStatus,
+  DockerManagementStatus,
 } from "./types";
 import { DEFAULT_SCAN_CONFIG } from "./types";
 import { DuplicatesView } from "./views/DuplicatesView";
@@ -73,6 +81,14 @@ import { SettingsView } from "./views/SettingsView";
 import { DocumentSearchView } from "./views/DocumentSearchView";
 import { FastFileSearchView } from "./views/FastFileSearchView";
 import { AssistantView } from "./views/AssistantView";
+import { findVolumeForPath } from "./lib/volumePath";
+import { DashboardView } from "./views/DashboardView";
+import { DockerManagementView } from "./views/DockerManagementView";
+
+interface AssistantLaunchRequest {
+  id: number;
+  target: "docker";
+}
 
 const storageViews = new Set<ViewId>([
   "overview",
@@ -96,7 +112,7 @@ const unavailableControlStatus: ControlStatus = {
 };
 
 function App() {
-  const [activeView, setActiveView] = useState<ViewId>("overview");
+  const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [system, setSystem] = useState<SystemOverview | null>(null);
   const [root, setRoot] = useState<string | null>(null);
@@ -129,6 +145,10 @@ function App() {
   const [fileCatalogError, setFileCatalogError] = useState<string | null>(null);
   const [fileCatalogClearing, setFileCatalogClearing] = useState(false);
   const [fileCatalogStale, setFileCatalogStale] = useState(false);
+  const [actionHistory, setActionHistory] = useState<ActionHistoryReport | null>(null);
+  const [recentFiles, setRecentFiles] = useState<FileCatalogRecentReport | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(true);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [trashRunning, setTrashRunning] = useState(false);
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
@@ -159,6 +179,29 @@ function App() {
   const announcedScanState = useRef<ScanUiState>("idle");
   const startupRecoveryPromise = useRef<Promise<ActionRecoveryReport> | null>(null);
   const [config, setConfig] = useState<ScanConfig>(DEFAULT_SCAN_CONFIG);
+  const [dockerStatus, setDockerStatus] = useState<DockerManagementStatus | null>(null);
+  const [dockerStatusLoading, setDockerStatusLoading] = useState(true);
+  const [dockerStatusChanging, setDockerStatusChanging] = useState(false);
+  const [dockerStatusError, setDockerStatusError] = useState<string | null>(null);
+  const [assistantLaunchRequest, setAssistantLaunchRequest] =
+    useState<AssistantLaunchRequest | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    void getDockerManagementStatus()
+      .then((status) => {
+        if (!disposed) setDockerStatus(status);
+      })
+      .catch((reason: unknown) => {
+        if (!disposed) setDockerStatusError(normalizeError(reason));
+      })
+      .finally(() => {
+        if (!disposed) setDockerStatusLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (activeView === "overview") {
@@ -339,13 +382,33 @@ function App() {
         setRecoveryChecking(false);
       });
 
-    getSystemOverview()
-      .then((overview) => {
-        if (!disposed) setSystem(overview);
-      })
-      .catch((reason: unknown) => {
-        if (!disposed) setError(normalizeError(reason));
-      });
+    Promise.allSettled([
+      getSystemOverview(),
+      getActionHistory(),
+      getRecentFileCatalogEntries(),
+    ]).then(([systemResult, historyResult, recentResult]) => {
+      if (disposed) return;
+
+      const failures: string[] = [];
+      if (systemResult.status === "fulfilled") {
+        setSystem(systemResult.value);
+      } else {
+        failures.push(`드라이브: ${normalizeError(systemResult.reason)}`);
+      }
+      if (historyResult.status === "fulfilled") {
+        setActionHistory(historyResult.value);
+      } else {
+        failures.push(`최근 정리: ${normalizeError(historyResult.reason)}`);
+      }
+      if (recentResult.status === "fulfilled") {
+        setRecentFiles(recentResult.value);
+      } else {
+        failures.push(`최근 파일: ${normalizeError(recentResult.reason)}`);
+      }
+
+      setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
+      setDashboardLoading(false);
+    });
 
     getDocumentIndexStatus()
       .then((status) => {
@@ -526,6 +589,38 @@ function App() {
     };
   }, []);
 
+  async function refreshDashboard() {
+    if (dashboardLoading || selectionBlocked) return;
+    setDashboardLoading(true);
+    setDashboardError(null);
+
+    const [systemResult, historyResult, recentResult] = await Promise.allSettled([
+      getSystemOverview(),
+      getActionHistory(),
+      getRecentFileCatalogEntries(),
+    ]);
+    const failures: string[] = [];
+
+    if (systemResult.status === "fulfilled") {
+      setSystem(systemResult.value);
+    } else {
+      failures.push(`드라이브: ${normalizeError(systemResult.reason)}`);
+    }
+    if (historyResult.status === "fulfilled") {
+      setActionHistory(historyResult.value);
+    } else {
+      failures.push(`최근 정리: ${normalizeError(historyResult.reason)}`);
+    }
+    if (recentResult.status === "fulfilled") {
+      setRecentFiles(recentResult.value);
+    } else {
+      failures.push(`최근 파일: ${normalizeError(recentResult.reason)}`);
+    }
+
+    setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
+    setDashboardLoading(false);
+  }
+
   async function retryActionRecovery() {
     if (recoveryChecking) return;
     setRecoveryChecking(true);
@@ -640,36 +735,95 @@ function App() {
     if (!transition) setActiveView(view);
   }
 
+  async function refreshDockerStatus() {
+    if (dockerStatusLoading || dockerStatus?.busy) return;
+    setDockerStatusLoading(true);
+    setDockerStatusError(null);
+    try {
+      setDockerStatus(await getDockerManagementStatus());
+    } catch (reason) {
+      setDockerStatusError(normalizeError(reason));
+    } finally {
+      setDockerStatusLoading(false);
+    }
+  }
+
+  async function updateDockerEnabled(enabled: boolean) {
+    if (dockerStatusChanging || dockerStatus?.busy) return;
+    setDockerStatusChanging(true);
+    setDockerStatusError(null);
+    try {
+      setDockerStatus(await setDockerManagementEnabled(enabled));
+    } catch (reason) {
+      setDockerStatusError(normalizeError(reason));
+    } finally {
+      setDockerStatusChanging(false);
+    }
+  }
+
+  function openDockerConversation() {
+    setAssistantLaunchRequest({ id: Date.now(), target: "docker" });
+    navigate("assistant");
+  }
+
+  async function useSelectedRoot(selected: string): Promise<boolean> {
+    if (selected === root) return true;
+    if (controlStatus.scanAccess.enabled) {
+      const revoked = await updateControlScanAccess(null, null);
+      if (!revoked) return false;
+    }
+
+    setRoot(selected);
+    setReport(null);
+    setProgress(null);
+    setScanState("idle");
+    setError(null);
+    setDriveReport(null);
+    setDriveProgress(null);
+    setDriveScanState("idle");
+    setDriveError(null);
+    setDirectoryReport(null);
+    setDirectoryProgress(null);
+    setDirectoryScanState("idle");
+    setDirectoryError(null);
+    setDirectoryBreadcrumbs([]);
+    setTrashResult(null);
+    setTrashResultSource(null);
+    setTrashError(null);
+    return true;
+  }
+
   async function pickFolder(): Promise<string | null> {
     if (selectionBlocked) return null;
     try {
       const selected = await selectDirectory();
-      if (!selected) return null;
-
-      if (selected !== root) {
-        if (controlStatus.scanAccess.enabled) {
-          const revoked = await updateControlScanAccess(null, null);
-          if (!revoked) return null;
-        }
-        setRoot(selected);
-        setReport(null);
-        setProgress(null);
-        setScanState("idle");
-        setError(null);
-        setDirectoryReport(null);
-        setDirectoryProgress(null);
-        setDirectoryScanState("idle");
-        setDirectoryError(null);
-        setDirectoryBreadcrumbs([]);
-        setTrashResult(null);
-        setTrashResultSource(null);
-        setTrashError(null);
-      }
+      if (!selected || !(await useSelectedRoot(selected))) return null;
       return selected;
     } catch (reason) {
       setError(normalizeError(reason));
       setScanState("error");
       return null;
+    }
+  }
+
+  async function pickStorageFolder(
+    options: { stayOnView?: boolean } = {},
+  ): Promise<DirectoryScanReport | null> {
+    const selected = await pickFolder();
+    if (!selected) return null;
+    return runDirectoryScan(selected, undefined, options);
+  }
+
+  async function openDashboardVolume(nextVolume: VolumeInfo) {
+    if (selectionBlocked || !(await useSelectedRoot(nextVolume.mountPoint))) return;
+    await runDirectoryScan(nextVolume.mountPoint);
+  }
+
+  async function revealDashboardFile(path: string) {
+    try {
+      await revealPath(path);
+    } catch (reason) {
+      setDashboardError(`파일 위치를 열지 못했습니다. ${normalizeError(reason)}`);
     }
   }
 
@@ -814,7 +968,8 @@ function App() {
   async function runDirectoryScan(
     scanRoot: string,
     nextBreadcrumbs?: DirectoryBreadcrumb[],
-  ) {
+    options: { stayOnView?: boolean } = {},
+  ): Promise<DirectoryScanReport | null> {
     if (
       !scanRoot ||
       directoryScanState === "scanning" ||
@@ -826,9 +981,9 @@ function App() {
       trashRunning ||
       recoveryChecking
     )
-      return;
+      return null;
 
-    setActiveView("overview");
+    if (!options.stayOnView) setActiveView("overview");
     setDirectoryScanState("scanning");
     setDirectoryError(null);
     setDirectoryProgress({
@@ -854,11 +1009,15 @@ function App() {
       };
       setDirectoryBreadcrumbs(breadcrumbs);
       requestAnimationFrame(() => {
+        const reducedMotion = window.matchMedia?.(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
         document.getElementById("storage-map")?.scrollIntoView({
-          behavior: "smooth",
+          behavior: reducedMotion ? "auto" : "smooth",
           block: "start",
         });
       });
+      return nextReport;
     } catch (reason) {
       const message = normalizeError(reason);
       if (message.toLocaleLowerCase("en-US").includes("cancel")) {
@@ -869,6 +1028,7 @@ function App() {
         setDirectoryError(message);
       }
       setDirectoryProgress(null);
+      return null;
     }
   }
 
@@ -1026,8 +1186,15 @@ function App() {
     }
   }
 
-  async function runFileCatalogBuild() {
-    const catalogRoot = root ?? fileCatalog?.root ?? volume?.mountPoint ?? (await pickFolder());
+  async function runFileCatalogBuild(
+    options: { stayOnView?: boolean; rootOverride?: string } = {},
+  ) {
+    const catalogRoot =
+      options.rootOverride ??
+      root ??
+      fileCatalog?.root ??
+      volume?.mountPoint ??
+      (await pickFolder());
     if (
       !catalogRoot ||
       fileCatalogState === "scanning" ||
@@ -1042,7 +1209,7 @@ function App() {
     )
       return;
 
-    setActiveView("files");
+    if (!options.stayOnView) setActiveView("files");
     setFileCatalogState("scanning");
     setFileCatalogError(null);
     setFileCatalogProgress({
@@ -1063,6 +1230,14 @@ function App() {
       setFileCatalogStale(false);
       setFileCatalogState("success");
       setFileCatalogProgress(null);
+      try {
+        setRecentFiles(await getRecentFileCatalogEntries());
+        if (options.stayOnView) setDashboardError(null);
+      } catch (reason) {
+        if (options.stayOnView) {
+          setDashboardError(`최근 파일을 읽지 못했습니다. ${normalizeError(reason)}`);
+        }
+      }
     } catch (reason) {
       const message = normalizeError(reason);
       if (message.toLocaleLowerCase("en-US").includes("cancel")) {
@@ -1073,6 +1248,7 @@ function App() {
         setFileCatalogError(message);
       }
       setFileCatalogProgress(null);
+      if (options.stayOnView) setDashboardError(message);
     }
   }
 
@@ -1106,6 +1282,7 @@ function App() {
       setFileCatalogBuild(null);
       setFileCatalogProgress(null);
       setFileCatalogStale(false);
+      setRecentFiles(null);
       setFileCatalogState("idle");
     } catch (reason) {
       setFileCatalogError(normalizeError(reason));
@@ -1177,6 +1354,11 @@ function App() {
         .catch((reason: unknown) => {
           console.warn("휴지통 이동 후 디스크 사용량을 새로 고치지 못했습니다.", reason);
         });
+      void getActionHistory()
+        .then(setActionHistory)
+        .catch((reason: unknown) => {
+          console.warn("최근 정리 이력을 새로 고치지 못했습니다.", reason);
+        });
     }
   }
 
@@ -1218,9 +1400,13 @@ function App() {
       volume={volume}
       mobileNavigationOpen={mobileNavigationOpen}
       selectionBlocked={selectionBlocked}
+      dockerEnabled={dockerStatus?.enabled === true}
       onMobileNavigationChange={setMobileNavigationOpen}
       onNavigate={navigate}
-      onPickFolder={() => void pickFolder()}
+      onPickFolder={() => {
+        if (activeView === "overview") void pickStorageFolder();
+        else void pickFolder();
+      }}
     >
       <span
         className="sr-only background-scan-announcement"
@@ -1260,6 +1446,26 @@ function App() {
           onDismiss={() => setRecoveryDismissed(true)}
         />
       ) : null}
+      {activeView === "dashboard" ? (
+        <DashboardView
+          system={system}
+          actionHistory={actionHistory}
+          recentFiles={recentFiles}
+          fileCatalog={fileCatalog}
+          fileCatalogStale={fileCatalogStale}
+          loading={dashboardLoading}
+          error={dashboardError}
+          blocked={selectionBlocked}
+          onRefresh={() => void refreshDashboard()}
+          onOpenVolume={(nextVolume) => void openDashboardVolume(nextVolume)}
+          onOpenStorage={() => navigate("overview")}
+          onRefreshFileCatalog={() =>
+            void runFileCatalogBuild({ stayOnView: true })
+          }
+          onOpenFileSearch={() => navigate("files")}
+          onRevealFile={(path) => void revealDashboardFile(path)}
+        />
+      ) : null}
       {storageViews.has(activeView) ? (
         <StorageSectionNav activeView={activeView} onNavigate={navigate} />
       ) : null}
@@ -1289,7 +1495,7 @@ function App() {
             fileCatalogClearing ||
             trashRunning
           }
-          onPickFolder={() => void pickFolder()}
+          onPickFolder={() => void pickStorageFolder()}
           onStartScan={() => void runScan()}
           onCancelScan={() => void stopScan()}
           onStartDriveScan={() => void runDriveScan()}
@@ -1359,6 +1565,16 @@ function App() {
           onCancelIndex={() => void stopDocumentIndex()}
         />
       ) : null}
+      {activeView === "docker" ? (
+        <DockerManagementView
+          status={dockerStatus}
+          loading={dockerStatusLoading}
+          error={dockerStatusError}
+          onRefresh={refreshDockerStatus}
+          onStatusChange={setDockerStatus}
+          onAskInChat={openDockerConversation}
+        />
+      ) : null}
       {activeView === "assistant" ? (
         <AssistantView
           status={controlStatus}
@@ -1372,6 +1588,13 @@ function App() {
           updatingScanAccess={controlScanAccessUpdating}
           scanAccessError={controlScanAccessError}
           onToggleScanAccess={() => void toggleControlScanAccess()}
+          directoryProgress={directoryProgress}
+          directoryState={directoryScanState}
+          volumes={system?.volumes ?? []}
+          dockerStatus={dockerStatus}
+          launchRequest={assistantLaunchRequest}
+          onLaunchRequestHandled={() => setAssistantLaunchRequest(null)}
+          onPickFolder={() => pickStorageFolder({ stayOnView: true })}
         />
       ) : null}
       {activeView === "cleanup" ? (
@@ -1417,7 +1640,13 @@ function App() {
       {activeView === "settings" ? (
         <SettingsView
           config={config}
+          dockerStatus={dockerStatus}
+          dockerLoading={dockerStatusLoading}
+          dockerChanging={dockerStatusChanging}
+          dockerError={dockerStatusError}
           onConfigChange={(nextConfig) => void updateScanConfig(nextConfig)}
+          onDockerEnabledChange={updateDockerEnabled}
+          onOpenDocker={() => navigate("docker")}
         />
       ) : null}
 
@@ -1493,20 +1722,6 @@ function App() {
         </div>
       ) : null}
     </AppShell>
-  );
-}
-
-function findVolumeForPath(volumes: VolumeInfo[], path: string | null): VolumeInfo | null {
-  if (volumes.length === 0) return null;
-  if (!path) return volumes.find((volume) => volume.isSystem) ?? volumes[0];
-
-  const normalizedPath = path.toLocaleLowerCase("en-US");
-  return (
-    [...volumes]
-      .sort((left, right) => right.mountPoint.length - left.mountPoint.length)
-      .find((volume) =>
-        normalizedPath.startsWith(volume.mountPoint.toLocaleLowerCase("en-US")),
-      ) ?? volumes[0]
   );
 }
 
