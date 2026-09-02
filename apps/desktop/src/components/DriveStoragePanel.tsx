@@ -29,6 +29,7 @@ import type {
   StorageLocation,
   VolumeInfo,
 } from "../types";
+import { useLanguage, type MessageKey } from "../i18n";
 
 interface DriveStoragePanelProps {
   platform: string | null;
@@ -44,8 +45,8 @@ interface DriveStoragePanelProps {
 }
 
 interface CategoryPresentation {
-  label: string;
-  description: string;
+  label: MessageKey;
+  description: MessageKey;
   icon: LucideIcon;
 }
 
@@ -136,6 +137,7 @@ export function DriveStoragePanel({
   onCancel,
   onExplorePath,
 }: DriveStoragePanelProps) {
+  const { t } = useLanguage();
   const scanning = state === "scanning";
   const categories = mergeCategories(
     scanning ? progress?.categories : report?.categories,
@@ -144,25 +146,25 @@ export function DriveStoragePanel({
     ? Math.max(0, volume.totalBytes - volume.availableBytes)
     : Math.max(1, progress?.processedBytes ?? report?.totalLogicalBytes ?? 1);
   const installedApps = report?.installedApps;
-  const platformLabel = platform === "windows" ? "Windows" : platform === "macos" ? "macOS" : "현재 OS";
+  const platformLabel = platform === "windows" ? "Windows" : platform === "macos" ? "macOS" : t("현재 OS");
 
   return (
     <section className="drive-inventory" aria-labelledby="drive-inventory-title">
       <header className="drive-inventory__header">
         <div>
-          <p className="eyebrow">드라이브 용량</p>
-          <h2 id="drive-inventory-title">드라이브 사용량</h2>
+          <p className="eyebrow">{t("드라이브 용량")}</p>
+          <h2 id="drive-inventory-title">{t("드라이브 사용량")}</h2>
           <p>
             {volume
-              ? `${volume.mountPoint}의 실제 파일을 읽기 전용으로 분류합니다.`
-              : "분석할 수 있는 드라이브를 확인하고 있습니다."}
+              ? t("{{mount}}의 실제 파일을 읽기 전용으로 분류합니다.", { mount: volume.mountPoint })
+              : t("분석할 수 있는 드라이브를 확인하고 있습니다.")}
           </p>
         </div>
         <div className="drive-inventory__actions">
           {scanning ? (
             <button className="secondary-button danger-outline" type="button" onClick={onCancel}>
               <X size={16} aria-hidden="true" />
-              분석 취소
+              {t("분석 취소")}
             </button>
           ) : (
             <button
@@ -172,7 +174,7 @@ export function DriveStoragePanel({
               onClick={onStart}
             >
               {report ? <RefreshCw size={16} aria-hidden="true" /> : <Search size={16} aria-hidden="true" />}
-              {report ? "다시 분석" : "드라이브 분석"}
+              {report ? t("다시 분석") : t("드라이브 분석")}
             </button>
           )}
         </div>
@@ -182,9 +184,12 @@ export function DriveStoragePanel({
         <div className="drive-progress" role="status" aria-live="polite">
           <span className="drive-progress__spinner" aria-hidden="true" />
           <div>
-            <strong>{progress?.message ?? "저장공간 범주를 준비하고 있습니다"}</strong>
+            <strong>{t("저장공간 범주를 준비하고 있습니다")}</strong>
             <small>
-              {formatCount(progress?.processedFiles ?? 0)}개 파일 · {formatBytes(progress?.processedBytes ?? 0)} 확인
+              {t("{{count}}개 파일 · {{size}} 확인", {
+                count: formatCount(progress?.processedFiles ?? 0),
+                size: formatBytes(progress?.processedBytes ?? 0),
+              })}
             </small>
           </div>
         </div>
@@ -196,7 +201,7 @@ export function DriveStoragePanel({
         </div>
       ) : null}
 
-      <div className="drive-category-list" aria-label="저장공간 범주">
+      <div className="drive-category-list" aria-label={t("저장공간 범주")}>
         {categories.map((category) => {
           const presentation = categoryPresentation[category.kind];
           const Icon = presentation.icon;
@@ -205,7 +210,10 @@ export function DriveStoragePanel({
             : 0;
           const appRegistryDetail =
             category.kind === "applications" && installedApps?.supported
-              ? `${platformLabel} 설치 기록과 앱 ${formatCount(installedApps.applications.length)}개 대조`
+              ? t("{{platform}} 설치 기록과 앱 {{count}}개 대조", {
+                  platform: platformLabel,
+                  count: formatCount(installedApps.applications.length),
+                })
               : null;
 
           return (
@@ -216,8 +224,8 @@ export function DriveStoragePanel({
               <div className="drive-category-row__body">
                 <div className="drive-category-row__line">
                   <span>
-                    <strong>{presentation.label}</strong>
-                    <small>{appRegistryDetail ?? presentation.description}</small>
+                    <strong>{t(presentation.label)}</strong>
+                    <small>{appRegistryDetail ?? t(presentation.description)}</small>
                   </span>
                   <span className="drive-category-row__metric">
                     <strong>
@@ -225,8 +233,8 @@ export function DriveStoragePanel({
                     </strong>
                     <small>
                       {report || scanning
-                        ? `${formatCount(category.fileCount)}개 파일`
-                        : "분석 전"}
+                        ? t("{{count}}개 파일", { count: formatCount(category.fileCount) })
+                        : t("분석 전")}
                     </small>
                   </span>
                 </div>
@@ -243,16 +251,19 @@ export function DriveStoragePanel({
         <span>
           <HardDrive size={15} aria-hidden="true" />
           {report
-            ? `${formatDuration(report.durationMs)} · 읽을 수 있는 파일 크기 합계 ${formatBytes(report.totalLogicalBytes)}`
-            : "드라이브 분류 단계는 파일을 변경하지 않습니다"}
+            ? t("{{duration}} · 읽을 수 있는 파일 크기 합계 {{size}}", {
+                duration: formatDuration(report.durationMs),
+                size: formatBytes(report.totalLogicalBytes),
+              })
+            : t("드라이브 분류 단계는 파일을 변경하지 않습니다")}
         </span>
         {report ? (
           <span>
-            {formatCount(report.unreadableEntries)}개 접근 제한 · {report.hardLinkDeduplication
-              ? `하드링크 ${formatCount(report.hardLinksSkipped)}개 제외`
-              : "파일에 표시된 크기 기준"}
-            {report.locationTrackingLimitReached ? " · 위치 목록 안전 상한 도달" : ""}
-            {report.hardLinkIdentityLimitReached ? " · 하드링크 집계 상한 도달" : ""}
+            {t("{{count}}개 접근 제한", { count: formatCount(report.unreadableEntries) })} · {report.hardLinkDeduplication
+              ? t("하드링크 {{count}}개 제외", { count: formatCount(report.hardLinksSkipped) })
+              : t("파일에 표시된 크기 기준")}
+            {report.locationTrackingLimitReached ? ` · ${t("위치 목록 안전 상한 도달")}` : ""}
+            {report.hardLinkIdentityLimitReached ? ` · ${t("하드링크 집계 상한 도달")}` : ""}
           </span>
         ) : null}
       </footer>
@@ -260,8 +271,8 @@ export function DriveStoragePanel({
       {report?.largestLocations.length ? (
         <div className="drive-locations">
           <div className="drive-locations__heading">
-            <strong>용량이 큰 위치</strong>
-            <small>상위 {Math.min(8, report.largestLocations.length)}개</small>
+            <strong>{t("용량이 큰 위치")}</strong>
+            <small>{t("상위 {{count}}개", { count: Math.min(8, report.largestLocations.length) })}</small>
           </div>
           {report.largestLocations.slice(0, 8).map((location) => (
             <button
@@ -270,7 +281,7 @@ export function DriveStoragePanel({
               type="button"
               disabled={blocked}
               onClick={() => onExplorePath(location)}
-              title={`${location.path}의 저장공간 맵 열기`}
+              title={t("{{path}}의 저장공간 맵 열기", { path: location.path })}
             >
               <span>
                 <strong>{location.name}</strong>
@@ -278,7 +289,7 @@ export function DriveStoragePanel({
               </span>
               <span>
                 <strong>{formatBytes(location.logicalBytes)}</strong>
-                <small>{categoryPresentation[location.dominantCategory].label}</small>
+                <small>{t(categoryPresentation[location.dominantCategory].label)}</small>
               </span>
               <ChevronRight size={15} aria-hidden="true" />
             </button>

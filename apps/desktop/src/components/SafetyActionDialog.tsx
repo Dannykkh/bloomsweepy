@@ -2,6 +2,7 @@ import { ShieldAlert, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { formatBytes, formatCount } from "../lib/format";
 import type { TrashProgress } from "../types";
+import { useLanguage } from "../i18n";
 
 interface SafetyActionDialogProps {
   open: boolean;
@@ -35,11 +36,12 @@ export function SafetyActionDialog({
   error,
   intro,
   items = [],
-  confirmLabel = "휴지통으로 이동",
+  confirmLabel,
   onConfirm,
   onCancel,
   onClose,
 }: SafetyActionDialogProps) {
+  const { t } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
@@ -103,13 +105,13 @@ export function SafetyActionDialog({
         <header>
           <span aria-hidden="true"><Trash2 size={20} /></span>
           <div>
-            <p className="eyebrow">되돌릴 수 있는 작업</p>
+            <p className="eyebrow">{t("되돌릴 수 있는 작업")}</p>
             <h2 id="safety-dialog-title">{title}</h2>
           </div>
           <button
             className="icon-button"
             type="button"
-            aria-label="확인 창 닫기"
+            aria-label={t("확인 창 닫기")}
             disabled={busy}
             onClick={onClose}
           >
@@ -118,15 +120,15 @@ export function SafetyActionDialog({
         </header>
 
         <div className="safety-dialog__summary" id="safety-dialog-description">
-          <div><span>대상</span><strong>{formatCount(itemCount)}개</strong></div>
-          <div><span>선택한 파일 크기</span><strong>{formatBytes(logicalBytes)}</strong></div>
-          <div><span>복구 위치</span><strong>운영체제 휴지통</strong></div>
+          <div><span>{t("대상")}</span><strong>{t("{{count}}개", { count: formatCount(itemCount) })}</strong></div>
+          <div><span>{t("선택한 파일 크기")}</span><strong>{formatBytes(logicalBytes)}</strong></div>
+          <div><span>{t("복구 위치")}</span><strong>{t("운영체제 휴지통")}</strong></div>
         </div>
 
         {intro ? <p className="safety-dialog__intro">{intro}</p> : null}
 
         {items.length > 0 ? (
-          <div className="safety-dialog__items" aria-label="휴지통으로 이동할 항목">
+          <div className="safety-dialog__items" aria-label={t("휴지통으로 이동할 항목")}>
             {items.map((item) => (
               <div className="safety-dialog__item" key={item.path}>
                 <span>
@@ -142,8 +144,7 @@ export function SafetyActionDialog({
         <div className="safety-dialog__warning">
           <ShieldAlert size={18} aria-hidden="true" />
           <p>
-            이동 직전에 파일 신원과 변경 여부를 다시 검사합니다. 휴지통에서 복원할 수 있지만,
-            실제 여유 공간은 휴지통을 비운 뒤에 늘어납니다.
+            {t("이동 직전에 파일 신원과 변경 여부를 다시 검사합니다. 휴지통에서 복원할 수 있지만, 실제 여유 공간은 휴지통을 비운 뒤에 늘어납니다.")}
           </p>
         </div>
 
@@ -156,14 +157,16 @@ export function SafetyActionDialog({
               onChange={(event) => setReviewAcknowledged(event.currentTarget.checked)}
             />
             <span>
-              한 번 더 확인할 프로그램 설정 {formatCount(reviewCount)}개에는 계정이나 설정 데이터가 포함될 수 있음을 확인했습니다.
+              {t("한 번 더 확인할 프로그램 설정 {{count}}개에는 계정이나 설정 데이터가 포함될 수 있음을 확인했습니다.", {
+                count: formatCount(reviewCount),
+              })}
             </span>
           </label>
         ) : null}
 
         {busy ? (
           <div className="safety-dialog__progress" role="status" aria-live="polite">
-            <div><span>{progress?.message ?? "안전 검사를 준비하고 있습니다"}</span><strong>{Math.round(fraction * 100)}%</strong></div>
+            <div><span>{t("안전 검사를 준비하고 있습니다")}</span><strong>{Math.round(fraction * 100)}%</strong></div>
             <progress max={1} value={fraction} />
           </div>
         ) : null}
@@ -177,7 +180,7 @@ export function SafetyActionDialog({
             type="button"
             onClick={busy ? onCancel : onClose}
           >
-            {busy ? "작업 중단 요청" : "취소"}
+            {busy ? t("작업 중단 요청") : t("취소")}
           </button>
           <button
             className="trash-confirm-button"
@@ -186,7 +189,7 @@ export function SafetyActionDialog({
             onClick={() => onConfirm(reviewAcknowledged)}
           >
             <Trash2 size={16} aria-hidden="true" />
-            {confirmLabel}
+            {confirmLabel ?? t("휴지통으로 이동")}
           </button>
         </footer>
       </div>

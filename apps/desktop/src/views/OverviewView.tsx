@@ -22,6 +22,7 @@ import type {
   ScanUiState,
   VolumeInfo,
 } from "../types";
+import { useLanguage } from "../i18n";
 
 interface OverviewViewProps {
   platform: string | null;
@@ -82,6 +83,7 @@ export function OverviewView({
   onOpenDuplicates,
   onOpenCleanup,
 }: OverviewViewProps) {
+  const { t } = useLanguage();
   const scanning = state === "scanning";
   const mapScanning = directoryState === "scanning";
   const driveScanning = driveState === "scanning";
@@ -110,24 +112,27 @@ export function OverviewView({
       />
 
       {mapReady && !detailReady ? (
-        <section className="storage-detail-action" aria-label="큰 파일과 중복 파일 검사">
+        <section className="storage-detail-action" aria-label={t("큰 파일과 중복 파일 검사")}>
           <span>
-            <strong>{scanning ? "큰 파일과 중복을 확인하고 있습니다" : "더 정리할 항목 찾기"}</strong>
+            <strong>{scanning ? t("큰 파일과 중복을 확인하고 있습니다") : t("더 정리할 항목 찾기")}</strong>
             <small>
               {scanning
-                ? `${formatCount(progress?.processedFiles ?? 0)}개 · ${formatBytes(progress?.processedBytes ?? 0)} 확인`
-                : "큰 파일을 모으고, 중복 후보만 내용을 비교합니다."}
+                ? t("{{count}}개 · {{size}} 확인", {
+                    count: formatCount(progress?.processedFiles ?? 0),
+                    size: formatBytes(progress?.processedBytes ?? 0),
+                  })
+                : t("큰 파일을 모으고, 중복 후보만 내용을 비교합니다.")}
             </small>
           </span>
           {scanning ? (
             <button className="secondary-button danger-outline" type="button" onClick={onCancelScan}>
               <X size={17} aria-hidden="true" />
-              검사 취소
+              {t("검사 취소")}
             </button>
           ) : (
             <button className="primary-button" type="button" disabled={actionBlocked || mapScanning} onClick={onStartScan}>
               <Search size={17} aria-hidden="true" />
-              큰 파일·중복 찾기
+              {t("큰 파일·중복 찾기")}
             </button>
           )}
           {error ? (
@@ -136,7 +141,7 @@ export function OverviewView({
               {error}
             </p>
           ) : state === "cancelled" ? (
-            <p className="storage-detail-action__notice" role="status">검사를 취소했습니다.</p>
+            <p className="storage-detail-action__notice" role="status">{t("검사를 취소했습니다.")}</p>
           ) : null}
         </section>
       ) : null}
@@ -144,30 +149,36 @@ export function OverviewView({
       {report ? (
         <section className="storage-result-links" aria-labelledby="storage-result-links-title">
           <div className="storage-result-links__heading">
-            <p className="eyebrow">검사 결과</p>
-            <h2 id="storage-result-links-title">확인할 항목을 고르세요</h2>
+            <p className="eyebrow">{t("검사 결과")}</p>
+            <h2 id="storage-result-links-title">{t("확인할 항목을 고르세요")}</h2>
           </div>
           <button type="button" onClick={onOpenLargeFiles}>
             <HardDrive size={19} aria-hidden="true" />
             <span>
-              <strong>큰 파일</strong>
-              <small>{formatCount(report.largeFiles.length)}개 · {formatBytes(largeBytes)}</small>
+              <strong>{t("큰 파일")}</strong>
+              <small>{t("{{count}}개 · {{size}}", {
+                count: formatCount(report.largeFiles.length),
+                size: formatBytes(largeBytes),
+              })}</small>
             </span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>
           <button type="button" onClick={onOpenDuplicates}>
             <Copy size={19} aria-hidden="true" />
             <span>
-              <strong>중복 파일</strong>
-              <small>{formatCount(report.duplicateGroups.length)}그룹 · {formatBytes(report.duplicateWasteBytes)}</small>
+              <strong>{t("중복 파일")}</strong>
+              <small>{t("{{count}}그룹 · {{size}}", {
+                count: formatCount(report.duplicateGroups.length),
+                size: formatBytes(report.duplicateWasteBytes),
+              })}</small>
             </span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>
           <button type="button" onClick={onOpenCleanup}>
             <ListChecks size={19} aria-hidden="true" />
             <span>
-              <strong>정리 후보</strong>
-              <small>임시 파일과 삭제 후 남은 흔적</small>
+              <strong>{t("정리 후보")}</strong>
+              <small>{t("임시 파일과 삭제 후 남은 흔적")}</small>
             </span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>
@@ -178,8 +189,8 @@ export function OverviewView({
         <summary>
           <span aria-hidden="true"><HardDrive size={19} /></span>
           <span>
-            <strong>컴퓨터 전체 용량을 종류별로 보기</strong>
-            <small>설치된 앱, 임시 파일, 문서, 사진처럼 시스템 드라이브를 나눠 봅니다.</small>
+            <strong>{t("컴퓨터 전체 용량을 종류별로 보기")}</strong>
+            <small>{t("설치된 앱, 임시 파일, 문서, 사진처럼 시스템 드라이브를 나눠 봅니다.")}</small>
           </span>
           <ChevronDown size={18} aria-hidden="true" />
         </summary>

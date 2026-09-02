@@ -10,8 +10,9 @@ import type {
   McpClientRegistrationStatus,
   McpRegistrationState,
 } from "../types";
+import { useLanguage, type MessageKey } from "../i18n";
 
-const stateLabels: Record<McpRegistrationState, string> = {
+const stateLabels: Record<McpRegistrationState, MessageKey> = {
   clientMissing: "CLI 없음",
   helperMissing: "앱 도구 없음",
   notRegistered: "연결 안 됨",
@@ -23,6 +24,7 @@ const stateLabels: Record<McpRegistrationState, string> = {
 };
 
 export function McpConnectionPanel() {
+  const { t } = useLanguage();
   const [statuses, setStatuses] = useState<McpClientRegistrationStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyClient, setBusyClient] = useState<McpClientKind | null>(null);
@@ -61,14 +63,19 @@ export function McpConnectionPanel() {
   async function changeConnection(status: McpClientRegistrationStatus) {
     if (busyClient) return;
     const disconnect = status.canUnregister;
-    const verb = disconnect ? "연결을 해제" : "연결";
     const helperPath = status.helperPath
-      ? `\n\nBroomSweepy MCP 실행 파일:\n${status.helperPath}`
+      ? t("\n\nBroomSweepy MCP 실행 파일:\n{{path}}", { path: status.helperPath })
       : "";
     const accepted = window.confirm(
       disconnect
-        ? `${status.label}의 BroomSweepy MCP ${verb}할까요?\n\n앱이 등록한 항목과 현재 설정이 정확히 같을 때만 제거합니다.${helperPath}`
-        : `${status.label}에 BroomSweepy MCP를 ${verb}할까요?\n\n정리 후보는 제한된 요약과 익명 번호만 전달됩니다. 파일·문서 검색을 따로 허용하면 경로와 일치 문맥이 전달될 수 있습니다. 파일 이동은 BroomSweepy 앱의 최종 확인 없이는 실행되지 않습니다.${helperPath}`,
+        ? t("{{client}}의 BroomSweepy MCP 연결을 해제할까요?\n\n앱이 등록한 항목과 현재 설정이 정확히 같을 때만 제거합니다.{{path}}", {
+            client: status.label,
+            path: helperPath,
+          })
+        : t("{{client}}에 BroomSweepy MCP를 연결할까요?\n\n정리 후보는 제한된 요약과 익명 번호만 전달됩니다. 파일·문서 검색을 따로 허용하면 경로와 일치 문맥이 전달될 수 있습니다. 파일 이동은 BroomSweepy 앱의 최종 확인 없이는 실행되지 않습니다.{{path}}", {
+            client: status.label,
+            path: helperPath,
+          }),
     );
     if (!accepted) return;
 
@@ -93,13 +100,13 @@ export function McpConnectionPanel() {
       <div className="settings-panel__heading">
         <Link2 size={20} aria-hidden="true" />
         <div>
-          <h2>외부 AI에 BroomSweepy 연결</h2>
-          <p>Codex·Claude Code가 파일 대신 로컬 앱의 제한된 결과를 읽게 합니다.</p>
+          <h2>{t("외부 AI에 BroomSweepy 연결")}</h2>
+          <p>{t("Codex·Claude Code가 파일 대신 로컬 앱의 제한된 결과를 읽게 합니다.")}</p>
         </div>
         <button
           type="button"
           className="icon-button mcp-connection-panel__refresh"
-          aria-label="MCP 연결 상태 새로 고침"
+          aria-label={t("MCP 연결 상태 새로 고침")}
           disabled={loading || Boolean(busyClient)}
           onClick={() => void refresh()}
         >
@@ -110,12 +117,12 @@ export function McpConnectionPanel() {
       <div className="mcp-connection-panel__notice">
         <ShieldCheck size={17} aria-hidden="true" />
         <p>
-          요청 요약·도구 선택·판단은 외부 AI가 맡지만, 검사·검색·재검증·휴지통 이동은 이 컴퓨터의 BroomSweepy가 수행합니다. MCP에는 승인이나 영구 삭제 명령이 없습니다.
+          {t("요청 요약·도구 선택·판단은 외부 AI가 맡지만, 검사·검색·재검증·휴지통 이동은 이 컴퓨터의 BroomSweepy가 수행합니다. MCP에는 승인이나 영구 삭제 명령이 없습니다.")}
         </p>
       </div>
 
       {loading && statuses.length === 0 ? (
-        <p className="mcp-connection-panel__empty">설치된 연결 도구를 확인하고 있습니다.</p>
+        <p className="mcp-connection-panel__empty">{t("설치된 연결 도구를 확인하고 있습니다.")}</p>
       ) : (
         <div className="mcp-client-list">
           {statuses.map((status) => {
@@ -125,14 +132,14 @@ export function McpConnectionPanel() {
                 <span className="mcp-client-row__copy">
                   <span>
                     <strong>{status.label}</strong>
-                    <b data-state={status.state}>{stateLabels[status.state]}</b>
+                    <b data-state={status.state}>{t(stateLabels[status.state])}</b>
                   </span>
                   <small>{status.detail}</small>
                   {status.helperPath ? (
                     <code title={status.helperPath}>{status.helperPath}</code>
                   ) : null}
                   {status.restartRequired ? (
-                    <small className="is-success">연결을 쓰려면 {status.label}을 다시 시작해 주세요.</small>
+                    <small className="is-success">{t("연결을 쓰려면 {{client}}을 다시 시작해 주세요.", { client: status.label })}</small>
                   ) : null}
                 </span>
                 {status.canRegister || status.canUnregister ? (
@@ -143,12 +150,12 @@ export function McpConnectionPanel() {
                     onClick={() => void changeConnection(status)}
                   >
                     {working
-                      ? "처리 중…"
+                      ? t("처리 중…")
                       : status.canUnregister
-                        ? "연결 해제"
+                        ? t("연결 해제")
                         : status.state === "pathStale"
-                          ? "연결 복구"
-                          : "연결"}
+                          ? t("연결 복구")
+                          : t("연결")}
                   </button>
                 ) : null}
               </div>
@@ -159,7 +166,7 @@ export function McpConnectionPanel() {
 
       {error ? <p className="mcp-connection-panel__error" role="alert">{error}</p> : null}
       <p className="mcp-connection-panel__footnote">
-        Claude Desktop 확장과 Claude Code 연결은 서로 다릅니다. 현재 자동 연결은 Codex와 Claude Code만 지원합니다.
+        {t("Claude Desktop 확장과 Claude Code 연결은 서로 다릅니다. 현재 자동 연결은 Codex와 Claude Code만 지원합니다.")}
       </p>
     </section>
   );
@@ -168,5 +175,14 @@ export function McpConnectionPanel() {
 function normalizeError(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
-  return "MCP 연결 상태를 확인하지 못했습니다.";
+  switch (document.documentElement.lang) {
+    case "ko":
+      return "MCP 연결 상태를 확인하지 못했습니다.";
+    case "ja":
+      return "MCP 接続状態を確認できませんでした。";
+    case "zh-CN":
+      return "无法检查 MCP 连接状态。";
+    default:
+      return "Could not check MCP connection status.";
+  }
 }

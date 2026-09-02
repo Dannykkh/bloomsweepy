@@ -1,6 +1,7 @@
 import { Database, Search } from "lucide-react";
 import { formatBytes } from "../lib/format";
 import type { ScanReport, VolumeInfo } from "../types";
+import { useLanguage } from "../i18n";
 
 interface StorageRingProps {
   volume: VolumeInfo | null;
@@ -9,15 +10,16 @@ interface StorageRingProps {
 }
 
 export function StorageRing({ volume, report, scanning }: StorageRingProps) {
+  const { t } = useLanguage();
   const usedBytes = volume ? volume.totalBytes - volume.availableBytes : 0;
   const usedPercent = volume?.totalBytes
     ? Math.min(100, Math.max(0, (usedBytes / volume.totalBytes) * 100))
     : 0;
   const status = scanning
-    ? "파일을 확인하는 중"
+    ? t("파일을 확인하는 중")
     : report
-      ? `${report.totalFiles.toLocaleString("ko-KR")}개 파일 확인`
-      : "분석 준비 완료";
+      ? t("{{count}}개 파일 확인", { count: report.totalFiles.toLocaleString() })
+      : t("분석 준비 완료");
 
   return (
     <div
@@ -25,8 +27,11 @@ export function StorageRing({ volume, report, scanning }: StorageRingProps) {
       role="img"
       aria-label={
         volume
-          ? `디스크 사용률 ${Math.round(usedPercent)}퍼센트, ${formatBytes(volume.availableBytes)} 남음`
-          : "디스크를 선택하지 않음"
+          ? t("디스크 사용률 {{percent}}퍼센트, {{size}} 남음", {
+              percent: Math.round(usedPercent),
+              size: formatBytes(volume.availableBytes),
+            })
+          : t("디스크를 선택하지 않음")
       }
     >
       <svg viewBox="0 0 220 220" aria-hidden="true">
@@ -50,7 +55,9 @@ export function StorageRing({ volume, report, scanning }: StorageRingProps) {
         <span className="storage-ring__icon" aria-hidden="true">
           {scanning ? <Search size={22} /> : <Database size={22} />}
         </span>
-        <strong>{volume ? `${Math.round(usedPercent)}% 사용` : "BroomSweepy"}</strong>
+        <strong>
+          {volume ? t("{{percent}}% 사용", { percent: Math.round(usedPercent) }) : "BroomSweepy"}
+        </strong>
         <span>{status}</span>
       </div>
     </div>

@@ -69,6 +69,29 @@ pub(crate) enum AssistantScopeKind {
     Docker,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+pub(crate) enum AssistantResponseLanguage {
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "ko")]
+    Korean,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+}
+
+impl AssistantResponseLanguage {
+    fn prompt_instruction(self) -> &'static str {
+        match self {
+            Self::English => "Reply in concise English.",
+            Self::Korean => "Reply in concise Korean.",
+            Self::Japanese => "Reply in concise, natural Japanese.",
+            Self::SimplifiedChinese => "Reply in concise Simplified Chinese.",
+        }
+    }
+}
+
 impl AssistantProviderKind {
     fn executable_name(self) -> &'static str {
         match self {
@@ -138,6 +161,7 @@ pub(crate) struct AssistantChatRequest {
     summary: AssistantFolderSummary,
     scope_kind: AssistantScopeKind,
     include_docker_status: bool,
+    response_language: AssistantResponseLanguage,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -376,8 +400,8 @@ fn build_prompt(
         .iter()
         .map(|turn| {
             let role = match turn.role {
-                AssistantChatRole::User => "사용자",
-                AssistantChatRole::Assistant => "도우미",
+                AssistantChatRole::User => "User",
+                AssistantChatRole::Assistant => "Assistant",
             };
             format!("{role}: {}", turn.content.trim())
         })
@@ -385,37 +409,38 @@ fn build_prompt(
         .join("\n");
 
     let docker_context = docker_context_json.map_or_else(
-        || "[Docker 사용량]\n요청하지 않음".to_owned(),
+        || "[Docker usage]\nNot requested".to_owned(),
         |context| {
             format!(
-                "[Docker 사용량]\n{context}\n\
-                 이 값은 BroomSweepy가 Docker CLI로 읽은 제한된 요약입니다. Docker 정리를 요청받으면 범주와 이유만 설명하고, 앱의 'Docker 정리 검토'에서 최종 확인하라고 안내하세요. 앱은 개별 Docker 객체 목록이 아니라 범주별 참고 상한과 고정 명령만 보여줍니다. 명령을 제시하거나 실행했다고 말하지 마세요."
+                "[Docker usage]\n{context}\n\
+                 This is a limited summary read by BroomSweepy through Docker CLI. If asked to clean Docker, explain only the category and reason, then direct the user to the app's Docker cleanup review for final confirmation. The app shows category-level estimates and fixed actions, not individual Docker object lists. Do not provide commands or claim that you executed anything."
             )
         },
     );
 
     let scope_context = match request.scope_kind {
         AssistantScopeKind::Folder => format!(
-            "아래 JSON은 BroomSweepy가 사용자가 선택한 폴더를 읽기 전용으로 검사해 만든 제한된 요약입니다.\n\
-             전체 경로와 파일 내용은 전달되지 않았습니다.\n\n\
-             [폴더 요약]\n{summary}"
+            "The JSON below is a limited summary produced by BroomSweepy after a read-only scan of the folder selected by the user.\n\
+             Full paths and file contents were not shared.\n\n\
+             [Folder summary]\n{summary}"
         ),
         AssistantScopeKind::Docker => {
-            "이 대화의 대상은 폴더가 아니라 이 컴퓨터의 Docker입니다. 폴더를 선택하거나 파일을 직접 읽었다고 말하지 마세요.\n\
-             BroomSweepy가 제공한 Docker 범주별 요약만 사용하세요."
+            "The subject of this chat is Docker on this computer, not a folder. Do not claim that you selected a folder or read files directly.\n\
+             Use only the category-level Docker summary supplied by BroomSweepy."
                 .to_owned()
         }
     };
 
     Ok(format!(
-        "당신은 BroomSweepy의 저장공간 분석 도우미입니다. 반드시 한국어로 간결하게 답하세요.\n\
+        "You are BroomSweepy's storage analysis assistant. {}\n\
          {scope_context}\n\
-         당신은 디스크를 직접 읽지 않았으며, 셸이나 다른 도구를 사용하지 마세요. 요약에 없는 사실은 추측하지 말고 '추가 검사가 필요합니다'라고 말하세요.\n\
-         삭제를 확정하거나 실행했다고 말하지 마세요. 삭제 후보가 있으면 이유와 앱에서 사용자가 확인할 다음 행동만 제안하세요.\n\
-         응답은 앱에 일반 텍스트로 표시됩니다. Markdown 굵게, 제목, 코드 펜스, 백틱, 메타데이터 태그를 쓰지 말고 짧은 한국어 문장과 하이픈 목록만 사용하세요.\n\n\
+         You did not read the disk directly. Do not use a shell or any other tool. Do not guess facts absent from the summary; say that an additional scan is required.\n\
+         Never claim that deletion was approved or performed. For possible cleanup candidates, explain the reason and suggest only the next review action inside the app.\n\
+         The response is displayed as plain text. Do not use Markdown emphasis, headings, code fences, backticks, or metadata tags. Use short sentences and hyphen lists only.\n\n\
          {docker_context}\n\n\
-         [최근 대화]\n{history}\n\n\
-         [사용자 질문]\n{}",
+         [Recent conversation]\n{history}\n\n\
+         [User question]\n{}",
+        request.response_language.prompt_instruction(),
         request.message.trim()
     ))
 }
@@ -893,6 +918,7 @@ mod tests {
             history: Vec::new(),
             scope_kind: AssistantScopeKind::Folder,
             include_docker_status: false,
+            response_language: AssistantResponseLanguage::English,
             summary: AssistantFolderSummary {
                 scope_name: ".codex".to_owned(),
                 completed_at_unix_ms: 1,
@@ -918,7 +944,8 @@ mod tests {
         let prompt = build_prompt(&valid_request(), None).expect("prompt");
         assert!(prompt.contains(".codex"));
         assert!(prompt.contains("sessions"));
-        assert!(prompt.contains("디스크를 직접 읽지 않았으며"));
+        assert!(prompt.contains("You did not read the disk directly"));
+        assert!(prompt.contains("Reply in concise English"));
         assert!(!prompt.contains("C:\\Users"));
     }
 
@@ -929,9 +956,9 @@ mod tests {
             Some(r#"{"enabled":true,"available":true,"reclaimableBytes":21100000000}"#),
         )
         .expect("prompt");
-        assert!(prompt.contains("Docker 정리 검토"));
+        assert!(prompt.contains("Docker cleanup review"));
         assert!(prompt.contains("21100000000"));
-        assert!(prompt.contains("실행했다고 말하지 마세요"));
+        assert!(prompt.contains("Do not provide commands or claim that you executed anything"));
     }
 
     #[test]
@@ -947,8 +974,8 @@ mod tests {
             Some(r#"{"enabled":true,"available":true,"totalSizeBytes":10}"#),
         )
         .expect("Docker prompt");
-        assert!(prompt.contains("대상은 폴더가 아니라 이 컴퓨터의 Docker"));
-        assert!(!prompt.contains("[폴더 요약]"));
+        assert!(prompt.contains("subject of this chat is Docker on this computer"));
+        assert!(!prompt.contains("[Folder summary]"));
     }
 
     #[test]
@@ -987,6 +1014,27 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AssistantProviderKind::Ollama).expect("ollama"),
             "\"ollama\""
+        );
+    }
+
+    #[test]
+    fn response_languages_use_stable_ui_wire_names() {
+        assert_eq!(
+            serde_json::from_str::<AssistantResponseLanguage>("\"en\"").expect("English"),
+            AssistantResponseLanguage::English
+        );
+        assert_eq!(
+            serde_json::from_str::<AssistantResponseLanguage>("\"ko\"").expect("Korean"),
+            AssistantResponseLanguage::Korean
+        );
+        assert_eq!(
+            serde_json::from_str::<AssistantResponseLanguage>("\"ja\"").expect("Japanese"),
+            AssistantResponseLanguage::Japanese
+        );
+        assert_eq!(
+            serde_json::from_str::<AssistantResponseLanguage>("\"zh-CN\"")
+                .expect("Simplified Chinese"),
+            AssistantResponseLanguage::SimplifiedChinese
         );
     }
 

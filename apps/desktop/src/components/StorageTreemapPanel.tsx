@@ -18,6 +18,7 @@ import type {
   DirectoryScanReport,
   ScanUiState,
 } from "../types";
+import { useLanguage } from "../i18n";
 
 interface StorageTreemapPanelProps {
   root: string | null;
@@ -65,8 +66,12 @@ export function StorageTreemapPanel({
   onStart,
   onCancel,
 }: StorageTreemapPanelProps) {
+  const { t } = useLanguage();
   const scanning = state === "scanning";
-  const mapItems = useMemo(() => prepareDisplayItems(report), [report]);
+  const mapItems = useMemo(
+    () => prepareDisplayItems(report, (count) => t("기타 {{count}}개", { count })),
+    [report, t],
+  );
   const [canvasRef, canvasSize] = useElementSize<HTMLDivElement>(mapItems.length > 0);
   const layout = useMemo(
     () => layoutTreemap(mapItems, canvasSize.width, canvasSize.height),
@@ -91,15 +96,15 @@ export function StorageTreemapPanel({
     <section className="storage-map" id="storage-map" aria-labelledby="storage-map-title">
       <header className="storage-map__header">
         <div>
-          <p className="eyebrow">저장공간 트리맵</p>
-          <h2 id="storage-map-title">폴더 용량 지도</h2>
-          <p>사각형이 클수록 더 많은 용량을 사용합니다. 폴더를 누르면 안쪽으로 이동합니다.</p>
+          <p className="eyebrow">{t("저장공간 트리맵")}</p>
+          <h2 id="storage-map-title">{t("폴더 용량 지도")}</h2>
+          <p>{t("사각형이 클수록 더 많은 용량을 사용합니다. 폴더를 누르면 안쪽으로 이동합니다.")}</p>
         </div>
         {showAction ? <div className="storage-map__actions">
           {scanning ? (
             <button className="secondary-button danger-outline" type="button" onClick={onCancel}>
               <X size={16} aria-hidden="true" />
-              분석 취소
+              {t("분석 취소")}
             </button>
           ) : (
             <button
@@ -118,14 +123,14 @@ export function StorageTreemapPanel({
               ) : (
                 <FolderOpen size={16} aria-hidden="true" />
               )}
-              {report ? "처음 폴더 다시 보기" : root ? "지도 다시 만들기" : "폴더 선택"}
+              {report ? t("처음 폴더 다시 보기") : root ? t("지도 다시 만들기") : t("폴더 선택")}
             </button>
           )}
-        </div> : <span className="storage-map__mode">읽기 전용</span>}
+        </div> : <span className="storage-map__mode">{t("읽기 전용")}</span>}
       </header>
 
       {breadcrumbs.length ? (
-        <nav className="storage-map__breadcrumbs" aria-label="저장공간 맵 경로">
+        <nav className="storage-map__breadcrumbs" aria-label={t("저장공간 맵 경로")}>
           {breadcrumbs.map((crumb, index) => (
             <span key={`${crumb.path}-${index}`}>
               {index > 0 ? <ChevronRight size={13} aria-hidden="true" /> : null}
@@ -147,9 +152,12 @@ export function StorageTreemapPanel({
         <div className="storage-map__progress" role="status" aria-live="polite">
           <span className="drive-progress__spinner" aria-hidden="true" />
           <div>
-            <strong>{progress?.message ?? "폴더 구조를 분석하고 있습니다"}</strong>
+            <strong>{t("폴더 구조를 분석하고 있습니다")}</strong>
             <small>
-              {formatCount(progress?.processedEntries ?? 0)}개 항목 · {formatBytes(progress?.processedBytes ?? 0)} 확인
+              {t("{{count}}개 항목 · {{size}} 확인", {
+                count: formatCount(progress?.processedEntries ?? 0),
+                size: formatBytes(progress?.processedBytes ?? 0),
+              })}
             </small>
           </div>
         </div>
@@ -164,16 +172,16 @@ export function StorageTreemapPanel({
 
       {report ? (
         <>
-          <div className="storage-map__summary" aria-label="현재 폴더 요약">
-            <StorageMapMetric label="현재 범위" value={formatBytes(report.totalLogicalBytes)} />
-            <StorageMapMetric label="직계 항목" value={`${formatCount(report.directChildCount)}개`} />
-            <StorageMapMetric label="하위 파일" value={`${formatCount(report.totalFiles)}개`} />
-            <StorageMapMetric label="빈 폴더" value={`${formatCount(report.emptyDirectoryCount)}개`} />
+          <div className="storage-map__summary" aria-label={t("현재 폴더 요약")}>
+            <StorageMapMetric label={t("현재 범위")} value={formatBytes(report.totalLogicalBytes)} />
+            <StorageMapMetric label={t("직계 항목")} value={t("{{count}}개", { count: formatCount(report.directChildCount) })} />
+            <StorageMapMetric label={t("하위 파일")} value={t("{{count}}개", { count: formatCount(report.totalFiles) })} />
+            <StorageMapMetric label={t("빈 폴더")} value={t("{{count}}개", { count: formatCount(report.emptyDirectoryCount) })} />
           </div>
 
           {mapItems.length ? (
             <div className="storage-map__workspace">
-              <div className="storage-map__canvas" ref={canvasRef} aria-label="파일과 폴더 크기 비교 지도">
+              <div className="storage-map__canvas" ref={canvasRef} aria-label={t("파일과 폴더 크기 비교 지도")}>
                 {layout.map((item) => {
                   const canOpen = item.node?.isDirectory === true;
                   const showName = item.width >= 70 && item.height >= 34;
@@ -194,7 +202,7 @@ export function StorageTreemapPanel({
                         width: Math.max(1, item.width - 4),
                         height: Math.max(1, item.height - 4),
                       }}
-                      title={`${item.name} · ${formatBytes(item.logicalBytes)}${canOpen ? " · 하위 폴더 탐색" : ""}`}
+                      title={`${item.name} · ${formatBytes(item.logicalBytes)}${canOpen ? ` · ${t("하위 폴더 탐색")}` : ""}`}
                     >
                       {showName ? (
                         <span className="storage-map-cell__name">
@@ -210,10 +218,10 @@ export function StorageTreemapPanel({
                 })}
               </div>
 
-              <aside className="storage-map__ranking" aria-label="현재 폴더 용량 순위">
+              <aside className="storage-map__ranking" aria-label={t("현재 폴더 용량 순위")}>
                 <div className="storage-map__ranking-heading">
-                  <strong>용량 순위</strong>
-                  <small>폴더를 선택하면 하위로 이동</small>
+                  <strong>{t("용량 순위")}</strong>
+                  <small>{t("폴더를 선택하면 하위로 이동")}</small>
                 </div>
                 <div className="storage-map__ranking-list">
                   {report.children.slice(0, 12).map((node, index) => (
@@ -231,8 +239,11 @@ export function StorageTreemapPanel({
                         <strong>{node.name}</strong>
                         <small>
                           {node.isDirectory
-                            ? `${formatCount(node.fileCount)}개 파일 · ${formatCount(node.directoryCount)}개 폴더`
-                            : "파일"}
+                            ? t("{{files}}개 파일 · {{folders}}개 폴더", {
+                                files: formatCount(node.fileCount),
+                                folders: formatCount(node.directoryCount),
+                              })
+                            : t("파일")}
                         </small>
                       </span>
                       <span>
@@ -247,8 +258,8 @@ export function StorageTreemapPanel({
           ) : (
             <div className="storage-map__empty">
               <FolderOpen size={24} aria-hidden="true" />
-              <strong>표시할 용량 항목이 없습니다</strong>
-              <p>현재 폴더에는 용량이 있는 파일이 없거나 접근할 수 없습니다.</p>
+              <strong>{t("표시할 용량 항목이 없습니다")}</strong>
+              <p>{t("현재 폴더에는 용량이 있는 파일이 없거나 접근할 수 없습니다.")}</p>
             </div>
           )}
 
@@ -257,11 +268,11 @@ export function StorageTreemapPanel({
               <span>
                 <FolderOpen size={17} aria-hidden="true" />
                 <span>
-                  <strong id="empty-directory-title">빈 폴더</strong>
-                  <small>직접 포함된 항목이 하나도 없는 폴더만 표시합니다.</small>
+                  <strong id="empty-directory-title">{t("빈 폴더")}</strong>
+                  <small>{t("직접 포함된 항목이 하나도 없는 폴더만 표시합니다.")}</small>
                 </span>
               </span>
-              <strong>{formatCount(report.emptyDirectoryCount)}개</strong>
+              <strong>{t("{{count}}개", { count: formatCount(report.emptyDirectoryCount) })}</strong>
             </div>
             {report.emptyDirectories.length ? (
               <div className="empty-directory-list__rows">
@@ -278,14 +289,18 @@ export function StorageTreemapPanel({
                 ))}
               </div>
             ) : (
-              <p className="empty-directory-list__none">접근 가능한 범위에서 빈 폴더가 발견되지 않았습니다.</p>
+              <p className="empty-directory-list__none">{t("접근 가능한 범위에서 빈 폴더가 발견되지 않았습니다.")}</p>
             )}
             {report.emptyDirectoryCount > 8 ? (
               <p className="empty-directory-list__notice">
-                화면에는 8개만 표시합니다. 전체 {formatCount(report.emptyDirectoryCount)}개 중
                 {report.emptyDirectoriesTruncated
-                  ? ` 최대 ${formatCount(report.emptyDirectories.length)}개 경로를 보관했습니다.`
-                  : " 나머지 경로도 스캔 결과에 보관돼 있습니다."}
+                  ? t("화면에는 8개만 표시합니다. 전체 {{total}}개 중 최대 {{kept}}개 경로를 보관했습니다.", {
+                      total: formatCount(report.emptyDirectoryCount),
+                      kept: formatCount(report.emptyDirectories.length),
+                    })
+                  : t("화면에는 8개만 표시합니다. 전체 {{total}}개 중 나머지 경로도 스캔 결과에 보관돼 있습니다.", {
+                      total: formatCount(report.emptyDirectoryCount),
+                    })}
               </p>
             ) : null}
           </section>
@@ -293,14 +308,14 @@ export function StorageTreemapPanel({
           <footer className="storage-map__footer">
             <span>
               <HardDrive size={14} aria-hidden="true" />
-              {formatDuration(report.durationMs)} · 읽기 전용 분석
+              {t("{{duration}} · 읽기 전용 분석", { duration: formatDuration(report.durationMs) })}
             </span>
             <span>
-              접근 제한 {formatCount(report.unreadableEntries)}개
+              {t("접근 제한 {{count}}개", { count: formatCount(report.unreadableEntries) })}
               {report.childrenTruncated
-                ? ` · 작은 직계 항목 ${formatCount(report.omittedChildCount)}개 집계`
+                ? ` · ${t("작은 직계 항목 {{count}}개 집계", { count: formatCount(report.omittedChildCount) })}`
                 : ""}
-              {report.trackingLimitReached ? " · 개별 항목 보관 안전 상한 도달" : ""}
+              {report.trackingLimitReached ? ` · ${t("개별 항목 보관 안전 상한 도달")}` : ""}
             </span>
           </footer>
         </>
@@ -319,8 +334,8 @@ export function StorageTreemapPanel({
             <ChevronRight size={16} />
             <Folder size={18} />
           </span>
-          <strong>{root ? "큰 사각형부터 폴더 안쪽으로 이동합니다" : "먼저 검사할 폴더를 선택하세요"}</strong>
-          <small>{root ? "지도를 다시 만들 수 있습니다." : "폴더를 고르면 용량 지도를 바로 만듭니다."}</small>
+          <strong>{root ? t("큰 사각형부터 폴더 안쪽으로 이동합니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
+          <small>{root ? t("지도를 다시 만들 수 있습니다.") : t("폴더를 고르면 용량 지도를 바로 만듭니다.")}</small>
         </button>
       ) : (
         <div className="storage-map__start is-static">
@@ -329,8 +344,8 @@ export function StorageTreemapPanel({
             <ChevronRight size={16} />
             <Folder size={18} />
           </span>
-          <strong>{root ? "큰 사각형부터 폴더 안쪽으로 이동합니다" : "먼저 검사할 폴더를 선택하세요"}</strong>
-          <small>{root ? "위 안내의 버튼으로 폴더 용량 지도를 만드세요." : "폴더를 고른 뒤 용량 지도를 만들 수 있습니다."}</small>
+          <strong>{root ? t("큰 사각형부터 폴더 안쪽으로 이동합니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
+          <small>{root ? t("위 안내의 버튼으로 폴더 용량 지도를 만드세요.") : t("폴더를 고른 뒤 용량 지도를 만들 수 있습니다.")}</small>
         </div>
       )}
     </section>
@@ -346,7 +361,10 @@ function StorageMapMetric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function prepareDisplayItems(report: DirectoryScanReport | null): DisplayItem[] {
+function prepareDisplayItems(
+  report: DirectoryScanReport | null,
+  formatOther: (count: string) => string,
+): DisplayItem[] {
   if (!report) return [];
 
   const positive = report.children
@@ -373,7 +391,7 @@ function prepareDisplayItems(report: DirectoryScanReport | null): DisplayItem[] 
   if (remainderBytes > 0) {
     direct.push({
       id: `${report.root}::other`,
-      name: `기타 ${formatCount(remainderCount)}개`,
+      name: formatOther(formatCount(remainderCount)),
       path: null,
       logicalBytes: remainderBytes,
       itemCount: remainderCount,

@@ -1,11 +1,12 @@
 import type { ViewId } from "../types";
+import { useLanguage, type MessageKey } from "../i18n";
 
 interface StorageSectionNavProps {
   activeView: ViewId;
   onNavigate: (view: ViewId) => void;
 }
 
-const items: Array<{ id: ViewId; label: string }> = [
+const items: Array<{ id: ViewId; label: MessageKey }> = [
   { id: "overview", label: "용량 지도" },
   { id: "large-files", label: "큰 파일" },
   { id: "duplicates", label: "중복 파일" },
@@ -16,8 +17,9 @@ export function StorageSectionNav({
   activeView,
   onNavigate,
 }: StorageSectionNavProps) {
+  const { t } = useLanguage();
   return (
-    <nav className="storage-section-nav" aria-label="용량 관리 화면">
+    <nav className="storage-section-nav" aria-label={t("용량 관리 화면")}>
       {items.map((item) => {
         const active = activeView === item.id;
         return (
@@ -28,7 +30,7 @@ export function StorageSectionNav({
             key={item.id}
             onClick={() => onNavigate(item.id)}
           >
-            {item.label}
+            {t(item.label)}
           </button>
         );
       })}

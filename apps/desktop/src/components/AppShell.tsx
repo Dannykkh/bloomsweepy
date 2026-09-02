@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { formatBytes, formatDate } from "../lib/format";
+import { useLanguage, type MessageKey } from "../i18n";
 import type {
   ScanReport,
   ViewId,
@@ -36,8 +37,8 @@ interface AppShellProps {
 
 const navigationBeforeDocker: Array<{
   id: ViewId;
-  label: string;
-  description: string;
+  label: MessageKey;
+  description: MessageKey;
   icon: typeof Map;
 }> = [
   {
@@ -54,7 +55,12 @@ const navigationBeforeDocker: Array<{
   },
 ];
 
-const dockerNavigation = {
+const dockerNavigation: {
+  id: ViewId;
+  label: MessageKey;
+  description: MessageKey;
+  icon: typeof Map;
+} = {
   id: "docker" as ViewId,
   label: "Docker 용량",
   description: "이미지·캐시·컨테이너",
@@ -63,8 +69,8 @@ const dockerNavigation = {
 
 const navigationAfterDocker: Array<{
   id: ViewId;
-  label: string;
-  description: string;
+  label: MessageKey;
+  description: MessageKey;
   icon: typeof Map;
 }> = [
   {
@@ -108,7 +114,10 @@ const folderViews = new Set<ViewId>([
   "documents",
 ]);
 
-const titles: Record<ViewId, { eyebrow: string; title: string; description: string }> = {
+const titles: Record<
+  ViewId,
+  { eyebrow: MessageKey; title: MessageKey; description: MessageKey }
+> = {
   dashboard: {
     eyebrow: "오늘의 저장공간",
     title: "대시보드",
@@ -174,6 +183,7 @@ export function AppShell({
   onNavigate,
   onPickFolder,
 }: AppShellProps) {
+  const { t } = useLanguage();
   const navigation = dockerEnabled
     ? [...navigationBeforeDocker, dockerNavigation, ...navigationAfterDocker]
     : [...navigationBeforeDocker, ...navigationAfterDocker];
@@ -182,7 +192,7 @@ export function AppShell({
     : 0;
   const page = titles[activeView];
   const showFolderButton = folderViews.has(activeView);
-  const folderLabel =
+  const folderLabel: MessageKey =
     activeView === "files"
       ? "찾을 위치"
       : activeView === "documents"
@@ -208,12 +218,12 @@ export function AppShell({
   return (
     <div className="app-shell">
       <a className="skip-link" href="#main-content">
-        본문으로 건너뛰기
+        {t("본문으로 건너뛰기")}
       </a>
       <button
         className="mobile-nav-button icon-button"
         type="button"
-        aria-label={mobileNavigationOpen ? "내비게이션 닫기" : "내비게이션 열기"}
+        aria-label={mobileNavigationOpen ? t("내비게이션 닫기") : t("내비게이션 열기")}
         aria-expanded={mobileNavigationOpen}
         aria-controls="primary-sidebar"
         onClick={() => onMobileNavigationChange(!mobileNavigationOpen)}
@@ -228,7 +238,7 @@ export function AppShell({
       <aside
         className={`sidebar ${mobileNavigationOpen ? "is-open" : ""}`}
         id="primary-sidebar"
-        aria-label="BroomSweepy 내비게이션"
+        aria-label={t("BroomSweepy 내비게이션")}
       >
         <div className="brand-lockup">
           <span className="brand-lockup__mark" aria-hidden="true">
@@ -236,11 +246,11 @@ export function AppShell({
           </span>
           <span className="brand-lockup__copy">
             <strong>BroomSweepy</strong>
-            <small>Storage instrument</small>
+            <small>{t("저장공간 도구")}</small>
           </span>
         </div>
 
-        <nav className="primary-navigation" aria-label="주요 화면">
+        <nav className="primary-navigation" aria-label={t("주요 화면")}>
           {navigation.map((item) => {
             const Icon = item.icon;
             const active =
@@ -251,10 +261,10 @@ export function AppShell({
               <button
                 type="button"
                 className={`nav-item ${active ? "is-active" : ""}`}
-                aria-label={`${item.label}: ${item.description}`}
+                aria-label={`${t(item.label)}: ${t(item.description)}`}
                 aria-current={active ? "page" : undefined}
-                data-tooltip={item.label}
-                title={`${item.label} - ${item.description}`}
+                data-tooltip={t(item.label)}
+                title={`${t(item.label)} - ${t(item.description)}`}
                 key={item.id}
                 onClick={() => navigate(item.id)}
               >
@@ -262,18 +272,22 @@ export function AppShell({
                   <Icon size={17} />
                 </span>
                 <span className="nav-item__copy">
-                  <strong>{item.label}</strong>
-                  <small>{item.description}</small>
+                  <strong>{t(item.label)}</strong>
+                  <small>{t(item.description)}</small>
                 </span>
               </button>
             );
           })}
         </nav>
 
-        <div className="sidebar-volume" aria-label="기본 디스크 상태">
+        <div className="sidebar-volume" aria-label={t("기본 디스크 상태")}>
           <div className="sidebar-volume__line">
             <HardDrive size={14} aria-hidden="true" />
-            <span>{volume ? `${formatBytes(volume.availableBytes)} 여유` : "디스크 확인 중"}</span>
+            <span>
+              {volume
+                ? t("{{size}} 여유", { size: formatBytes(volume.availableBytes) })
+                : t("디스크 확인 중")}
+            </span>
             {volume ? <strong>{Math.round(usedPercent)}%</strong> : null}
           </div>
           <div className="usage-track" aria-hidden="true">
@@ -286,7 +300,7 @@ export function AppShell({
         <button
           className="navigation-scrim"
           type="button"
-          aria-label="내비게이션 닫기"
+          aria-label={t("내비게이션 닫기")}
           onClick={() => onMobileNavigationChange(false)}
         />
       ) : null}
@@ -296,11 +310,11 @@ export function AppShell({
           <div>
             <p className="eyebrow">
               {storageViews.has(activeView) && report
-                ? `마지막 검사 ${formatDate(report.completedAtUnixMs)}`
-                : page.eyebrow}
+                ? t("마지막 검사 {{date}}", { date: formatDate(report.completedAtUnixMs) })
+                : t(page.eyebrow)}
             </p>
-            <h1>{page.title}</h1>
-            <p>{page.description}</p>
+            <h1>{t(page.title)}</h1>
+            <p>{t(page.description)}</p>
           </div>
           {showFolderButton ? (
             <button
@@ -311,8 +325,8 @@ export function AppShell({
             >
               <FolderOpen size={17} aria-hidden="true" />
               <span>
-                <small>{folderLabel}</small>
-                <strong title={root ?? undefined}>{root ?? "폴더 선택"}</strong>
+                <small>{t(folderLabel)}</small>
+                <strong title={root ?? undefined}>{root ?? t("폴더 선택")}</strong>
               </span>
             </button>
           ) : null}

@@ -90,6 +90,7 @@ import { AssistantView } from "./views/AssistantView";
 import { findVolumeForPath } from "./lib/volumePath";
 import { DashboardView } from "./views/DashboardView";
 import { DockerManagementView } from "./views/DockerManagementView";
+import { useLanguage } from "./i18n";
 
 interface AssistantLaunchRequest {
   id: number;
@@ -119,6 +120,7 @@ const unavailableControlStatus: ControlStatus = {
 };
 
 function App() {
+  const { t } = useLanguage();
   const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [system, setSystem] = useState<SystemOverview | null>(null);
@@ -228,14 +230,16 @@ function App() {
     announcedScanState.current = scanState;
     setBackgroundScanTerminalAnnouncement(
       scanState === "success"
-        ? "파일 검사가 완료됐습니다."
+        ? t("파일 검사가 완료됐습니다.")
         : scanState === "cancelled"
-          ? "파일 검사를 취소했습니다."
+          ? t("파일 검사를 취소했습니다.")
           : "",
     );
     setBackgroundScanErrorAnnouncement(
       scanState === "error"
-        ? `파일 검사를 완료하지 못했습니다. ${error ?? "오류 내용을 확인해 주세요."}`
+        ? t("파일 검사를 완료하지 못했습니다. {{detail}}", {
+            detail: error ?? t("오류 내용을 확인해 주세요."),
+          })
         : "",
     );
   }, [activeView, error, scanState]);
@@ -322,7 +326,7 @@ function App() {
         setScanState("scanning");
         setProgress({
           phase: "discovering",
-          message: operation.message ?? "채팅에서 요청한 검사를 준비하고 있습니다",
+          message: t("채팅에서 요청한 검사를 준비하고 있습니다"),
           processedFiles: operation.processedItems ?? 0,
           processedBytes: operation.processedBytes ?? 0,
           fraction: null,
@@ -331,10 +335,7 @@ function App() {
       } else {
         setProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message:
-            operation.message ??
-            current?.message ??
-            "채팅에서 요청한 검사를 진행하고 있습니다",
+          message: t("채팅에서 요청한 검사를 진행하고 있습니다"),
           processedFiles: operation.processedItems ?? current?.processedFiles ?? 0,
           processedBytes: operation.processedBytes ?? current?.processedBytes ?? 0,
           fraction: current?.fraction ?? null,
@@ -355,7 +356,7 @@ function App() {
         completed.operationId,
         completed.state,
         completed.scanGeneration,
-        completed.message ?? "채팅에서 요청한 검사를 완료하지 못했습니다",
+        t("채팅에서 요청한 검사를 완료하지 못했습니다"),
       );
     }
   }
@@ -406,17 +407,17 @@ function App() {
       if (systemResult.status === "fulfilled") {
         setSystem(systemResult.value);
       } else {
-        failures.push(`드라이브: ${normalizeError(systemResult.reason)}`);
+        failures.push(t("드라이브: {{detail}}", { detail: normalizeError(systemResult.reason) }));
       }
       if (historyResult.status === "fulfilled") {
         setActionHistory(historyResult.value);
       } else {
-        failures.push(`최근 정리: ${normalizeError(historyResult.reason)}`);
+        failures.push(t("최근 정리: {{detail}}", { detail: normalizeError(historyResult.reason) }));
       }
       if (recentResult.status === "fulfilled") {
         setRecentFiles(recentResult.value);
       } else {
-        failures.push(`최근 파일: ${normalizeError(recentResult.reason)}`);
+        failures.push(t("최근 파일: {{detail}}", { detail: normalizeError(recentResult.reason) }));
       }
 
       setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
@@ -617,17 +618,17 @@ function App() {
     if (systemResult.status === "fulfilled") {
       setSystem(systemResult.value);
     } else {
-      failures.push(`드라이브: ${normalizeError(systemResult.reason)}`);
+      failures.push(t("드라이브: {{detail}}", { detail: normalizeError(systemResult.reason) }));
     }
     if (historyResult.status === "fulfilled") {
       setActionHistory(historyResult.value);
     } else {
-      failures.push(`최근 정리: ${normalizeError(historyResult.reason)}`);
+      failures.push(t("최근 정리: {{detail}}", { detail: normalizeError(historyResult.reason) }));
     }
     if (recentResult.status === "fulfilled") {
       setRecentFiles(recentResult.value);
     } else {
-      failures.push(`최근 파일: ${normalizeError(recentResult.reason)}`);
+      failures.push(t("최근 파일: {{detail}}", { detail: normalizeError(recentResult.reason) }));
     }
 
     setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
@@ -749,7 +750,7 @@ function App() {
       const plan = await getPendingCleanupPlan();
       if (!plan) {
         setPendingCleanupPlan(null);
-        setPendingCleanupPlanError("확인할 정리 계획이 없거나 확인 시간이 지났습니다.");
+        setPendingCleanupPlanError(t("확인할 정리 계획이 없거나 확인 시간이 지났습니다."));
         return;
       }
       setPendingCleanupPlan(plan);
@@ -880,7 +881,7 @@ function App() {
   async function pickFolder(): Promise<string | null> {
     if (selectionBlocked) return null;
     try {
-      const selected = await selectDirectory();
+      const selected = await selectDirectory(t("스캔할 폴더 선택"));
       if (!selected || !(await useSelectedRoot(selected))) return null;
       return selected;
     } catch (reason) {
@@ -907,7 +908,9 @@ function App() {
     try {
       await revealPath(path);
     } catch (reason) {
-      setDashboardError(`파일 위치를 열지 못했습니다. ${normalizeError(reason)}`);
+      setDashboardError(
+        t("파일 위치를 열지 못했습니다. {{detail}}", { detail: normalizeError(reason) }),
+      );
     }
   }
 
@@ -935,7 +938,7 @@ function App() {
     setError(null);
     setProgress({
       phase: "discovering",
-      message: "스캔 작업을 준비하고 있습니다",
+      message: t("스캔 작업을 준비하고 있습니다"),
       processedFiles: 0,
       processedBytes: 0,
       fraction: null,
@@ -984,7 +987,7 @@ function App() {
     setDriveError(null);
     setDriveProgress({
       phase: "discovering",
-      message: "드라이브 분석을 준비하고 있습니다",
+      message: t("드라이브 분석을 준비하고 있습니다"),
       processedFiles: 0,
       processedBytes: 0,
       unreadableEntries: 0,
@@ -1020,7 +1023,7 @@ function App() {
       if (cancellationRequested) {
         setProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "안전하게 스캔을 중단하고 있습니다",
+          message: t("안전하게 스캔을 중단하고 있습니다"),
           processedFiles: current?.processedFiles ?? 0,
           processedBytes: current?.processedBytes ?? 0,
           fraction: current?.fraction ?? null,
@@ -1037,7 +1040,7 @@ function App() {
       if (cancellationRequested) {
         setDriveProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "안전하게 드라이브 분석을 중단하고 있습니다",
+          message: t("안전하게 드라이브 분석을 중단하고 있습니다"),
           processedFiles: current?.processedFiles ?? 0,
           processedBytes: current?.processedBytes ?? 0,
           unreadableEntries: current?.unreadableEntries ?? 0,
@@ -1071,7 +1074,7 @@ function App() {
     setDirectoryScanState("scanning");
     setDirectoryError(null);
     setDirectoryProgress({
-      message: "폴더 구조 분석을 준비하고 있습니다",
+      message: t("폴더 구조 분석을 준비하고 있습니다"),
       processedEntries: 0,
       processedFiles: 0,
       processedBytes: 0,
@@ -1121,7 +1124,7 @@ function App() {
       const cancellationRequested = await cancelScan();
       if (cancellationRequested) {
         setDirectoryProgress((current) => ({
-          message: "안전하게 폴더 지도 분석을 중단하고 있습니다",
+          message: t("안전하게 폴더 지도 분석을 중단하고 있습니다"),
           processedEntries: current?.processedEntries ?? 0,
           processedFiles: current?.processedFiles ?? 0,
           processedBytes: current?.processedBytes ?? 0,
@@ -1156,7 +1159,7 @@ function App() {
     setCleanupScanState("scanning");
     setCleanupError(null);
     setCleanupProgress({
-      message: "정리 후보 위치를 준비하고 있습니다",
+      message: t("정리 후보 위치를 준비하고 있습니다"),
       processedRoots: 0,
       totalRoots: 0,
       processedEntries: 0,
@@ -1187,7 +1190,7 @@ function App() {
       const cancellationRequested = await cancelScan();
       if (cancellationRequested) {
         setCleanupProgress((current) => ({
-          message: "안전하게 정리 후보 분석을 중단하고 있습니다",
+          message: t("안전하게 정리 후보 분석을 중단하고 있습니다"),
           processedRoots: current?.processedRoots ?? 0,
           totalRoots: current?.totalRoots ?? 0,
           processedEntries: current?.processedEntries ?? 0,
@@ -1220,7 +1223,7 @@ function App() {
     setDocumentError(null);
     setDocumentProgress({
       phase: "discovering",
-      message: "문서 검색 목록을 준비하고 있습니다…",
+      message: t("문서 검색 목록을 준비하고 있습니다…"),
       scannedFiles: 0,
       candidateDocuments: 0,
       indexedDocuments: 0,
@@ -1255,7 +1258,7 @@ function App() {
       if (cancellationRequested) {
         setDocumentProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "현재 문서 확인을 마친 뒤 안전하게 멈추고 있습니다…",
+          message: t("현재 문서 확인을 마친 뒤 안전하게 멈추고 있습니다…"),
           scannedFiles: current?.scannedFiles ?? 0,
           candidateDocuments: current?.candidateDocuments ?? 0,
           indexedDocuments: current?.indexedDocuments ?? 0,
@@ -1298,7 +1301,7 @@ function App() {
     setFileCatalogError(null);
     setFileCatalogProgress({
       phase: "discovering",
-      message: "파일 검색 목록을 준비하고 있습니다…",
+      message: t("파일 검색 목록을 준비하고 있습니다…"),
       scannedEntries: 0,
       indexedEntries: 0,
       indexedFiles: 0,
@@ -1319,7 +1322,9 @@ function App() {
         if (options.stayOnView) setDashboardError(null);
       } catch (reason) {
         if (options.stayOnView) {
-          setDashboardError(`최근 파일을 읽지 못했습니다. ${normalizeError(reason)}`);
+          setDashboardError(
+            t("최근 파일을 읽지 못했습니다. {{detail}}", { detail: normalizeError(reason) }),
+          );
         }
       }
     } catch (reason) {
@@ -1342,7 +1347,7 @@ function App() {
       if (cancellationRequested) {
         setFileCatalogProgress((current) => ({
           phase: current?.phase ?? "discovering",
-          message: "현재 파일 확인을 마친 뒤 목록 만들기를 안전하게 멈추고 있습니다…",
+          message: t("현재 파일 확인을 마친 뒤 목록 만들기를 안전하게 멈추고 있습니다…"),
           scannedEntries: current?.scannedEntries ?? 0,
           indexedEntries: current?.indexedEntries ?? 0,
           indexedFiles: current?.indexedFiles ?? 0,
@@ -1406,13 +1411,13 @@ function App() {
       fileCatalogClearing ||
       recoveryChecking
     ) {
-      throw new Error("다른 스캔 또는 정리 작업이 진행 중입니다");
+      throw new Error(t("다른 스캔 또는 정리 작업이 진행 중입니다"));
     }
 
     setTrashRunning(true);
     setTrashProgress({
       phase: "preflight",
-      message: "서버에 보관된 스캔 결과와 선택 항목을 대조하고 있습니다",
+      message: t("서버에 보관된 스캔 결과와 선택 항목을 대조하고 있습니다"),
       processedItems: 0,
       totalItems: 0,
     });
@@ -1460,7 +1465,7 @@ function App() {
       if (cancellationRequested) {
         setTrashProgress((current) => ({
           phase: current?.phase ?? "preflight",
-          message: "현재 항목을 마친 뒤 안전하게 작업을 중단하고 있습니다",
+          message: t("현재 항목을 마친 뒤 안전하게 작업을 중단하고 있습니다"),
           processedItems: current?.processedItems ?? 0,
           totalItems: current?.totalItems ?? 0,
         }));
@@ -1744,8 +1749,8 @@ function App() {
         open={Boolean(pendingCleanupPlan)}
         title={
           pendingCleanupPlan?.source === "duplicateFiles"
-            ? "외부 AI가 제안한 중복 파일 정리"
-            : "외부 AI가 제안한 정리 후보"
+            ? t("외부 AI가 제안한 중복 파일 정리")
+            : t("외부 AI가 제안한 정리 후보")
         }
         itemCount={pendingCleanupPlan?.itemCount ?? 0}
         logicalBytes={pendingCleanupPlan?.totalBytes ?? 0}
@@ -1753,13 +1758,13 @@ function App() {
         busy={trashRunning}
         progress={trashProgress}
         error={pendingCleanupPlanError ?? trashError}
-        intro="외부 AI는 익명 후보 번호와 용량 요약만 보고 이 계획을 만들었습니다. 아래 정확한 경로는 이 앱 안에서만 표시되며, 지금 확인해야 파일 이동을 시작합니다."
+        intro={t("외부 AI는 익명 후보 번호와 용량 요약만 보고 이 계획을 만들었습니다. 아래 정확한 경로는 이 앱 안에서만 표시되며, 지금 확인해야 파일 이동을 시작합니다.")}
         items={(pendingCleanupPlan?.items ?? []).map((item) => ({
           path: displayPath(item.path),
           logicalBytes: item.logicalBytes,
           detail: item.detail,
         }))}
-        confirmLabel="확인하고 휴지통으로 이동"
+        confirmLabel={t("확인하고 휴지통으로 이동")}
         onConfirm={(reviewAcknowledged) =>
           void confirmPendingCleanupReview(reviewAcknowledged)
         }
@@ -1772,10 +1777,12 @@ function App() {
       {controlStatus.pendingReview && !pendingCleanupPlan && !selectionBlocked ? (
         <div className="scan-status-dock mcp-review-dock">
           <span>
-            <strong>외부 AI 정리 계획 확인 대기</strong>
+            <strong>{t("외부 AI 정리 계획 확인 대기")}</strong>
             <small>
               {pendingCleanupPlanError ??
-                `${controlStatus.pendingReview.itemCount}개 · 앱에서 정확한 경로를 확인해야 실행됩니다.`}
+                t("{{count}}개 · 앱에서 정확한 경로를 확인해야 실행됩니다.", {
+                  count: controlStatus.pendingReview.itemCount,
+                })}
             </small>
           </span>
           <button
@@ -1783,7 +1790,7 @@ function App() {
             disabled={pendingCleanupPlanLoading}
             onClick={() => void openPendingCleanupReview()}
           >
-            {pendingCleanupPlanLoading ? "불러오는 중…" : "검토하기"}
+            {pendingCleanupPlanLoading ? t("불러오는 중…") : t("검토하기")}
           </button>
         </div>
       ) : null}
@@ -1804,36 +1811,36 @@ function App() {
           <span>
             <strong role="status" aria-live="polite" aria-atomic="true">
               {trashRunning
-                ? "휴지통 이동 중"
+                ? t("휴지통 이동 중")
                 : directoryScanState === "scanning"
-                ? "저장공간 맵 분석 중"
+                ? t("저장공간 맵 분석 중")
                 : cleanupScanState === "scanning"
-                  ? "정리 후보 분석 중"
+                  ? t("정리 후보 분석 중")
                 : documentIndexState === "scanning"
-                  ? "문서 검색 준비 중"
+                  ? t("문서 검색 준비 중")
                 : fileCatalogState === "scanning"
-                  ? "파일 목록 만드는 중"
+                  ? t("파일 목록 만드는 중")
                 : driveScanState === "scanning"
-                  ? "드라이브 분석 중"
+                  ? t("드라이브 분석 중")
                 : controlStatus.activeOperation?.source === "chatCli" &&
                     controlStatus.activeOperation.kind === "storageScan"
-                  ? "채팅에서 요청한 파일 검사 중"
-                  : "스캔 진행 중"}
+                  ? t("채팅에서 요청한 파일 검사 중")
+                  : t("스캔 진행 중")}
             </strong>
             <small>
               {trashRunning
-                ? trashProgress?.message ?? "선택 항목을 안전하게 다시 확인하고 있습니다"
+                ? t("선택 항목을 안전하게 다시 확인하고 있습니다")
                 : directoryScanState === "scanning"
-                ? directoryProgress?.message ?? "폴더 구조를 확인하고 있습니다"
+                ? t("폴더 구조를 확인하고 있습니다")
                 : cleanupScanState === "scanning"
-                  ? cleanupProgress?.message ?? "남은 파일과 제거 정보를 대조하고 있습니다"
+                  ? t("남은 파일과 제거 정보를 대조하고 있습니다")
                 : documentIndexState === "scanning"
-                  ? documentProgress?.message ?? "문서 내용을 검색할 수 있게 정리하고 있습니다…"
+                  ? t("문서 내용을 검색할 수 있게 정리하고 있습니다…")
                 : fileCatalogState === "scanning"
-                  ? fileCatalogProgress?.message ?? "파일 이름과 경로를 수집하고 있습니다"
+                  ? t("파일 이름과 경로를 수집하고 있습니다")
                 : driveScanState === "scanning"
-                  ? driveProgress?.message ?? "저장공간을 분류하고 있습니다"
-                  : progress?.message ?? "파일을 확인하고 있습니다"}
+                  ? t("저장공간을 분류하고 있습니다")
+                  : t("파일을 확인하고 있습니다")}
             </small>
           </span>
           <button
@@ -1855,7 +1862,7 @@ function App() {
             }
           >
             <X size={16} aria-hidden="true" />
-            취소
+            {t("취소")}
           </button>
         </div>
       ) : null}
@@ -1872,7 +1879,16 @@ function displayPath(path: string): string {
 function normalizeError(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
-  return "알 수 없는 오류가 발생했습니다";
+  switch (document.documentElement.lang) {
+    case "ko":
+      return "알 수 없는 오류가 발생했습니다";
+    case "ja":
+      return "不明なエラーが発生しました";
+    case "zh-CN":
+      return "发生未知错误";
+    default:
+      return "An unknown error occurred";
+  }
 }
 
 export default App;

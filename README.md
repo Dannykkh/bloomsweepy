@@ -1,6 +1,19 @@
 # BroomSweepy
 
+<p align="center">
+  <img src="apps/desktop/src-tauri/icons/app-icon-master.png" width="112" alt="BroomSweepy 빗자루 앱 아이콘">
+</p>
+
+<p align="center">
+  <a href="README.en.md">English</a> |
+  <strong>한국어</strong> |
+  <a href="README.ja.md">日本語</a> |
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복 파일·문서 안의 문장을 찾는 데스크톱 도구입니다. 기존 macOS SwiftUI 앱은 유지하면서, Windows와 macOS에서 같은 분석 엔진과 UI를 사용할 수 있는 Tauri 2 기반 앱을 함께 개발합니다.
+
+설치 파일은 언어별로 나뉘지 않습니다. 첫 실행은 영어이며, `Settings > Display language`에서 English·한국어·日本語·简体中文 중 하나를 고르면 화면, Windows 트레이 메뉴, AI 응답 언어가 즉시 바뀌고 이 컴퓨터에 저장됩니다.
 
 현재 Tauri 앱은 분석 결과에서 사용자가 직접 선택한 중복 파일과 Temp·캐시·AppData 후보를 운영체제 휴지통으로 이동할 수 있습니다. 일반 파일 영구 삭제와 휴지통 비우기는 제공하지 않으며, 제거 프로그램 레지스트리는 계속 읽기 전용입니다. 선택형 Docker 정리는 예외적으로 휴지통을 거치지 않으므로 별도 확인과 제한된 고정 명령을 사용합니다.
 
@@ -17,6 +30,14 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 아래 캡처의 드라이브 이름과 용량은 공개 문서용 예시 값입니다.
 
+| English | 한국어 |
+|---|---|
+| ![영어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-en.png) | ![한국어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-ko.png) |
+
+| 日本語 | 简体中文 |
+|---|---|
+| ![일본어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-ja.png) | ![중국어 간체 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-zh-CN.png) |
+
 ![BroomSweepy 대시보드에서 드라이브 용량과 최근 변화를 확인하는 화면](docs/assets/screenshots/v1.2.0-dashboard.png)
 
 | Docker 전용 용량 화면 | 폴더 선택이 필요 없는 Docker 대화 |
@@ -25,6 +46,9 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 ## v1.3.0 주요 업데이트
 
+- 하나의 설치본에서 English·한국어·日本語·简体中文을 즉시 전환하고, 기본 언어는 English로 고정
+- 선택 언어를 앱 화면·HTML 언어 정보·Windows 트레이 메뉴·AI 응답 언어에 함께 적용하고 이 컴퓨터에 저장
+- 작은 작업 표시줄·Dock 크기에서도 빗자루가 먼저 보이도록 앱 아이콘을 굵은 실루엣으로 개선
 - Windows 설치 파일에 `bloomsweepy-mcp` 보조 프로그램을 함께 넣고, 설정 화면에서 Codex와 Claude Code에 사용자가 직접 등록·해제
 - 외부 AI에는 경로 없는 제한된 후보 요약과 익명 번호만 전달하고, 5분짜리 정리 계획의 정확한 경로와 최종 확인은 BroomSweepy 앱에서만 처리
 - MCP 도구에 승인·삭제·휴지통 실행 명령을 두지 않고, 앱이 검사·재검증·작업 기록·운영체제 휴지통 이동을 계속 전담

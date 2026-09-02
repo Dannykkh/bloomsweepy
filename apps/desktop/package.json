@@ -13,6 +13,7 @@
     "test:docker-intent": "node --test --experimental-strip-types tests/dockerIntent.test.ts",
     "test:docker-format": "node --test --experimental-strip-types tests/dockerFormat.test.ts",
     "test:assistant-text": "node --test --experimental-strip-types tests/assistantText.test.ts",
+    "test:i18n": "node --test --experimental-strip-types tests/languagePreference.test.ts tests/localeCatalog.test.ts",
     "prepare:sidecar": "node scripts/prepare-sidecar.mjs",
     "preview": "vite preview",
     "tauri": "tauri"

@@ -24,6 +24,7 @@ import {
 } from "react";
 import { ControlStatusPanel } from "../components/ControlStatusPanel";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
+import { useLanguage, type Translate } from "../i18n";
 import {
   appendAssistantMessage,
   askAssistant,
@@ -119,6 +120,7 @@ export function AssistantView({
   onLaunchRequestHandled,
   onPickFolder,
 }: AssistantViewProps) {
+  const { language, t } = useLanguage();
   const initialProviderPreference = useRef(readProviderPreference());
   const initialOllamaModelPreference = useRef(readOllamaModelPreference());
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
@@ -181,7 +183,7 @@ export function AssistantView({
         }
       })
       .catch((reason) => {
-        if (!disposed) setProviderError(normalizeAssistantError(reason));
+        if (!disposed) setProviderError(normalizeAssistantError(reason, t));
       })
       .finally(() => {
         if (!disposed) setCheckingProviders(false);
@@ -208,7 +210,7 @@ export function AssistantView({
         }
       } catch (reason) {
         if (!disposed && revision === sessionLoadRevision.current) {
-          setSessionError(normalizeAssistantError(reason));
+          setSessionError(normalizeAssistantError(reason, t));
         }
       } finally {
         if (!disposed && revision === sessionLoadRevision.current) {
@@ -230,7 +232,7 @@ export function AssistantView({
       const ollama = nextProviders.find((candidate) => candidate.provider === "ollama");
       setSelectedOllamaModel((current) => chooseOllamaModel(ollama?.models ?? [], current));
     } catch (reason) {
-      setProviderError(normalizeAssistantError(reason));
+      setProviderError(normalizeAssistantError(reason, t));
     } finally {
       setCheckingProviders(false);
     }
@@ -290,7 +292,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason));
+        setSessionError(normalizeAssistantError(reason, t));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -318,7 +320,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason));
+        setSessionError(normalizeAssistantError(reason, t));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -344,7 +346,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason));
+        setSessionError(normalizeAssistantError(reason, t));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -361,7 +363,11 @@ export function AssistantView({
     const current = activeSession?.session;
     if (!current || sessionBusy || sending) return;
     const confirmed = window.confirm(
-      `“${current.scopeName}”의 메시지 ${formatCount(current.messageCount)}개를 삭제할까요?\n\n이 대화와 저장된 ${current.scopeKind === "docker" ? "Docker 요약" : "폴더 요약"}만 삭제하며 실제 데이터는 그대로 둡니다.`,
+      t("“{{scope}}”의 메시지 {{count}}개를 삭제할까요?\n\n이 대화와 저장된 {{summary}}만 삭제하며 실제 데이터는 그대로 둡니다.", {
+        scope: current.scopeName,
+        count: formatCount(current.messageCount),
+        summary: current.scopeKind === "docker" ? t("Docker 요약") : t("폴더 요약"),
+      }),
     );
     if (!confirmed) return;
 
@@ -386,7 +392,7 @@ export function AssistantView({
       }
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason));
+        setSessionError(normalizeAssistantError(reason, t));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -438,6 +444,7 @@ export function AssistantView({
         summary,
         scopeKind: activeScopeKind,
         includeDockerStatus,
+        responseLanguage: language,
       });
       const assistantMessage = formatAssistantPlainText(response.message);
       setTurns((current) => [
@@ -460,7 +467,7 @@ export function AssistantView({
         updateSessionSummary(assistantMutation.session);
       } catch (reason) {
         setSessionError(
-          `AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. ${normalizeAssistantError(reason)}`,
+          t("AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(reason, t) }),
         );
       }
       setProviders((current) => current.map((candidate) => (
@@ -470,9 +477,9 @@ export function AssistantView({
       if (!userMessageSaved) {
         setTurns((current) => current.slice(0, -1));
         setDraft(message);
-        setSessionError(normalizeAssistantError(reason));
+        setSessionError(normalizeAssistantError(reason, t));
       } else {
-        setProviderError(normalizeAssistantError(reason));
+        setProviderError(normalizeAssistantError(reason, t));
       }
     } finally {
       requestInFlight.current = false;
@@ -488,7 +495,7 @@ export function AssistantView({
       const requested = await cancelAssistant();
       if (!requested) setCancelling(false);
     } catch (reason) {
-      setProviderError(normalizeAssistantError(reason));
+      setProviderError(normalizeAssistantError(reason, t));
       setCancelling(false);
     }
   }
@@ -500,7 +507,7 @@ export function AssistantView({
     try {
       setDockerPreview(await createDockerCleanupPreview());
     } catch (reason) {
-      setDockerReviewError(normalizeAssistantError(reason));
+      setDockerReviewError(normalizeAssistantError(reason, t));
     } finally {
       setDockerReviewLoading(false);
     }
@@ -531,7 +538,7 @@ export function AssistantView({
 
   return (
     <div className="assistant-workspace">
-      <section className="assistant-session-toolbar" aria-label="대화 기록 관리">
+      <section className="assistant-session-toolbar" aria-label={t("대화 기록 관리")}>
         <button
           type="button"
           className="assistant-session-toolbar__new"
@@ -541,7 +548,7 @@ export function AssistantView({
           {sessionBusy && directoryState === "scanning"
             ? <LoaderCircle className="is-spinning" size={17} aria-hidden="true" />
             : <MessageSquarePlus size={17} aria-hidden="true" />}
-          {sessionBusy && directoryState === "scanning" ? "새 폴더 확인 중" : "새 폴더 대화"}
+          {sessionBusy && directoryState === "scanning" ? t("새 폴더 확인 중") : t("새 폴더 대화")}
         </button>
         {dockerStatus?.enabled ? (
           <button
@@ -551,25 +558,25 @@ export function AssistantView({
             onClick={() => void startDockerConversation()}
           >
             <Boxes size={17} aria-hidden="true" />
-            Docker 대화
+            {t("Docker 대화")}
           </button>
         ) : null}
         <label className="assistant-session-toolbar__picker">
           <History size={17} aria-hidden="true" />
-          <span className="sr-only">저장된 대화 선택</span>
+          <span className="sr-only">{t("저장된 대화 선택")}</span>
           <select
-            aria-label="저장된 대화 선택"
+            aria-label={t("저장된 대화 선택")}
             value={activeSession?.session.id ?? ""}
             disabled={sessionsLoading || sessionBusy || sending || sessions.length === 0}
             onChange={(event) => void openStoredSession(event.currentTarget.value)}
           >
             {sessions.length > 0 ? sessions.map((session) => (
               <option value={session.id} key={session.id}>
-                {sessionOptionLabel(session)}
+                {sessionOptionLabel(session, t)}
               </option>
             )) : (
               <option value="">
-                {sessionsLoading ? "대화 기록 불러오는 중" : "저장된 대화 없음"}
+                {sessionsLoading ? t("대화 기록 불러오는 중") : t("저장된 대화 없음")}
               </option>
             )}
           </select>
@@ -578,20 +585,20 @@ export function AssistantView({
           type="button"
           className="assistant-session-toolbar__delete"
           aria-label={activeSession
-            ? `${activeSession.session.scopeName} 대화 삭제`
-            : "현재 대화 삭제"}
-          title="현재 대화만 삭제"
+            ? t("{{scope}} 대화 삭제", { scope: activeSession.session.scopeName })
+            : t("현재 대화 삭제")}
+          title={t("현재 대화만 삭제")}
           disabled={!activeSession || sessionBusy || sending}
           onClick={() => void removeCurrentSession()}
         >
           <Trash2 size={17} aria-hidden="true" />
-          <span>삭제</span>
+          <span>{t("삭제")}</span>
         </button>
       </section>
 
       {sessionError ? <p className="assistant-session-error" role="alert">{sessionError}</p> : null}
 
-      <section className="assistant-scope" aria-label="현재 대화 대상">
+      <section className="assistant-scope" aria-label={t("현재 대화 대상")}>
         <button
           type="button"
           className="assistant-scope__picker"
@@ -604,45 +611,45 @@ export function AssistantView({
             ? <Boxes size={18} aria-hidden="true" />
             : <FolderOpen size={18} aria-hidden="true" />}
           <span>
-            <small>대화 대상</small>
+            <small>{t("대화 대상")}</small>
             <span className="assistant-scope__folder-line">
               <strong title={activeScope ?? undefined}>
-                {activeSession?.session.scopeName ?? "새 대화를 시작하세요"}
+                {activeSession?.session.scopeName ?? t("새 대화를 시작하세요")}
               </strong>
               {activeScopeKind === "docker" ? (
-                <DockerScopeMetrics status={dockerStatus} />
+                <DockerScopeMetrics status={dockerStatus} t={t} />
               ) : (
-                <FolderScopeMetrics summary={summary} volume={volume} />
+                <FolderScopeMetrics summary={summary} volume={volume} t={t} />
               )}
             </span>
           </span>
           <span className="assistant-scope__change">
-            {activeScopeKind === "docker" ? "새 Docker 대화" : "새 폴더 대화"}
+            {activeScopeKind === "docker" ? t("새 Docker 대화") : t("새 폴더 대화")}
           </span>
         </button>
         <div
           className={`assistant-provider-picker ${provider?.available ? "is-ready" : ""} ${provider?.provider === "ollama" ? "has-model" : ""}`}
-          title={provider?.detail ?? "설치된 AI CLI 상태 확인 중"}
+          title={provider?.detail ?? t("설치된 AI CLI 상태 확인 중")}
         >
           <span className="assistant-provider-picker__dot" aria-hidden="true" />
           <select
-            aria-label="대화 상대 선택"
+            aria-label={t("대화 상대 선택")}
             value={selectedProviderKind}
             disabled={providers.length === 0 || sending || sessionBusy}
             onChange={(event) => changeProvider(event.currentTarget.value as AssistantProviderKind)}
           >
             {providers.length > 0 ? providers.map((candidate) => (
               <option value={candidate.provider} key={candidate.provider}>
-                {providerOptionLabel(candidate)}
+                {providerOptionLabel(candidate, t)}
               </option>
             )) : (
-              <option value="codex">AI CLI 확인 중</option>
+              <option value="codex">{t("AI CLI 확인 중")}</option>
             )}
           </select>
           {provider?.provider === "ollama" ? (
             <select
               className="assistant-provider-picker__model"
-              aria-label="Ollama 모델 선택"
+              aria-label={t("Ollama 모델 선택")}
               value={selectedOllamaModel}
               disabled={provider.models.length === 0 || sending || sessionBusy}
               onChange={(event) => changeOllamaModel(event.currentTarget.value)}
@@ -650,13 +657,13 @@ export function AssistantView({
               {provider.models.length > 0 ? provider.models.map((model) => (
                 <option value={model.id} key={model.id}>{model.label}</option>
               )) : (
-                <option value="">설치된 모델 없음</option>
+                <option value="">{t("설치된 모델 없음")}</option>
               )}
             </select>
           ) : null}
           <button
             type="button"
-            aria-label="AI CLI 상태 다시 확인"
+            aria-label={t("AI CLI 상태 다시 확인")}
             disabled={checkingProviders || sending || sessionBusy}
             onClick={() => void recheckProvider()}
           >
@@ -665,7 +672,7 @@ export function AssistantView({
         </div>
       </section>
 
-      <section className="assistant-chat" aria-label={activeScopeKind === "docker" ? "Docker 용량 대화" : "폴더 분석 대화"}>
+      <section className="assistant-chat" aria-label={activeScopeKind === "docker" ? t("Docker 용량 대화") : t("폴더 분석 대화")}>
         <div className="assistant-transcript">
           {turns.length > 0 ? (
             turns.map((turn, index) => (
@@ -677,7 +684,7 @@ export function AssistantView({
                   {turn.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
                 </span>
                 <div>
-                  <strong>{turn.role === "user" ? "나" : turn.providerLabel ?? "AI 도우미"}</strong>
+                  <strong>{turn.role === "user" ? t("나") : turn.providerLabel ?? t("AI 도우미")}</strong>
                   <p>{turn.content}</p>
                 </div>
               </article>
@@ -693,31 +700,35 @@ export function AssistantView({
               sessionsLoading={sessionsLoading}
               sessionBusy={sessionBusy}
               onStartNewConversation={startNewConversation}
+              t={t}
             />
           )}
           {sending ? (
             <div className="assistant-thinking" role="status">
               <LoaderCircle size={17} aria-hidden="true" />
               {provider?.provider === "ollama"
-                ? `${providerConversationLabel(provider, selectedOllamaModel)} 응답 생성 중 · 언제든 취소할 수 있습니다`
-                : `${providerConversationLabel(provider, selectedOllamaModel)}가 앱의 ${activeScopeKind === "docker" ? "Docker 요약" : "폴더 요약"}을 읽고 있습니다`}
+                ? t("{{provider}} 응답 생성 중 · 언제든 취소할 수 있습니다", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
+                : t("{{provider}}가 앱의 {{summary}}을 읽고 있습니다", {
+                    provider: providerConversationLabel(provider, selectedOllamaModel, t),
+                    summary: activeScopeKind === "docker" ? t("Docker 요약") : t("폴더 요약"),
+                  })}
             </div>
           ) : null}
           {dockerContext?.enabled ? (
             <aside
               className={`assistant-docker-action ${dockerContext.available ? "is-ready" : "is-unavailable"}`}
-              aria-label="Docker 사용량과 정리 검토"
+              aria-label={t("Docker 사용량과 정리 검토")}
             >
               <Boxes size={18} aria-hidden="true" />
               <span>
                 <strong>
                   {dockerContext.available
-                    ? `Docker 범주 합계 ${formatDockerBytes(dockerContext.totalSizeBytes)}`
-                    : "Docker 상태를 확인해 주세요"}
+                    ? t("Docker 범주 합계 {{size}}", { size: formatDockerBytes(dockerContext.totalSizeBytes) })
+                    : t("Docker 상태를 확인해 주세요")}
                 </strong>
                 <small>
                   {dockerContext.available
-                    ? `볼륨 제외 참고 상한 ${formatDockerBytes(dockerContext.reclaimableBytes)} · 실제 디스크 사용량과 다를 수 있음`
+                    ? t("볼륨 제외 참고 상한 {{size}} · 실제 디스크 사용량과 다를 수 있음", { size: formatDockerBytes(dockerContext.reclaimableBytes) })
                     : dockerContext.detail}
                 </small>
               </span>
@@ -731,7 +742,7 @@ export function AssistantView({
                   {dockerReviewLoading
                     ? <LoaderCircle className="is-spinning" size={15} aria-hidden="true" />
                     : <Boxes size={15} aria-hidden="true" />}
-                  {dockerContext.reclaimableBytes === 0 ? "정리할 항목 없음" : "Docker 정리 검토"}
+                  {dockerContext.reclaimableBytes === 0 ? t("정리할 항목 없음") : t("Docker 정리 검토")}
                 </button>
               ) : null}
             </aside>
@@ -752,31 +763,32 @@ export function AssistantView({
             name="assistantQuestion"
             autoComplete="off"
             disabled={!summary || !provider?.available || !providerModelReady || sending || sessionBusy}
-            aria-label={activeScopeKind === "docker" ? "Docker 용량에 관해 질문" : "선택한 폴더에 관해 질문"}
+            aria-label={activeScopeKind === "docker" ? t("Docker 용량에 관해 질문") : t("선택한 폴더에 관해 질문")}
             placeholder={composerPlaceholder(
               sessionBusy,
               Boolean(activeSession),
               activeScopeKind,
               provider,
               selectedOllamaModel,
+              t,
             )}
             onChange={(event) => setDraft(event.currentTarget.value)}
             onKeyDown={handleComposerKeyDown}
           />
           {sending ? (
-            <button type="button" aria-label="AI 응답 취소" disabled={cancelling} onClick={() => void stopAssistant()}>
+            <button type="button" aria-label={t("AI 응답 취소")} disabled={cancelling} onClick={() => void stopAssistant()}>
               <Square size={16} aria-hidden="true" />
             </button>
           ) : (
-            <button type="submit" aria-label="질문 보내기" disabled={!ready || !draft.trim()}>
+            <button type="submit" aria-label={t("질문 보내기")} disabled={!ready || !draft.trim()}>
               <Send size={18} aria-hidden="true" />
             </button>
           )}
         </form>
         <p className="assistant-composer-note">
           {activeScopeKind === "docker"
-            ? `폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 ${providerConversationLabel(provider, selectedOllamaModel)}에 전달합니다.`
-            : `파일 내용이나 전체 경로가 아니라, BroomSweepy가 만든 폴더 이름·크기 요약만 ${providerConversationLabel(provider, selectedOllamaModel)}에 전달합니다.`}
+            ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
+            : t("파일 내용이나 전체 경로가 아니라, BroomSweepy가 만든 폴더 이름·크기 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}
         </p>
       </section>
 
@@ -784,19 +796,19 @@ export function AssistantView({
         <summary>
           <ShieldCheck size={17} aria-hidden="true" />
           <span>
-            <strong>연결과 권한</strong>
-            <small>외부 터미널 제어와 전송 범위 확인</small>
+            <strong>{t("연결과 권한")}</strong>
+            <small>{t("외부 터미널 제어와 전송 범위 확인")}</small>
           </span>
           <ChevronDown size={17} aria-hidden="true" />
         </summary>
         <div className="assistant-access-details__copy">
           <p>
             {activeScopeKind === "docker"
-              ? "Docker 조회는 BroomSweepy가 수행합니다. 앱은 범주별 사용량과 정리 가능 참고 상한만 선택한 AI CLI의 질문 입력으로 보냅니다."
-              : "폴더 선택과 읽기 검사는 BroomSweepy가 수행합니다. 앱은 파일 내용과 전체 경로를 빼고 제한된 요약만 선택한 AI CLI의 질문 입력으로 보냅니다."}
+              ? t("Docker 조회는 BroomSweepy가 수행합니다. 앱은 범주별 사용량과 정리 가능 참고 상한만 선택한 AI CLI의 질문 입력으로 보냅니다.")
+              : t("폴더 선택과 읽기 검사는 BroomSweepy가 수행합니다. 앱은 파일 내용과 전체 경로를 빼고 제한된 요약만 선택한 AI CLI의 질문 입력으로 보냅니다.")}
           </p>
           <p>
-            {providerPermissionDetail(provider)} 아래 설정은 별도 터미널 제어용입니다.
+            {providerPermissionDetail(provider, t)} {t("아래 설정은 별도 터미널 제어용입니다.")}
           </p>
         </div>
         <ControlStatusPanel
@@ -832,31 +844,33 @@ export function AssistantView({
 function FolderScopeMetrics({
   summary,
   volume,
+  t,
 }: {
   summary: AssistantFolderSummary | null;
   volume: VolumeInfo | null;
+  t: Translate;
 }) {
   if (!summary) {
-    return <span className="assistant-scope__size">폴더 선택부터 시작합니다</span>;
+    return <span className="assistant-scope__size">{t("폴더 선택부터 시작합니다")}</span>;
   }
   const share = folderDriveShare(summary.totalLogicalBytes, volume?.totalBytes ?? 0);
   return (
     <span className="assistant-scope__metrics">
       <span className="assistant-scope__size">{formatBytes(summary.totalLogicalBytes)}</span>
-      {share && volume ? <DriveShareIndicator share={share} volume={volume} /> : null}
+      {share && volume ? <DriveShareIndicator share={share} volume={volume} t={t} /> : null}
     </span>
   );
 }
 
-function DockerScopeMetrics({ status }: { status: DockerManagementStatus | null }) {
+function DockerScopeMetrics({ status, t }: { status: DockerManagementStatus | null; t: Translate }) {
   if (!status?.enabled) {
-    return <span className="assistant-scope__size">설정에서 Docker 관리를 켜세요</span>;
+    return <span className="assistant-scope__size">{t("설정에서 Docker 관리를 켜세요")}</span>;
   }
   return (
     <span className="assistant-scope__metrics">
       <span className="assistant-scope__size">{formatDockerBytes(status.totalSizeBytes)}</span>
       <span className="assistant-drive-share">
-        정리 가능 최대 {formatDockerBytes(status.reclaimableBytes)}
+        {t("정리 가능 최대 {{size}}", { size: formatDockerBytes(status.reclaimableBytes) })}
       </span>
     </span>
   );
@@ -870,15 +884,17 @@ interface FolderDriveShare {
 function DriveShareIndicator({
   share,
   volume,
+  t,
 }: {
   share: FolderDriveShare;
   volume: VolumeInfo;
+  t: Translate;
 }) {
   const drive = volumeLabel(volume);
   const visiblePercentage = share.percentage > 0
     ? Math.max(share.percentage, 1)
     : 0;
-  const label = `${drive} 전체의 ${share.label}`;
+  const label = t("{{drive}} 전체의 {{share}}", { drive, share: share.label });
   return (
     <span className="assistant-drive-share" role="img" aria-label={label} title={label}>
       <span
@@ -899,7 +915,7 @@ function folderDriveShare(folderBytes: number, driveBytes: number): FolderDriveS
   }
   const percentage = Math.max(0, (folderBytes / driveBytes) * 100);
   if (percentage > 0 && percentage < 0.1) {
-    return { percentage, label: "0.1% 미만" };
+    return { percentage, label: "<0.1%" };
   }
   if (percentage < 10) {
     return { percentage, label: `${percentage.toFixed(1)}%` };
@@ -923,6 +939,7 @@ function AssistantEmptyState({
   sessionsLoading,
   sessionBusy,
   onStartNewConversation,
+  t,
 }: {
   summary: AssistantFolderSummary | null;
   scopeKind: AssistantScopeKind;
@@ -933,13 +950,14 @@ function AssistantEmptyState({
   sessionsLoading: boolean;
   sessionBusy: boolean;
   onStartNewConversation: () => Promise<void>;
+  t: Translate;
 }) {
   if (sessionsLoading) {
     return (
       <div className="assistant-empty">
         <LoaderCircle className="is-spinning" size={28} aria-hidden="true" />
-        <strong>대화 기록을 불러오고 있습니다</strong>
-        <p>이 컴퓨터에 저장된 최근 폴더 대화를 확인합니다.</p>
+        <strong>{t("대화 기록을 불러오고 있습니다")}</strong>
+        <p>{t("이 컴퓨터에 저장된 최근 폴더 대화를 확인합니다.")}</p>
       </div>
     );
   }
@@ -949,15 +967,15 @@ function AssistantEmptyState({
     return (
       <div className="assistant-empty">
         <FolderOpen size={28} aria-hidden="true" />
-        <strong>{scanning ? "새 폴더를 살펴보고 있습니다" : "새 대화는 폴더 선택부터 시작합니다"}</strong>
+        <strong>{scanning ? t("새 폴더를 살펴보고 있습니다") : t("새 대화는 폴더 선택부터 시작합니다")}</strong>
         <p>
           {scanning
-            ? `${formatCount(progress?.processedEntries ?? 0)}개 항목 · ${formatBytes(progress?.processedBytes ?? 0)} 확인`
-            : "폴더를 고르면 앱이 용량을 계산하고 빈 대화를 만듭니다."}
+            ? t("{{count}}개 항목 · {{size}} 확인", { count: formatCount(progress?.processedEntries ?? 0), size: formatBytes(progress?.processedBytes ?? 0) })
+            : t("폴더를 고르면 앱이 용량을 계산하고 빈 대화를 만듭니다.")}
         </p>
         {!scanning ? (
           <button type="button" disabled={sessionBusy} onClick={() => void onStartNewConversation()}>
-            새 대화
+            {t("새 대화")}
           </button>
         ) : null}
       </div>
@@ -969,24 +987,31 @@ function AssistantEmptyState({
       {scopeKind === "docker"
         ? <Boxes size={28} aria-hidden="true" />
         : <Bot size={28} aria-hidden="true" />}
-      <strong>{summary.scopeName} 대화 준비됨</strong>
+      <strong>{t("{{scope}} 대화 준비됨", { scope: summary.scopeName })}</strong>
       {scopeKind === "docker" ? (
         <p>
-          범주 합계 {formatDockerBytes(dockerStatus?.totalSizeBytes ?? 0)} · 정리 가능 최대 {formatDockerBytes(dockerStatus?.reclaimableBytes ?? 0)}
+          {t("범주 합계 {{total}} · 정리 가능 최대 {{reclaimable}}", {
+            total: formatDockerBytes(dockerStatus?.totalSizeBytes ?? 0),
+            reclaimable: formatDockerBytes(dockerStatus?.reclaimableBytes ?? 0),
+          })}
         </p>
       ) : (
         <p>
-          {formatBytes(summary.totalLogicalBytes)} · 파일 {formatCount(summary.totalFiles)}개 · {formatDate(summary.completedAtUnixMs)} 검사
+          {t("{{size}} · 파일 {{count}}개 · {{date}} 검사", {
+            size: formatBytes(summary.totalLogicalBytes),
+            count: formatCount(summary.totalFiles),
+            date: formatDate(summary.completedAtUnixMs),
+          })}
         </p>
       )}
       <small>
         {provider?.available
           ? scopeKind === "docker"
-            ? "예: Docker에서 무엇이 가장 크고 무엇부터 정리할까?"
-            : "예: 어느 폴더가 가장 크고 무엇부터 확인해야 해?"
+            ? t("예: Docker에서 무엇이 가장 크고 무엇부터 정리할까?")
+            : t("예: 어느 폴더가 가장 크고 무엇부터 확인해야 해?")
           : provider
-            ? providerUnavailableMessage(provider).replace(/…$/, "")
-            : "설치된 AI CLI를 확인하고 있습니다."}
+            ? providerUnavailableMessage(provider, t).replace(/…$/, "")
+            : t("설치된 AI CLI를 확인하고 있습니다.")}
       </small>
     </div>
   );
@@ -1032,21 +1057,26 @@ function composerPlaceholder(
   scopeKind: AssistantScopeKind,
   provider: AssistantProviderStatus | null,
   ollamaModel: string,
+  t: Translate,
 ): string {
-  if (!provider) return "설치된 AI CLI를 확인하고 있습니다…";
-  if (!provider.available) return providerUnavailableMessage(provider);
-  if (provider.provider === "ollama" && !ollamaModel) return "Ollama 모델을 선택해 주세요…";
-  if (!hasSession) return "새 대화를 눌러 폴더를 선택해 주세요…";
+  if (!provider) return t("설치된 AI CLI를 확인하고 있습니다…");
+  if (!provider.available) return providerUnavailableMessage(provider, t);
+  if (provider.provider === "ollama" && !ollamaModel) return t("Ollama 모델을 선택해 주세요…");
+  if (!hasSession) return t("새 대화를 눌러 폴더를 선택해 주세요…");
   if (sessionBusy) return scopeKind === "docker"
-    ? "Docker 대화를 준비하고 있습니다…"
-    : "새 폴더 검사가 끝나면 질문할 수 있습니다…";
+    ? t("Docker 대화를 준비하고 있습니다…")
+    : t("새 폴더 검사가 끝나면 질문할 수 있습니다…");
   return scopeKind === "docker"
-    ? "예: Docker에서 무엇이 가장 크고 무엇부터 정리할까?"
-    : "예: 어느 폴더가 가장 크고 무엇부터 확인해야 해?";
+    ? t("예: Docker에서 무엇이 가장 크고 무엇부터 정리할까?")
+    : t("예: 어느 폴더가 가장 크고 무엇부터 확인해야 해?");
 }
 
-function sessionOptionLabel(session: AssistantSessionSummary): string {
-  return `${session.scopeName} · 메시지 ${formatCount(session.messageCount)}개 · ${formatDate(session.updatedAtUnixMs)}`;
+function sessionOptionLabel(session: AssistantSessionSummary, t: Translate): string {
+  return t("{{scope}} · 메시지 {{count}}개 · {{date}}", {
+    scope: session.scopeName,
+    count: formatCount(session.messageCount),
+    date: formatDate(session.updatedAtUnixMs),
+  });
 }
 
 function boundedConversationHistory(turns: AssistantDisplayTurn[]): AssistantChatTurn[] {
@@ -1062,31 +1092,31 @@ function boundedConversationHistory(turns: AssistantDisplayTurn[]): AssistantCha
   return selected;
 }
 
-function providerOptionLabel(provider: AssistantProviderStatus): string {
-  if (!provider.installed) return `${provider.label} · 설치 안 됨`;
-  if (provider.authentication === "required") return `${provider.label} · 로그인 필요`;
+function providerOptionLabel(provider: AssistantProviderStatus, t: Translate): string {
+  if (!provider.installed) return t("{{provider}} · 설치 안 됨", { provider: provider.label });
+  if (provider.authentication === "required") return t("{{provider}} · 로그인 필요", { provider: provider.label });
   if (provider.authentication === "notRequired") {
     return provider.models.length > 0
-      ? `${provider.label} · 모델 ${provider.models.length}개`
-      : `${provider.label} · 모델 없음`;
+      ? t("{{provider}} · 모델 {{count}}개", { provider: provider.label, count: provider.models.length })
+      : t("{{provider}} · 모델 없음", { provider: provider.label });
   }
-  return `${provider.label} · 로그인됨`;
+  return t("{{provider}} · 로그인됨", { provider: provider.label });
 }
 
-function providerPermissionDetail(provider: AssistantProviderStatus | null): string {
+function providerPermissionDetail(provider: AssistantProviderStatus | null, t: Translate): string {
   switch (provider?.provider) {
     case "codex":
-      return "Codex는 앱 전용 빈 폴더에서 읽기 전용 샌드박스로 실행합니다. Codex 자체 읽기 도구의 실제 범위는 Codex 샌드박스 정책을 따릅니다.";
+      return t("Codex는 앱 전용 빈 폴더에서 읽기 전용 샌드박스로 실행합니다. Codex 자체 읽기 도구의 실제 범위는 Codex 샌드박스 정책을 따릅니다.");
     case "claudeCode":
-      return "Claude Code는 세션 저장과 도구 사용을 끄고, 승인 질문 없이 안전 모드로 실행합니다.";
+      return t("Claude Code는 세션 저장과 도구 사용을 끄고, 승인 질문 없이 안전 모드로 실행합니다.");
     case "grok":
-      return "Grok은 단일 응답 모드에서 내장 도구, 하위 에이전트, 웹 검색을 끕니다. Grok CLI 자체 계정과 세션 정책은 그대로 적용됩니다.";
+      return t("Grok은 단일 응답 모드에서 내장 도구, 하위 에이전트, 웹 검색을 끕니다. Grok CLI 자체 계정과 세션 정책은 그대로 적용됩니다.");
     case "antigravity":
-      return "Antigravity는 비대화형 응답 모드와 샌드박스로 실행합니다. Antigravity 자체 계정과 설정 정책은 그대로 적용됩니다.";
+      return t("Antigravity는 비대화형 응답 모드와 샌드박스로 실행합니다. Antigravity 자체 계정과 설정 정책은 그대로 적용됩니다.");
     case "ollama":
-      return "Ollama에는 도구를 제공하지 않습니다. 로컬 모델이면 요약이 컴퓨터 안에서 처리되고, cloud 모델이면 Ollama 서비스로 전송됩니다.";
+      return t("Ollama에는 도구를 제공하지 않습니다. 로컬 모델이면 요약이 컴퓨터 안에서 처리되고, cloud 모델이면 Ollama 서비스로 전송됩니다.");
     default:
-      return "AI CLI를 고르면 이곳에 해당 공급자의 실행 권한을 표시합니다.";
+      return t("AI CLI를 고르면 이곳에 해당 공급자의 실행 권한을 표시합니다.");
   }
 }
 
@@ -1141,21 +1171,22 @@ function chooseOllamaModel(
 function providerConversationLabel(
   provider: AssistantProviderStatus | null,
   ollamaModel: string,
+  t: Translate,
 ): string {
-  if (!provider) return "선택한 AI CLI";
+  if (!provider) return t("선택한 AI CLI");
   return provider.provider === "ollama" && ollamaModel
     ? `${provider.label} · ${ollamaModel}`
     : provider.label;
 }
 
-function providerUnavailableMessage(provider: AssistantProviderStatus): string {
-  if (!provider.installed) return `${provider.label}를 먼저 설치해 주세요…`;
-  if (provider.provider === "ollama") return "Ollama에 대화용 모델을 먼저 설치해 주세요…";
-  return `${provider.label}에서 먼저 로그인해 주세요…`;
+function providerUnavailableMessage(provider: AssistantProviderStatus, t: Translate): string {
+  if (!provider.installed) return t("{{provider}}를 먼저 설치해 주세요…", { provider: provider.label });
+  if (provider.provider === "ollama") return t("Ollama에 대화용 모델을 먼저 설치해 주세요…");
+  return t("{{provider}}에서 먼저 로그인해 주세요…", { provider: provider.label });
 }
 
-function normalizeAssistantError(reason: unknown): string {
+function normalizeAssistantError(reason: unknown, t: Translate): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
-  return "AI CLI 응답을 받지 못했습니다";
+  return t("AI CLI 응답을 받지 못했습니다");
 }

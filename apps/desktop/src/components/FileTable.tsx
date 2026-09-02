@@ -8,6 +8,7 @@ import {
   formatDateTimeAttribute,
 } from "../lib/format";
 import type { FileEntry } from "../types";
+import { useLanguage } from "../i18n";
 
 interface FileTableProps {
   files: FileEntry[];
@@ -28,6 +29,7 @@ export function FileTable({
   isSelectionDisabled,
   selectionDisabled = false,
 }: FileTableProps) {
+  const { t } = useLanguage();
   const [inspectionMessage, setInspectionMessage] = useState<string | null>(null);
   const selectable = Boolean(selectedPaths && onSelectionChange);
 
@@ -40,12 +42,15 @@ export function FileTable({
       const outcome = await inspectFile(file.path);
       setInspectionMessage(
         outcome === "opened"
-          ? `${file.name} 파일을 기본 앱으로 열었습니다.`
-          : `${file.name}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.`,
+          ? t("{{name}} 파일을 기본 앱으로 열었습니다.", { name: file.name })
+          : t("{{name}}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.", { name: file.name }),
       );
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : String(reason);
-      setInspectionMessage(`${file.name} 파일을 열지 못했습니다: ${message}`);
+      setInspectionMessage(t("{{name}} 파일을 열지 못했습니다: {{detail}}", {
+        name: file.name,
+        detail: message,
+      }));
     }
   }
 
@@ -54,13 +59,13 @@ export function FileTable({
       <div
         className={`file-table ${selectable ? "has-selection" : ""}`}
         role="table"
-        aria-label="파일 분석 결과"
+        aria-label={t("파일 분석 결과")}
       >
         <div className="file-table__head" role="row">
-          {selectable ? <span role="columnheader">선택</span> : null}
-          <span role="columnheader">파일</span>
-          <span role="columnheader">수정</span>
-          <span role="columnheader">크기</span>
+          {selectable ? <span role="columnheader">{t("선택")}</span> : null}
+          <span role="columnheader">{t("파일")}</span>
+          <span role="columnheader">{t("수정")}</span>
+          <span role="columnheader">{t("크기")}</span>
         </div>
         {files.map((file) => {
           const selected = selectedPaths?.has(file.path) ?? false;
@@ -72,8 +77,8 @@ export function FileTable({
             role="row"
             tabIndex={0}
             aria-selected={selectable ? selected : undefined}
-            aria-label={`${file.name}, 더블클릭하거나 Enter 키를 눌러 확인`}
-            title="더블클릭하여 기본 앱으로 열기"
+            aria-label={t("{{name}}, 더블클릭하거나 Enter 키를 눌러 확인", { name: file.name })}
+            title={t("더블클릭하여 기본 앱으로 열기")}
             key={file.path}
             onDoubleClick={() => void openForInspection(file)}
             onKeyDown={(event) => {
@@ -87,8 +92,8 @@ export function FileTable({
                 className="file-selection"
                 title={
                   selectionUnavailable && !selected
-                    ? "이 그룹에는 보관할 파일을 하나 이상 남겨야 합니다"
-                    : "휴지통으로 이동할 파일 선택"
+                    ? t("이 그룹에는 보관할 파일을 하나 이상 남겨야 합니다")
+                    : t("휴지통으로 이동할 파일 선택")
                 }
                 onClick={(event) => event.stopPropagation()}
                 onDoubleClick={(event) => event.stopPropagation()}
@@ -97,7 +102,7 @@ export function FileTable({
                   type="checkbox"
                   checked={selected}
                   disabled={selectionUnavailable}
-                  aria-label={`${file.name} 휴지통 이동 대상으로 선택`}
+                  aria-label={t("{{name}} 휴지통 이동 대상으로 선택", { name: file.name })}
                   onChange={(event) => onSelectionChange?.(file, event.currentTarget.checked)}
                 />
               </label>
@@ -121,7 +126,9 @@ export function FileTable({
           );
         })}
       </div>
-      <p className="file-table__hint">더블클릭하면 기본 앱으로 엽니다. 실행 파일과 스크립트는 안전을 위해 폴더에서만 표시합니다.</p>
+      <p className="file-table__hint">
+        {t("더블클릭하면 기본 앱으로 엽니다. 실행 파일과 스크립트는 안전을 위해 폴더에서만 표시합니다.")}
+      </p>
       {inspectionMessage ? (
         <p className="file-table__status" role="status" aria-live="polite">
           {inspectionMessage}

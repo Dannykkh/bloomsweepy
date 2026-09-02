@@ -37,6 +37,18 @@ use system_inventory::{
     registry_residue_inventory_with_cancellation,
 };
 
+#[tauri::command]
+fn set_application_language(app: AppHandle, language: String) -> Result<(), String> {
+    if !matches!(language.as_str(), "en" | "ko" | "ja" | "zh-CN") {
+        return Err("unsupported application language".to_owned());
+    }
+    #[cfg(windows)]
+    windows_tray::set_language(&app, &language)?;
+    #[cfg(not(windows))]
+    let _ = app;
+    Ok(())
+}
+
 #[derive(Default)]
 pub(crate) struct ScanRuntime {
     active: Mutex<Option<ActiveRuntimeWork>>,
@@ -1604,6 +1616,7 @@ pub fn run() {
             docker_tools::create_docker_cleanup_preview,
             docker_tools::execute_docker_cleanup,
             docker_tools::cancel_docker_cleanup,
+            set_application_language,
             get_system_overview,
             is_scan_running,
             start_scan,

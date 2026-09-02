@@ -18,6 +18,7 @@ export type AssistantProviderKind =
   | "ollama";
 
 export type AssistantScopeKind = "folder" | "docker";
+export type AssistantResponseLanguage = "en" | "ko" | "ja" | "zh-CN";
 
 export type AssistantAuthentication =
   | "authenticated"
@@ -73,6 +74,7 @@ export interface AssistantChatRequest {
   summary: AssistantFolderSummary;
   scopeKind: AssistantScopeKind;
   includeDockerStatus: boolean;
+  responseLanguage: AssistantResponseLanguage;
 }
 
 export interface AssistantChatResponse {

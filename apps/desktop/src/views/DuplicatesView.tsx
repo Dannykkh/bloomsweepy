@@ -20,6 +20,7 @@ import type {
   TrashOperationResult,
   TrashProgress,
 } from "../types";
+import { useLanguage } from "../i18n";
 
 interface DuplicatesViewProps {
   report: ScanReport | null;
@@ -44,6 +45,7 @@ export function DuplicatesView({
   onMoveToTrash,
   onCancelAction,
 }: DuplicatesViewProps) {
+  const { t } = useLanguage();
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "photos">("all");
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
@@ -106,7 +108,7 @@ export function DuplicatesView({
       await onMoveToTrash(request);
       setDialogOpen(false);
     } catch (reason) {
-      setDialogError(normalizeError(reason));
+      setDialogError(normalizeError(reason, t("휴지통 이동을 완료하지 못했습니다")));
     }
   }
 
@@ -119,16 +121,16 @@ export function DuplicatesView({
         {actionError ? (
           <div className="notice-panel trash-action-error" role="alert">
             <AlertTriangle size={18} aria-hidden="true" />
-            <p>{actionError} 기존 결과는 안전을 위해 폐기했습니다. 다시 스캔하세요.</p>
+            <p>{actionError} {t("기존 결과는 안전을 위해 폐기했습니다. 다시 스캔하세요.")}</p>
           </div>
         ) : null}
         <div className="empty-panel empty-panel--page">
           <Copy size={28} aria-hidden="true" />
-          <strong>큰 파일과 중복 파일을 한 번에 검사하세요</strong>
-          <p>한 번의 자세한 검사로 큰 파일을 찾고, 중복 후보는 내용을 처음부터 끝까지 비교합니다.</p>
+          <strong>{t("큰 파일과 중복 파일을 한 번에 검사하세요")}</strong>
+          <p>{t("한 번의 자세한 검사로 큰 파일을 찾고, 중복 후보는 내용을 처음부터 끝까지 비교합니다.")}</p>
           <button className="primary-button" type="button" disabled={scanning} onClick={onStartScan}>
             <Copy size={17} aria-hidden="true" />
-            큰 파일·중복 찾기
+            {t("큰 파일·중복 찾기")}
           </button>
         </div>
       </div>
@@ -140,9 +142,12 @@ export function DuplicatesView({
       <section className="verification-strip">
         <ShieldCheck size={22} aria-hidden="true" />
         <div>
-          <strong>전체 내용 검증 완료</strong>
+          <strong>{t("전체 내용 검증 완료")}</strong>
           <p>
-            {formatCount(report.duplicateGroups.length)}개 그룹에서 {formatBytes(report.duplicateWasteBytes)}를 중복으로 확인했습니다.
+            {t("{{groups}}개 그룹에서 {{size}}를 중복으로 확인했습니다.", {
+              groups: formatCount(report.duplicateGroups.length),
+              size: formatBytes(report.duplicateWasteBytes),
+            })}
           </p>
         </div>
       </section>
@@ -150,12 +155,12 @@ export function DuplicatesView({
       {report.hardLinkIdentityLimitReached ? (
         <div className="notice-panel duplicate-folder-notice" role="status">
           <AlertTriangle size={18} aria-hidden="true" />
-          <p>하드링크 식별자 안전 상한에 도달했습니다. 이후 하드링크 파일은 중복 분석에서 제외했습니다.</p>
+          <p>{t("하드링크 식별자 안전 상한에 도달했습니다. 이후 하드링크 파일은 중복 분석에서 제외했습니다.")}</p>
         </div>
       ) : null}
 
-      <section className="duplicate-toolbar" aria-label="중복 결과 필터">
-        <div className="segmented-control" role="group" aria-label="중복 파일 종류">
+      <section className="duplicate-toolbar" aria-label={t("중복 결과 필터")}>
+        <div className="segmented-control" role="group" aria-label={t("중복 파일 종류")}>
           <button
             type="button"
             className={filter === "all" ? "is-active" : ""}
@@ -163,7 +168,7 @@ export function DuplicatesView({
             onClick={() => setFilter("all")}
           >
             <Copy size={15} aria-hidden="true" />
-            모든 파일 {formatCount(report.duplicateGroups.length)}
+            {t("모든 파일 {{count}}", { count: formatCount(report.duplicateGroups.length) })}
           </button>
           <button
             type="button"
@@ -172,18 +177,21 @@ export function DuplicatesView({
             onClick={() => setFilter("photos")}
           >
             <Camera size={15} aria-hidden="true" />
-            동일 사진 {formatCount(photoGroups.length)}
+            {t("동일 사진 {{count}}", { count: formatCount(photoGroups.length) })}
           </button>
         </div>
-        <span>사진 보기는 내용이 완전히 같은 이미지 파일만 포함합니다.</span>
+        <span>{t("사진 보기는 내용이 완전히 같은 이미지 파일만 포함합니다.")}</span>
       </section>
 
       {selectedPaths.size > 0 ? (
-        <section className="trash-action-bar" aria-label="휴지통 이동 선택 요약">
+        <section className="trash-action-bar" aria-label={t("휴지통 이동 선택 요약")}>
           <div>
-            <span>선택</span>
-            <strong>{formatCount(selectedPaths.size)}개 · {formatBytes(selectedBytes)}</strong>
-            <small>각 그룹의 보관본 한 개는 선택할 수 없습니다.</small>
+            <span>{t("선택")}</span>
+            <strong>{t("{{count}}개 · {{size}}", {
+              count: formatCount(selectedPaths.size),
+              size: formatBytes(selectedBytes),
+            })}</strong>
+            <small>{t("각 그룹의 보관본 한 개는 선택할 수 없습니다.")}</small>
           </div>
           <button
             className="trash-action-button"
@@ -195,7 +203,7 @@ export function DuplicatesView({
             }}
           >
             <Trash2 size={16} aria-hidden="true" />
-            휴지통으로 이동
+            {t("휴지통으로 이동")}
           </button>
         </section>
       ) : null}
@@ -203,18 +211,20 @@ export function DuplicatesView({
       {crossFolderGroups.length > 0 ? (
         <div className="notice-panel duplicate-folder-notice" role="status">
           <FolderTree size={18} aria-hidden="true" />
-          <p>서로 다른 폴더에 흩어진 중복이 {formatCount(crossFolderGroups.length)}개 그룹 있습니다. 각 위치를 비교한 뒤 이동 대상을 선택하세요.</p>
+          <p>{t("서로 다른 폴더에 흩어진 중복이 {{count}}개 그룹 있습니다. 각 위치를 비교한 뒤 이동 대상을 선택하세요.", {
+            count: formatCount(crossFolderGroups.length),
+          })}</p>
         </div>
       ) : null}
 
       {visibleGroups.length === 0 ? (
         <div className="empty-panel empty-panel--page">
           <ShieldCheck size={28} aria-hidden="true" />
-          <strong>{filter === "photos" ? "내용이 같은 사진이 없습니다" : "검증된 중복 파일이 없습니다"}</strong>
-          <p>{filter === "photos" ? "비슷하게 찍힌 사진은 아직 포함하지 않고, 파일 내용이 완전히 같은 사진만 보여줍니다." : "크기만 같고 내용이 다른 파일은 중복으로 표시하지 않았습니다."}</p>
+          <strong>{filter === "photos" ? t("내용이 같은 사진이 없습니다") : t("검증된 중복 파일이 없습니다")}</strong>
+          <p>{filter === "photos" ? t("비슷하게 찍힌 사진은 아직 포함하지 않고, 파일 내용이 완전히 같은 사진만 보여줍니다.") : t("크기만 같고 내용이 다른 파일은 중복으로 표시하지 않았습니다.")}</p>
         </div>
       ) : (
-        <section className="duplicate-list" aria-label="중복 파일 그룹">
+        <section className="duplicate-list" aria-label={t("중복 파일 그룹")}>
           {visibleGroups.map((group, index) => {
             const expanded = expandedHash === group.contentHash;
             const directories = parentDirectories(group.files.map((file) => file.path));
@@ -229,23 +239,25 @@ export function DuplicatesView({
                 >
                   <span className="duplicate-group__index">{String(index + 1).padStart(2, "0")}</span>
                   <span className="duplicate-group__copy">
-                    <strong>{group.files[0]?.name ?? "중복 그룹"}</strong>
+                    <strong>{group.files[0]?.name ?? t("중복 그룹")}</strong>
                     <small>
-                      내용 확인 번호 {group.contentHash.slice(0, 16)} · 전체 내용 비교 완료
-                      {directories.length > 1 ? ` · 서로 다른 폴더 ${directories.length}곳` : ""}
-                      {groupSelectionCount > 0 ? ` · ${groupSelectionCount}개 선택` : ""}
+                      {t("내용 확인 번호 {{hash}} · 전체 내용 비교 완료", {
+                        hash: group.contentHash.slice(0, 16),
+                      })}
+                      {directories.length > 1 ? ` · ${t("서로 다른 폴더 {{count}}곳", { count: directories.length })}` : ""}
+                      {groupSelectionCount > 0 ? ` · ${t("{{count}}개 선택", { count: groupSelectionCount })}` : ""}
                     </small>
                   </span>
                   <span className="duplicate-group__metric">
                     <strong>{formatBytes(group.wastedBytes)}</strong>
-                    <small>{group.files.length}개 파일</small>
+                    <small>{t("{{count}}개 파일", { count: group.files.length })}</small>
                   </span>
                   {expanded ? <ChevronDown size={18} aria-hidden="true" /> : <ChevronRight size={18} aria-hidden="true" />}
                 </button>
                 {expanded ? (
                   <FileTable
                     files={group.files}
-                    emptyMessage="그룹에 표시할 파일이 없습니다."
+                    emptyMessage={t("그룹에 표시할 파일이 없습니다.")}
                     verified
                     selectedPaths={selectedPaths}
                     onSelectionChange={updateSelection}
@@ -263,7 +275,7 @@ export function DuplicatesView({
 
       <SafetyActionDialog
         open={dialogOpen}
-        title="선택한 중복 파일을 휴지통으로 이동할까요?"
+        title={t("선택한 중복 파일을 휴지통으로 이동할까요?")}
         itemCount={selectedPaths.size}
         logicalBytes={selectedBytes}
         busy={actionRunning}
@@ -291,7 +303,7 @@ function parentDirectories(paths: string[]): string[] {
   return [...new Set(paths.map(fileParent))];
 }
 
-function normalizeError(reason: unknown): string {
+function normalizeError(reason: unknown, fallback: string): string {
   if (reason instanceof Error) return reason.message;
-  return typeof reason === "string" ? reason : "휴지통 이동을 완료하지 못했습니다";
+  return typeof reason === "string" ? reason : fallback;
 }

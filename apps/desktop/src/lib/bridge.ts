@@ -57,6 +57,11 @@ import type {
   McpClientKind,
   McpClientRegistrationStatus,
 } from "../types";
+import type { LanguagePreference } from "../i18n/preference";
+
+export function setApplicationLanguage(language: LanguagePreference): Promise<void> {
+  return invoke<void>("set_application_language", { language });
+}
 
 export function getAssistantProviderStatus(): Promise<AssistantProviderStatus[]> {
   return invoke<AssistantProviderStatus[]>("get_assistant_provider_status");
@@ -346,11 +351,11 @@ export function listenToControlScanCompleted(
   );
 }
 
-export async function selectDirectory(): Promise<string | null> {
+export async function selectDirectory(title = "Choose a folder to scan"): Promise<string | null> {
   const selection = await open({
     directory: true,
     multiple: false,
-    title: "스캔할 폴더 선택",
+    title,
   });
 
   return typeof selection === "string" ? selection : null;

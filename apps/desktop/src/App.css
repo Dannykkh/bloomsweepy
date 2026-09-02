@@ -50,6 +50,14 @@
   --font-size-ui-min: 14px;
 }
 
+:root:lang(ja) {
+  font-family: "Yu Gothic UI", "Hiragino Sans", Meiryo, sans-serif;
+}
+
+:root:lang(zh-CN) {
+  font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -4337,6 +4345,21 @@ option {
   max-width: 1100px;
 }
 
+.settings-language-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-language-panel__storage-note {
+  margin: 0;
+  padding: 11px 18px 13px;
+  color: var(--text-faint);
+  border-top: 1px solid var(--line);
+}
+
+.setting-row__status {
+  color: #b7c8ff;
+}
+
 .settings-panel,
 .safety-contract {
   overflow: hidden;
@@ -4395,13 +4418,18 @@ option {
 
 .setting-row select {
   min-width: 105px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 10px;
   font-family: "JetBrains Mono", monospace;
   font-size: var(--font-size-ui-min);
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--canvas-elevated);
+}
+
+.setting-row--language select {
+  min-width: 176px;
+  font-family: inherit;
 }
 
 .mcp-connection-panel {

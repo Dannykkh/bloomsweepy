@@ -19,6 +19,7 @@ import type {
   DockerCleanupResult,
   DockerManagementStatus,
 } from "../types";
+import { useLanguage, type MessageKey, type Translate } from "../i18n";
 
 interface DockerCleanupDialogProps {
   preview: DockerCleanupPreview | null;
@@ -31,6 +32,7 @@ export function DockerCleanupDialog({
   onClose,
   onCompleted,
 }: DockerCleanupDialogProps) {
+  const { t } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [selectedKinds, setSelectedKinds] = useState<DockerCleanupKind[]>([]);
@@ -128,7 +130,7 @@ export function DockerCleanupDialog({
     setCancelRequested(false);
     setError(null);
     setProgress({
-      message: "Docker 정리를 준비하고 있습니다",
+      message: t("Docker 정리를 준비하고 있습니다"),
       completedSteps: 0,
       totalSteps: selectedKinds.length,
     });
@@ -141,7 +143,7 @@ export function DockerCleanupDialog({
       setResult(nextResult);
       onCompleted(nextResult.statusAfter);
     } catch (reason) {
-      setError(normalizeDockerError(reason));
+      setError(normalizeDockerError(reason, t("Docker 작업을 완료하지 못했습니다")));
     } finally {
       setBusy(false);
       setCancelRequested(false);
@@ -155,7 +157,7 @@ export function DockerCleanupDialog({
       const requested = await cancelDockerCleanup();
       if (!requested) setCancelRequested(false);
     } catch (reason) {
-      setError(normalizeDockerError(reason));
+      setError(normalizeDockerError(reason, t("Docker 작업을 완료하지 못했습니다")));
       setCancelRequested(false);
     }
   }
@@ -180,13 +182,13 @@ export function DockerCleanupDialog({
         <header>
           <span aria-hidden="true"><Trash2 size={20} /></span>
           <div>
-            <p className="eyebrow">Docker가 관리하는 데이터</p>
-            <h2 id="docker-cleanup-title">Docker 정리 전 확인</h2>
+            <p className="eyebrow">{t("Docker가 관리하는 데이터")}</p>
+            <h2 id="docker-cleanup-title">{t("Docker 정리 전 확인")}</h2>
           </div>
           <button
             className="icon-button"
             type="button"
-            aria-label="Docker 정리 확인 창 닫기"
+            aria-label={t("Docker 정리 확인 창 닫기")}
             disabled={busy}
             onClick={onClose}
           >
@@ -199,8 +201,7 @@ export function DockerCleanupDialog({
         ) : (
           <>
             <p className="docker-cleanup-dialog__intro" id="docker-cleanup-description">
-              아래 명령은 Docker CLI에 직접 전달됩니다. 운영체제 휴지통을 거치지 않으며,
-              이미 완료된 단계는 취소해도 되돌릴 수 없습니다.
+              {t("아래 명령은 Docker CLI에 직접 전달됩니다. 운영체제 휴지통을 거치지 않으며, 이미 완료된 단계는 취소해도 되돌릴 수 없습니다.")}
             </p>
 
             <div className="docker-cleanup-options">
@@ -215,12 +216,12 @@ export function DockerCleanupDialog({
                     onChange={(event) => toggleKind(item.kind, event.currentTarget.checked)}
                   />
                   <span>
-                    <strong>{item.label}</strong>
-                    <small>{item.description}</small>
+                    <strong>{t(dockerCleanupLabel(item.kind))}</strong>
+                    <small>{t(dockerCleanupDescription(item.kind))}</small>
                     <code translate="no">{item.commandDisplay}</code>
                   </span>
                   <span>
-                    <small>정리 가능 최대</small>
+                    <small>{t("정리 가능 최대")}</small>
                     <strong>{formatDockerBytes(item.estimatedReclaimableBytes)}</strong>
                   </span>
                 </label>
@@ -228,16 +229,16 @@ export function DockerCleanupDialog({
               <div className="docker-cleanup-option is-excluded">
                 <span aria-hidden="true"><ShieldAlert size={18} /></span>
                 <span>
-                  <strong>Docker 볼륨은 정리하지 않습니다</strong>
-                  <small>데이터베이스와 사용자 파일이 들어 있을 수 있어 사용량만 표시합니다.</small>
+                  <strong>{t("Docker 볼륨은 정리하지 않습니다")}</strong>
+                  <small>{t("데이터베이스와 사용자 파일이 들어 있을 수 있어 사용량만 표시합니다.")}</small>
                 </span>
               </div>
             </div>
 
             <div className="docker-cleanup-summary">
-              <span>선택한 항목의 정리 가능 최대</span>
+              <span>{t("선택한 항목의 정리 가능 최대")}</span>
               <strong>{formatDockerBytes(estimatedBytes)}</strong>
-              <small>실제 확보량은 Docker의 공유 계층과 실행 시점 상태에 따라 더 작을 수 있습니다.</small>
+              <small>{t("실제 확보량은 Docker의 공유 계층과 실행 시점 상태에 따라 더 작을 수 있습니다.")}</small>
             </div>
 
             <label className="review-acknowledgement docker-cleanup-acknowledgement">
@@ -249,20 +250,24 @@ export function DockerCleanupDialog({
                 onChange={(event) => setAcknowledged(event.currentTarget.checked)}
               />
               <span>
-                선택한 Docker 데이터는 휴지통으로 가지 않으며 복원할 수 없음을 확인했습니다.
+                {t("선택한 Docker 데이터는 휴지통으로 가지 않으며 복원할 수 없음을 확인했습니다.")}
               </span>
             </label>
 
             {busy ? (
               <div className="safety-dialog__progress docker-cleanup-progress">
                 <div>
-                  <span>{cancelRequested ? "현재 Docker 단계를 중단하고 있습니다" : progress?.message}</span>
+                  <span>
+                    {cancelRequested
+                      ? t("현재 Docker 단계를 중단하고 있습니다")
+                      : dockerProgressMessage(progress, selectedKinds, t)}
+                  </span>
                   <strong>{Math.round(progressFraction * 100)}%</strong>
                 </div>
                 <progress
                   max={1}
                   value={progressFraction}
-                  aria-label="Docker 정리 진행률"
+                  aria-label={t("Docker 정리 진행률")}
                 />
               </div>
             ) : null}
@@ -274,7 +279,7 @@ export function DockerCleanupDialog({
         <footer>
           {result ? (
             <button className="primary-button" ref={cancelButtonRef} type="button" onClick={onClose}>
-              닫기
+              {t("닫기")}
             </button>
           ) : (
             <>
@@ -286,7 +291,7 @@ export function DockerCleanupDialog({
                 onClick={busy ? () => void requestCancellation() : onClose}
               >
                 {busy ? <Square size={15} aria-hidden="true" /> : null}
-                {busy ? "중단 요청" : "취소"}
+                {busy ? t("중단 요청") : t("취소")}
               </button>
               <button
                 className="trash-confirm-button"
@@ -295,7 +300,7 @@ export function DockerCleanupDialog({
                 onClick={() => void executeCleanup()}
               >
                 <Trash2 size={16} aria-hidden="true" />
-                선택 항목 정리
+                {t("선택 항목 정리")}
               </button>
             </>
           )}
@@ -306,6 +311,7 @@ export function DockerCleanupDialog({
 }
 
 function DockerCleanupResultView({ result }: { result: DockerCleanupResult }) {
+  const { t } = useLanguage();
   const completed = result.outcome === "completed";
   return (
     <div className={`docker-cleanup-result is-${result.outcome}`} role="status">
@@ -314,7 +320,7 @@ function DockerCleanupResultView({ result }: { result: DockerCleanupResult }) {
           ? <CheckCircle2 size={20} aria-hidden="true" />
           : <ShieldAlert size={20} aria-hidden="true" />}
         <span>
-          <strong>{result.message}</strong>
+          <strong>{t(dockerOutcomeMessage(result.outcome))}</strong>
           <small>{formatDate(result.finishedAtUnixMs)}</small>
         </span>
       </div>
@@ -322,23 +328,61 @@ function DockerCleanupResultView({ result }: { result: DockerCleanupResult }) {
         {result.steps.map((step) => (
           <div key={step.kind}>
             <span>
-              <strong>{step.label}</strong>
-              <small>{step.message}</small>
+              <strong>{t(dockerCleanupLabel(step.kind))}</strong>
+              <small>{t(step.completed ? "Docker가 이 정리 단계를 완료했습니다" : "이 단계는 시작하지 않았습니다")}</small>
             </span>
-            <strong>{step.completed ? formatDockerBytes(step.reportedReclaimedBytes) : "완료 안 됨"}</strong>
+            <strong>{step.completed ? formatDockerBytes(step.reportedReclaimedBytes) : t("완료 안 됨")}</strong>
           </div>
         ))}
       </div>
       <p>
-        Docker가 보고한 정리량 {formatDockerBytes(result.reportedReclaimedBytes)}. 볼륨은 변경하지 않았습니다.
-        {!result.historyRecorded ? " 정리 이력 저장은 완료하지 못했습니다." : ""}
+        {t("Docker가 보고한 정리량 {{size}}. 볼륨은 변경하지 않았습니다.", {
+          size: formatDockerBytes(result.reportedReclaimedBytes),
+        })}
+        {!result.historyRecorded ? ` ${t("정리 이력 저장은 완료하지 못했습니다.")}` : ""}
       </p>
     </div>
   );
 }
 
-function normalizeDockerError(reason: unknown): string {
+function dockerCleanupLabel(kind: DockerCleanupKind): MessageKey {
+  if (kind === "buildCache") return "7일 이상 사용하지 않은 빌드 캐시";
+  if (kind === "danglingImages") return "7일 이상 된 매달린 이미지";
+  return "7일 이상 된 중지 컨테이너";
+}
+
+function dockerCleanupDescription(kind: DockerCleanupKind): MessageKey {
+  if (kind === "buildCache") return "다음 빌드 때 다시 만들어질 수 있습니다.";
+  if (kind === "danglingImages") {
+    return "태그가 없는 이미지 계층이며 필요하면 다시 내려받거나 빌드해야 합니다.";
+  }
+  return "중지된 컨테이너의 쓰기 계층은 복원할 수 없습니다.";
+}
+
+function dockerOutcomeMessage(outcome: DockerCleanupResult["outcome"]): MessageKey {
+  if (outcome === "completed") return "Docker 정리를 완료했습니다";
+  if (outcome === "partial") return "Docker 정리를 일부만 완료했습니다";
+  if (outcome === "cancelled") return "Docker 정리를 취소했습니다";
+  return "Docker 정리에 실패했습니다";
+}
+
+function dockerProgressMessage(
+  progress: DockerCleanupProgress | null,
+  selectedKinds: DockerCleanupKind[],
+  t: Translate,
+): string {
+  if (!progress) return t("Docker 정리를 준비하고 있습니다");
+  if (progress.completedSteps >= progress.totalSteps) {
+    return t("Docker 사용량 다시 확인 중");
+  }
+  const kind = selectedKinds[progress.completedSteps];
+  return kind
+    ? t("{{kind}} 정리 중", { kind: t(dockerCleanupLabel(kind)) })
+    : t("Docker 정리를 진행하고 있습니다");
+}
+
+function normalizeDockerError(reason: unknown, fallback: string): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
-  return "Docker 작업을 완료하지 못했습니다";
+  return fallback;
 }
