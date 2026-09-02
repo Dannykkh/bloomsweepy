@@ -174,7 +174,7 @@ impl BroomSweepyMcp {
 
 #[tool_handler(
     name = "bloomsweepy",
-    version = "1.2.0",
+    version = "1.3.0",
     instructions = "Bridge to the running BroomSweepy app. Cleanup tools return bounded summaries from currently completed reports and can prepare a review plan, but file operations happen only after final user approval inside the app. No approval or direct cleanup tool is exposed."
 )]
 impl ServerHandler for BroomSweepyMcp {}

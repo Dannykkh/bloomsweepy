@@ -23,6 +23,14 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 |---|---|
 | ![이미지, 컨테이너, 볼륨과 빌드 캐시를 구분하는 Docker 용량 화면](docs/assets/screenshots/v1.2.0-docker.png) | ![설치된 로컬 AI CLI와 Docker 용량 요약으로 대화하는 화면](docs/assets/screenshots/v1.2.0-docker-chat.png) |
 
+## v1.3.0 주요 업데이트
+
+- Windows 설치 파일에 `bloomsweepy-mcp` 보조 프로그램을 함께 넣고, 설정 화면에서 Codex와 Claude Code에 사용자가 직접 등록·해제
+- 외부 AI에는 경로 없는 제한된 후보 요약과 익명 번호만 전달하고, 5분짜리 정리 계획의 정확한 경로와 최종 확인은 BroomSweepy 앱에서만 처리
+- MCP 도구에 승인·삭제·휴지통 실행 명령을 두지 않고, 앱이 검사·재검증·작업 기록·운영체제 휴지통 이동을 계속 전담
+- Windows MSI·NSIS에서 보조 프로그램 포함 여부와 버전을 확인하는 CI 및 macOS sidecar 검증 추가
+- 네이티브 창 제목에 패키지 버전을 자동 표시해 현재 실행 중인 빌드를 바로 확인
+
 ## v1.2.0 주요 업데이트
 
 - 드라이브별 사용량·남은 공간·사용 비율, 최근 휴지통 정리와 최근 추가 파일을 한 화면에 모은 대시보드

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-09-02
+
+### Features
+
+- **mcp**: Package the local MCP helper with the desktop app and add explicit Codex and Claude Code registration controls. (`c6bfbad`)
+- **cleanup**: Let external AI request pathless cleanup summaries and short-lived review plans while keeping exact paths and final approval inside BroomSweepy. (`c6bfbad`)
+- **desktop**: Show the package version in the native window title. (`c6bfbad`)
+
+### Safety
+
+- Keep approval, deletion, trash movement, registry mutation, and trash emptying out of the MCP tool surface. (`c6bfbad`)
+- Revalidate the current scan generation and file state before reusing the existing journaled operating-system trash executor. (`c6bfbad`)
+
+### Build
+
+- Validate the versioned MCP sidecar inside Windows MSI and NSIS bundles and in the macOS build workflow. (`c6bfbad`)
+
 ## [1.2.0] - 2026-09-02
 
 ### Features

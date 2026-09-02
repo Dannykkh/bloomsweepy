@@ -1565,12 +1565,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let window_title = format!("BroomSweepy {}", app.package_info().version);
-            let main_window = app.get_webview_window("main").ok_or_else(|| {
-                std::io::Error::other("main 창을 찾지 못해 버전 제목을 설정할 수 없습니다")
-            })?;
-            main_window.set_title(&window_title)?;
-
             #[cfg(windows)]
             if let Err(error) = windows_tray::setup(app) {
                 windows_tray::log_setup_failure(&error);
@@ -1636,6 +1630,14 @@ pub fn run() {
         .expect("failed to build BroomSweepy");
 
     app.run(|app_handle, event| {
+        if matches!(event, tauri::RunEvent::Ready)
+            && let Some(main_window) = app_handle.get_webview_window("main")
+        {
+            let window_title = format!("BroomSweepy {}", app_handle.package_info().version);
+            if let Err(error) = main_window.set_title(&window_title) {
+                eprintln!("BroomSweepy 버전 제목을 설정하지 못했습니다: {error}");
+            }
+        }
         if matches!(event, tauri::RunEvent::Exit) {
             assistant_provider::shutdown(app_handle);
             docker_tools::shutdown(app_handle);
