@@ -121,7 +121,7 @@ impl BroomSweepyMcp {
 
 #[tool_handler(
     name = "bloomsweepy",
-    version = "1.1.0",
+    version = "1.2.0",
     instructions = "Bridge to the running BroomSweepy app. The bridge interprets structured requests, while the app performs approved scans and searches. No delete or trash tool is exposed."
 )]
 impl ServerHandler for BroomSweepyMcp {}

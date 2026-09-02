@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-09-02
+
+### Features
+
+- **dashboard**: Add an at-a-glance drive dashboard with usage rings, completed cleanup history, and recently discovered files. (`643b527`)
+- **assistant**: Persist folder- and Docker-scoped conversations in SQLite, support local Codex, Claude Code, Grok, Antigravity, and Ollama providers, and keep all file operations inside BroomSweepy. (`643b527`)
+- **docker**: Add an opt-in `Docker 용량` workspace for Docker-reported image, container, volume, and build-cache usage with a folder-free Docker conversation entry point. (`643b527`)
+- **search**: Sort physical drives consistently, hide common cloud virtual volumes from the dashboard, and preserve recent-file comparison baselines. (`643b527`)
+
+### Safety
+
+- Restrict Docker cleanup to explicit seven-day builder, dangling-image, and stopped-container prune commands; exclude volumes and require an irreversible-action acknowledgement. (`643b527`)
+- Surface bounded trash-operation history and startup recovery evidence without adding permanent file deletion or registry mutation. (`643b527`)
+- Keep direct file opening on a document and media allowlist while revealing executable, link, package, and ambiguous entries in the file manager. (`643b527`)
+
+### Documentation
+
+- Add sanitized dashboard, Docker, and Docker conversation screenshots, a v1.2.0 feature summary, and an explicit data-loss and recovery disclaimer to the README. (`643b527`)
+
 ## [1.1.0] - 2026-09-01
 
 ### Bug Fixes

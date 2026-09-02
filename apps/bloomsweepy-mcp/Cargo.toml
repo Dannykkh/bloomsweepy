@@ -1,6 +1,6 @@
 [package]
 name = "bloomsweepy-mcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "Thin CLI and MCP bridge for the running BroomSweepy app"
 edition.workspace = true
 license.workspace = true

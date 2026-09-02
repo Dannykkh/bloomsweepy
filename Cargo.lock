@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "bloomsweepy-control"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "dirs",
  "getrandom 0.3.4",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "bloomsweepy-core"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "blake3",
  "dirs",
@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "bloomsweepy-desktop"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bloomsweepy-control",
  "bloomsweepy-core",
@@ -440,7 +440,7 @@ dependencies = [
 
 [[package]]
 name = "bloomsweepy-mcp"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "bloomsweepy-control",
  "clap",
