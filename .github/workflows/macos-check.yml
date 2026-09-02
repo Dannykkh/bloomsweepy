@@ -57,6 +57,12 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
+      - name: Prepare native MCP sidecar
+        working-directory: apps/desktop
+        env:
+          TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
+        run: npm run prepare:sidecar
+
       - name: Check Rust workspace
         run: |
           cargo fmt --all -- --check
@@ -89,8 +95,14 @@ jobs:
           executable="$(
             /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist"
           )"
+          helper="$app/Contents/MacOS/bloomsweepy-mcp"
+          version="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
           test -x "$app/Contents/MacOS/$executable"
           file "$app/Contents/MacOS/$executable" | grep -q arm64
+          test -x "$helper"
+          file "$helper" | grep -q arm64
+          test "$("$helper" --version)" = "bloomsweepy-mcp $version"
+          codesign -vvv --strict "$helper"
           codesign -vvv --deep --strict "$app"
           codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Signature=adhoc"
 

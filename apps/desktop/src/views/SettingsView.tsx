@@ -1,5 +1,6 @@
 import { Database, HardDrive, ShieldCheck } from "lucide-react";
 import { DockerManagementPanel } from "../components/DockerManagementPanel";
+import { McpConnectionPanel } from "../components/McpConnectionPanel";
 import type { DockerManagementStatus, ScanConfig } from "../types";
 
 interface SettingsViewProps {
@@ -122,6 +123,8 @@ export function SettingsView({
         onEnabledChange={onDockerEnabledChange}
         onOpenDocker={onOpenDocker}
       />
+
+      <McpConnectionPanel />
 
       <section className="safety-contract">
         <ShieldCheck size={22} aria-hidden="true" />

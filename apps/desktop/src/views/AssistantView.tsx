@@ -78,6 +78,12 @@ interface AssistantViewProps {
   updatingScanAccess: boolean;
   scanAccessError: string | null;
   onToggleScanAccess: () => void;
+  canEnableCleanup: boolean;
+  cleanupAccessLocked: boolean;
+  updatingCleanupAccess: boolean;
+  cleanupAccessError: string | null;
+  onToggleCleanupAccess: () => void;
+  onReviewPending: () => void;
   directoryProgress: DirectoryScanProgress | null;
   directoryState: ScanUiState;
   volumes: VolumeInfo[];
@@ -99,6 +105,12 @@ export function AssistantView({
   updatingScanAccess,
   scanAccessError,
   onToggleScanAccess,
+  canEnableCleanup,
+  cleanupAccessLocked,
+  updatingCleanupAccess,
+  cleanupAccessError,
+  onToggleCleanupAccess,
+  onReviewPending,
   directoryProgress,
   directoryState,
   volumes,
@@ -799,6 +811,12 @@ export function AssistantView({
           updatingScanAccess={updatingScanAccess}
           scanAccessError={scanAccessError}
           onToggleScanAccess={onToggleScanAccess}
+          canEnableCleanup={canEnableCleanup}
+          cleanupAccessLocked={cleanupAccessLocked}
+          updatingCleanupAccess={updatingCleanupAccess}
+          cleanupAccessError={cleanupAccessError}
+          onToggleCleanupAccess={onToggleCleanupAccess}
+          onReviewPending={onReviewPending}
         />
       </details>
 

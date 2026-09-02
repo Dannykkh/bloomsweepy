@@ -21,21 +21,21 @@ static OPERATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DuplicateTrashRequest {
-    groups: Vec<DuplicateTrashGroupSelection>,
+    pub(crate) groups: Vec<DuplicateTrashGroupSelection>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DuplicateTrashGroupSelection {
-    content_hash: String,
-    paths: Vec<String>,
+pub(crate) struct DuplicateTrashGroupSelection {
+    pub(crate) content_hash: String,
+    pub(crate) paths: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CleanupTrashRequest {
-    paths: Vec<String>,
-    allow_review_candidates: bool,
+    pub(crate) paths: Vec<String>,
+    pub(crate) allow_review_candidates: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -66,24 +66,24 @@ pub(crate) enum TrashItemStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrashItemResult {
-    path: String,
-    logical_bytes: u64,
-    status: TrashItemStatus,
-    message: Option<String>,
+    pub(crate) path: String,
+    pub(crate) logical_bytes: u64,
+    pub(crate) status: TrashItemStatus,
+    pub(crate) message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct TrashOperationResult {
-    operation_id: String,
-    requested_count: usize,
-    moved_count: usize,
-    moved_bytes: u64,
-    cancelled: bool,
-    stopped_early: bool,
-    journal_complete: bool,
-    journal_path: String,
-    items: Vec<TrashItemResult>,
+    pub(crate) operation_id: String,
+    pub(crate) requested_count: usize,
+    pub(crate) moved_count: usize,
+    pub(crate) moved_bytes: u64,
+    pub(crate) cancelled: bool,
+    pub(crate) stopped_early: bool,
+    pub(crate) journal_complete: bool,
+    pub(crate) journal_path: String,
+    pub(crate) items: Vec<TrashItemResult>,
 }
 
 trait TrashBackend {
@@ -169,6 +169,15 @@ pub(crate) async fn trash_duplicate_files(
     reports: State<'_, StoredReports>,
     request: DuplicateTrashRequest,
 ) -> Result<TrashOperationResult, String> {
+    trash_duplicate_files_internal(app, runtime.inner(), reports.inner(), request).await
+}
+
+pub(crate) async fn trash_duplicate_files_internal(
+    app: AppHandle,
+    runtime: &ScanRuntime,
+    reports: &StoredReports,
+    request: DuplicateTrashRequest,
+) -> Result<TrashOperationResult, String> {
     let cancellation = runtime.begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
     let report = reports.scan_report()?;
@@ -244,6 +253,15 @@ pub(crate) async fn trash_cleanup_candidates(
     app: AppHandle,
     runtime: State<'_, ScanRuntime>,
     reports: State<'_, StoredReports>,
+    request: CleanupTrashRequest,
+) -> Result<TrashOperationResult, String> {
+    trash_cleanup_candidates_internal(app, runtime.inner(), reports.inner(), request).await
+}
+
+pub(crate) async fn trash_cleanup_candidates_internal(
+    app: AppHandle,
+    runtime: &ScanRuntime,
+    reports: &StoredReports,
     request: CleanupTrashRequest,
 ) -> Result<TrashOperationResult, String> {
     let cancellation = runtime.begin()?;

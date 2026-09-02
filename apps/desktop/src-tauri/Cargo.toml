@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 bloomsweepy-control = { path = "../../../crates/bloomsweepy-control" }
 bloomsweepy-core = { path = "../../../crates/bloomsweepy-core" }
+blake3 = { workspace = true }
 dirs = { workspace = true }
 getrandom = { workspace = true }
 tauri = { version = "2", features = [] }

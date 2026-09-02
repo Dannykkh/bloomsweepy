@@ -15,8 +15,8 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 - Project: `bloomsweepy`
 - Detected projects: 0
 - Source categories: 9
-- Files: 325, documents: 41, assets: 295
-- Routes: 0, API signals: 0, UI signals: 89
+- Files: 332, documents: 41, assets: 308
+- Routes: 0, API signals: 0, UI signals: 90
 
 ## Start Here
 
@@ -44,7 +44,7 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 | Area | Files | Why it matters |
 |------|-------|----------------|
-| [apps-desktop](../apps-desktop.md) | 41 | .ts×16, .tsx×14, .rs×11 |
+| [apps-desktop](../apps-desktop.md) | 44 | .ts×16, .tsx×15, .rs×13 |
 | [views](../views.md) | 39 | WPF View/Window/Panel |
 | [services](../services.md) | 22 | 서비스 클래스/메서드 |
 | [crates-bloomsweepy-core](../crates-bloomsweepy-core.md) | 11 | .rs×11 |

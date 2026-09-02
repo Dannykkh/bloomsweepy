@@ -1,6 +1,8 @@
 use bloomsweepy_control::{
-    ControlCommand, ControlErrorBody, DEFAULT_TIMEOUT, DocumentSearchRequest, FileEntryKind,
-    FileSearchRequest, FileSearchSort, OperationReference, ProtocolError, call,
+    CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
+    ControlErrorBody, CreateCleanupPlanRequest, DEFAULT_CLEANUP_RESULTS, DEFAULT_TIMEOUT,
+    DocumentSearchRequest, FileEntryKind, FileSearchRequest, FileSearchSort, OperationReference,
+    ProtocolError, call,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -59,6 +61,48 @@ pub enum Command {
     OperationStatus { operation_id: String },
     /// 작업 번호가 정확히 일치하는 진행 중 검사의 취소를 요청합니다.
     CancelOperation { operation_id: String },
+    /// 현재 완료된 보고서에서 제한된 정리 후보 요약을 확인합니다.
+    #[command(name = "cleanup_candidates")]
+    CleanupCandidates {
+        #[arg(long, value_enum)]
+        source: CleanupSourceArgument,
+        #[arg(long)]
+        expected_generation: Option<u64>,
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        #[arg(long, default_value_t = DEFAULT_CLEANUP_RESULTS)]
+        max_results: usize,
+    },
+    /// 후보 번호로 앱의 최종 확인을 기다리는 정리 계획을 만듭니다.
+    #[command(name = "create_cleanup_plan")]
+    CreateCleanupPlan {
+        #[arg(long, value_enum)]
+        source: CleanupSourceArgument,
+        #[arg(long)]
+        source_generation: u64,
+        #[arg(long = "candidate-id")]
+        candidate_ids: Vec<String>,
+    },
+    /// 정리 계획의 제한된 상태 요약을 확인합니다.
+    #[command(name = "cleanup_plan_status")]
+    CleanupPlanStatus { plan_id: String },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CleanupSourceArgument {
+    #[value(name = "duplicate_files")]
+    DuplicateFiles,
+    #[value(name = "system_cleanup")]
+    SystemCleanup,
+}
+
+impl From<CleanupSourceArgument> for CleanupSource {
+    fn from(value: CleanupSourceArgument) -> Self {
+        match value {
+            CleanupSourceArgument::DuplicateFiles => Self::DuplicateFiles,
+            CleanupSourceArgument::SystemCleanup => Self::SystemCleanup,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -190,6 +234,37 @@ pub fn control_command(command: Command) -> Result<ControlCommand, ProtocolError
         Command::CancelOperation { operation_id } => Ok(ControlCommand::CancelOperation(
             OperationReference::new(operation_id)?,
         )),
+        Command::CleanupCandidates {
+            source,
+            expected_generation,
+            offset,
+            max_results,
+        } => {
+            let request = CleanupCandidatesRequest {
+                source: source.into(),
+                expected_generation,
+                offset,
+                max_results,
+            };
+            request.validate()?;
+            Ok(ControlCommand::CleanupCandidates(request))
+        }
+        Command::CreateCleanupPlan {
+            source,
+            source_generation,
+            candidate_ids,
+        } => {
+            let request = CreateCleanupPlanRequest {
+                source: source.into(),
+                source_generation,
+                candidate_ids,
+            };
+            request.validate()?;
+            Ok(ControlCommand::CreateCleanupPlan(request))
+        }
+        Command::CleanupPlanStatus { plan_id } => Ok(ControlCommand::CleanupPlanStatus(
+            CleanupPlanReference::new(plan_id)?,
+        )),
     }
 }
 
@@ -229,7 +304,9 @@ pub fn public_error(error: &ProtocolError) -> ControlErrorBody {
 
 #[cfg(test)]
 mod tests {
-    use bloomsweepy_control::{ControlCommand, MAX_SEARCH_RESULTS};
+    use bloomsweepy_control::{
+        CLEANUP_ID_BYTES, ControlCommand, MAX_CLEANUP_RESULTS, MAX_SEARCH_RESULTS,
+    };
 
     use super::*;
 
@@ -282,6 +359,92 @@ mod tests {
             control_command(Command::CancelOperation { operation_id }).expect("cancel operation"),
             ControlCommand::CancelOperation(_)
         ));
+
+        assert!(matches!(
+            control_command(Command::CleanupCandidates {
+                source: CleanupSourceArgument::SystemCleanup,
+                expected_generation: Some(3),
+                offset: 0,
+                max_results: DEFAULT_CLEANUP_RESULTS,
+            })
+            .expect("cleanup candidates"),
+            ControlCommand::CleanupCandidates(_)
+        ));
+        let candidate_id = "ab".repeat(CLEANUP_ID_BYTES);
+        assert!(matches!(
+            control_command(Command::CreateCleanupPlan {
+                source: CleanupSourceArgument::DuplicateFiles,
+                source_generation: 3,
+                candidate_ids: vec![candidate_id.clone()],
+            })
+            .expect("create cleanup plan"),
+            ControlCommand::CreateCleanupPlan(_)
+        ));
+        assert!(matches!(
+            control_command(Command::CleanupPlanStatus {
+                plan_id: candidate_id,
+            })
+            .expect("cleanup plan status"),
+            ControlCommand::CleanupPlanStatus(_)
+        ));
+    }
+
+    #[test]
+    fn cleanup_cli_subcommands_use_the_explicit_safe_names() {
+        let candidates = Arguments::try_parse_from([
+            "bloomsweepy-mcp",
+            "cleanup_candidates",
+            "--source",
+            "system_cleanup",
+        ])
+        .expect("parse cleanup candidates");
+        assert!(matches!(
+            candidates.command,
+            Command::CleanupCandidates {
+                source: CleanupSourceArgument::SystemCleanup,
+                max_results: DEFAULT_CLEANUP_RESULTS,
+                ..
+            }
+        ));
+
+        let candidate_id = "ab".repeat(CLEANUP_ID_BYTES);
+        let plan = Arguments::try_parse_from([
+            "bloomsweepy-mcp",
+            "create_cleanup_plan",
+            "--source",
+            "duplicate_files",
+            "--source-generation",
+            "4",
+            "--candidate-id",
+            &candidate_id,
+        ])
+        .expect("parse create cleanup plan");
+        assert!(matches!(plan.command, Command::CreateCleanupPlan { .. }));
+
+        let status =
+            Arguments::try_parse_from(["bloomsweepy-mcp", "cleanup_plan_status", &candidate_id])
+                .expect("parse cleanup plan status");
+        assert!(matches!(status.command, Command::CleanupPlanStatus { .. }));
+    }
+
+    #[test]
+    fn cleanup_cli_rejects_unbounded_counts_and_invalid_ids() {
+        let limit_error = control_command(Command::CleanupCandidates {
+            source: CleanupSourceArgument::SystemCleanup,
+            expected_generation: None,
+            offset: 0,
+            max_results: MAX_CLEANUP_RESULTS + 1,
+        })
+        .expect_err("cleanup result limit must fail");
+        assert_eq!(limit_error.code(), "invalid_request");
+
+        let id_error = control_command(Command::CreateCleanupPlan {
+            source: CleanupSourceArgument::DuplicateFiles,
+            source_generation: 1,
+            candidate_ids: vec!["not-an-id".to_owned()],
+        })
+        .expect_err("candidate ID must fail");
+        assert_eq!(id_error.code(), "invalid_request");
     }
 
     #[test]

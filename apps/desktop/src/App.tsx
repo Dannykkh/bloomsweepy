@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { AppShell } from "./components/AppShell";
+import { SafetyActionDialog } from "./components/SafetyActionDialog";
 import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice";
 import { StorageSectionNav } from "./components/StorageSectionNav";
 import {
@@ -9,6 +10,7 @@ import {
   clearFileCatalog,
   configureControlScanAccess,
   configureControlSearchAccess,
+  configureControlCleanupAccess,
   getActionHistory,
   getActionRecoveryStatus,
   getControlStatus,
@@ -18,6 +20,7 @@ import {
   getRecentFileCatalogEntries,
   getScanReportSnapshot,
   getSystemOverview,
+  getPendingCleanupPlan,
   listenToCleanupScanProgress,
   listenToControlStatus,
   listenToControlScanCompleted,
@@ -40,6 +43,8 @@ import {
   startScan,
   trashCleanupCandidates,
   trashDuplicateFiles,
+  approveCleanupPlan,
+  rejectCleanupPlan,
 } from "./lib/bridge";
 import type {
   CleanupTrashRequest,
@@ -71,6 +76,7 @@ import type {
   FileCatalogStatus,
   ControlStatus,
   DockerManagementStatus,
+  PendingCleanupPlanDetail,
 } from "./types";
 import { DEFAULT_SCAN_CONFIG } from "./types";
 import { DuplicatesView } from "./views/DuplicatesView";
@@ -106,9 +112,10 @@ const unavailableControlStatus: ControlStatus = {
   lastOperation: null,
   pendingReview: null,
   lastError: null,
-  protocolVersion: 2,
+  protocolVersion: 3,
   searchAccess: { files: false, documents: false },
   scanAccess: { enabled: false, root: null, approvedAtUnixMs: null },
+  cleanupAccess: { enabled: false, approvedAtUnixMs: null },
 };
 
 function App() {
@@ -169,6 +176,12 @@ function App() {
   const [controlAccessError, setControlAccessError] = useState<string | null>(null);
   const [controlScanAccessUpdating, setControlScanAccessUpdating] = useState(false);
   const [controlScanAccessError, setControlScanAccessError] = useState<string | null>(null);
+  const [controlCleanupAccessUpdating, setControlCleanupAccessUpdating] = useState(false);
+  const [controlCleanupAccessError, setControlCleanupAccessError] = useState<string | null>(null);
+  const [pendingCleanupPlan, setPendingCleanupPlan] =
+    useState<PendingCleanupPlanDetail | null>(null);
+  const [pendingCleanupPlanLoading, setPendingCleanupPlanLoading] = useState(false);
+  const [pendingCleanupPlanError, setPendingCleanupPlanError] = useState<string | null>(null);
   const [backgroundScanTerminalAnnouncement, setBackgroundScanTerminalAnnouncement] =
     useState("");
   const [backgroundScanErrorAnnouncement, setBackgroundScanErrorAnnouncement] = useState("");
@@ -705,6 +718,77 @@ function App() {
     }
     if (!root || selectionBlocked) return;
     await updateControlScanAccess(root, config);
+  }
+
+  async function toggleControlCleanupAccess() {
+    if (controlCleanupAccessUpdating || !controlStatus.bridgeAvailable) return;
+    const enabled = controlStatus.cleanupAccess.enabled;
+    if (!enabled && !report && !cleanupReport) return;
+
+    setControlCleanupAccessUpdating(true);
+    setControlCleanupAccessError(null);
+    try {
+      const status = await configureControlCleanupAccess({ enabled: !enabled });
+      applyControlStatus(status);
+      if (enabled) {
+        setPendingCleanupPlan(null);
+        setPendingCleanupPlanError(null);
+      }
+    } catch (reason) {
+      setControlCleanupAccessError(normalizeError(reason));
+    } finally {
+      setControlCleanupAccessUpdating(false);
+    }
+  }
+
+  async function openPendingCleanupReview() {
+    if (pendingCleanupPlanLoading || trashRunning) return;
+    setPendingCleanupPlanLoading(true);
+    setPendingCleanupPlanError(null);
+    try {
+      const plan = await getPendingCleanupPlan();
+      if (!plan) {
+        setPendingCleanupPlan(null);
+        setPendingCleanupPlanError("확인할 정리 계획이 없거나 확인 시간이 지났습니다.");
+        return;
+      }
+      setPendingCleanupPlan(plan);
+    } catch (reason) {
+      setPendingCleanupPlanError(normalizeError(reason));
+    } finally {
+      setPendingCleanupPlanLoading(false);
+    }
+  }
+
+  async function closePendingCleanupReview() {
+    const plan = pendingCleanupPlan;
+    if (!plan || trashRunning) return;
+    setPendingCleanupPlanError(null);
+    try {
+      await rejectCleanupPlan(plan.planId);
+      setPendingCleanupPlan(null);
+    } catch (reason) {
+      setPendingCleanupPlanError(normalizeError(reason));
+    }
+  }
+
+  async function confirmPendingCleanupReview(reviewAcknowledged: boolean) {
+    const plan = pendingCleanupPlan;
+    if (!plan || trashRunning) return;
+    setPendingCleanupPlanError(null);
+    try {
+      await runTrashAction(
+        plan.source === "duplicateFiles" ? "duplicates" : "cleanup",
+        () =>
+          approveCleanupPlan({
+            planId: plan.planId,
+            allowReviewCandidates: reviewAcknowledged,
+          }),
+      );
+      setPendingCleanupPlan(null);
+    } catch (reason) {
+      setPendingCleanupPlanError(normalizeError(reason));
+    }
   }
 
   async function updateScanConfig(nextConfig: ScanConfig) {
@@ -1588,6 +1672,12 @@ function App() {
           updatingScanAccess={controlScanAccessUpdating}
           scanAccessError={controlScanAccessError}
           onToggleScanAccess={() => void toggleControlScanAccess()}
+          canEnableCleanup={Boolean(report || cleanupReport)}
+          cleanupAccessLocked={selectionBlocked}
+          updatingCleanupAccess={controlCleanupAccessUpdating}
+          cleanupAccessError={controlCleanupAccessError}
+          onToggleCleanupAccess={() => void toggleControlCleanupAccess()}
+          onReviewPending={() => void openPendingCleanupReview()}
           directoryProgress={directoryProgress}
           directoryState={directoryScanState}
           volumes={system?.volumes ?? []}
@@ -1648,6 +1738,54 @@ function App() {
           onDockerEnabledChange={updateDockerEnabled}
           onOpenDocker={() => navigate("docker")}
         />
+      ) : null}
+
+      <SafetyActionDialog
+        open={Boolean(pendingCleanupPlan)}
+        title={
+          pendingCleanupPlan?.source === "duplicateFiles"
+            ? "외부 AI가 제안한 중복 파일 정리"
+            : "외부 AI가 제안한 정리 후보"
+        }
+        itemCount={pendingCleanupPlan?.itemCount ?? 0}
+        logicalBytes={pendingCleanupPlan?.totalBytes ?? 0}
+        reviewCount={pendingCleanupPlan?.reviewCount ?? 0}
+        busy={trashRunning}
+        progress={trashProgress}
+        error={pendingCleanupPlanError ?? trashError}
+        intro="외부 AI는 익명 후보 번호와 용량 요약만 보고 이 계획을 만들었습니다. 아래 정확한 경로는 이 앱 안에서만 표시되며, 지금 확인해야 파일 이동을 시작합니다."
+        items={(pendingCleanupPlan?.items ?? []).map((item) => ({
+          path: displayPath(item.path),
+          logicalBytes: item.logicalBytes,
+          detail: item.detail,
+        }))}
+        confirmLabel="확인하고 휴지통으로 이동"
+        onConfirm={(reviewAcknowledged) =>
+          void confirmPendingCleanupReview(reviewAcknowledged)
+        }
+        onCancel={() =>
+          void (trashRunning ? stopTrashAction() : closePendingCleanupReview())
+        }
+        onClose={() => void closePendingCleanupReview()}
+      />
+
+      {controlStatus.pendingReview && !pendingCleanupPlan && !selectionBlocked ? (
+        <div className="scan-status-dock mcp-review-dock">
+          <span>
+            <strong>외부 AI 정리 계획 확인 대기</strong>
+            <small>
+              {pendingCleanupPlanError ??
+                `${controlStatus.pendingReview.itemCount}개 · 앱에서 정확한 경로를 확인해야 실행됩니다.`}
+            </small>
+          </span>
+          <button
+            type="button"
+            disabled={pendingCleanupPlanLoading}
+            onClick={() => void openPendingCleanupReview()}
+          >
+            {pendingCleanupPlanLoading ? "불러오는 중…" : "검토하기"}
+          </button>
+        </div>
       ) : null}
 
       {(trashRunning && activeView !== trashResultSource) ||

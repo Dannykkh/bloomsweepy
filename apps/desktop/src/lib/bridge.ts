@@ -51,6 +51,11 @@ import type {
   ExecuteDockerCleanupRequest,
   DockerCleanupResult,
   DockerCleanupProgress,
+  ControlCleanupAccessRequest,
+  PendingCleanupPlanDetail,
+  ApproveCleanupPlanRequest,
+  McpClientKind,
+  McpClientRegistrationStatus,
 } from "../types";
 
 export function getAssistantProviderStatus(): Promise<AssistantProviderStatus[]> {
@@ -129,6 +134,42 @@ export function configureControlScanAccess(
   request: ControlScanAccessRequest,
 ): Promise<ControlStatus> {
   return invoke<ControlStatus>("configure_control_scan_access", { request });
+}
+
+export function configureControlCleanupAccess(
+  request: ControlCleanupAccessRequest,
+): Promise<ControlStatus> {
+  return invoke<ControlStatus>("configure_control_cleanup_access", { request });
+}
+
+export function getPendingCleanupPlan(): Promise<PendingCleanupPlanDetail | null> {
+  return invoke<PendingCleanupPlanDetail | null>("get_pending_cleanup_plan");
+}
+
+export function approveCleanupPlan(
+  request: ApproveCleanupPlanRequest,
+): Promise<TrashOperationResult> {
+  return invoke<TrashOperationResult>("approve_cleanup_plan", { request });
+}
+
+export function rejectCleanupPlan(planId: string): Promise<boolean> {
+  return invoke<boolean>("reject_cleanup_plan", { planId });
+}
+
+export function getMcpRegistrationStatuses(): Promise<McpClientRegistrationStatus[]> {
+  return invoke<McpClientRegistrationStatus[]>("get_mcp_registration_statuses");
+}
+
+export function registerMcpClient(
+  client: McpClientKind,
+): Promise<McpClientRegistrationStatus> {
+  return invoke<McpClientRegistrationStatus>("register_mcp_client", { client });
+}
+
+export function unregisterMcpClient(
+  client: McpClientKind,
+): Promise<McpClientRegistrationStatus> {
+  return invoke<McpClientRegistrationStatus>("unregister_mcp_client", { client });
 }
 
 export function getSystemOverview(): Promise<SystemOverview> {

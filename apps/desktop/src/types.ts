@@ -280,6 +280,15 @@ export interface ControlPendingReview {
   expiresAtUnixMs: number;
 }
 
+export interface ControlCleanupAccess {
+  enabled: boolean;
+  approvedAtUnixMs: number | null;
+}
+
+export interface ControlCleanupAccessRequest {
+  enabled: boolean;
+}
+
 export interface ControlStatus {
   revision: number;
   bridgeAvailable: boolean;
@@ -292,6 +301,7 @@ export interface ControlStatus {
   protocolVersion: number;
   searchAccess: ControlSearchAccess;
   scanAccess: ControlScanAccess;
+  cleanupAccess: ControlCleanupAccess;
 }
 
 export interface ControlSearchAccess {
@@ -313,6 +323,57 @@ export interface ControlScanAccess {
 export interface ControlScanAccessRequest {
   root: string | null;
   config: ScanConfig | null;
+}
+
+export type CleanupPlanSource = "duplicateFiles" | "systemCleanup";
+
+export interface PendingCleanupPlanItem {
+  path: string;
+  name: string;
+  logicalBytes: number;
+  confidence: "likelySafe" | "review";
+  detail: string;
+}
+
+export interface PendingCleanupPlanDetail {
+  planId: string;
+  source: CleanupPlanSource;
+  sourceGeneration: number;
+  itemCount: number;
+  totalBytes: number;
+  reviewCount: number;
+  expiresAtUnixMs: number;
+  items: PendingCleanupPlanItem[];
+}
+
+export interface ApproveCleanupPlanRequest {
+  planId: string;
+  allowReviewCandidates: boolean;
+}
+
+export type McpClientKind = "codex" | "claudeCode";
+
+export type McpRegistrationState =
+  | "clientMissing"
+  | "helperMissing"
+  | "notRegistered"
+  | "registeredManaged"
+  | "registeredOther"
+  | "pathStale"
+  | "checkFailed"
+  | "debugBuild";
+
+export interface McpClientRegistrationStatus {
+  client: McpClientKind;
+  label: string;
+  state: McpRegistrationState;
+  detail: string;
+  helperPath: string | null;
+  helperVersion: string | null;
+  appVersion: string;
+  canRegister: boolean;
+  canUnregister: boolean;
+  restartRequired: boolean;
 }
 
 export interface ControlScanProgressEvent {

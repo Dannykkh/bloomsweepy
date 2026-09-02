@@ -1,6 +1,6 @@
-use bloomsweepy_control::MAX_SEARCH_RESULTS;
+use bloomsweepy_control::{CleanupSource, MAX_CLEANUP_RESULTS, MAX_SEARCH_RESULTS};
 use bloomsweepy_core::{
-    CleanupCandidate, CleanupCandidateKind, CleanupRootSpec, CleanupScanConfig,
+    CleanupCandidate, CleanupCandidateKind, CleanupConfidence, CleanupRootSpec, CleanupScanConfig,
     CleanupScanProgress, CleanupScanReport, DirectoryScanConfig, DirectoryScanProgress,
     DirectoryScanReport, DocumentIndexConfig, DocumentIndexProgress, DocumentIndexReport,
     DocumentIndexStatus, DocumentSearchReport, DocumentSearchRequest, DriveScanConfig,
@@ -12,6 +12,7 @@ use bloomsweepy_core::{
     scan_path, search_document_index_with_cancellation, search_file_catalog_with_cancellation,
 };
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,8 @@ mod assistant_provider;
 mod assistant_sessions;
 mod control_server;
 mod docker_tools;
+mod external_program;
+mod mcp_registration;
 mod system_inventory;
 mod trash_actions;
 #[cfg(windows)]
@@ -293,12 +296,14 @@ pub(crate) struct StoredReports {
     scan: Mutex<Option<StoredScanSnapshot>>,
     next_scan_generation: AtomicU64,
     cleanup: Mutex<Option<CleanupActionReport>>,
+    next_cleanup_generation: AtomicU64,
 }
 
 #[derive(Clone)]
 pub(crate) struct StoredScanSnapshot {
     pub(crate) generation: u64,
     pub(crate) report: Arc<ScanReport>,
+    candidate_key: [u8; 32],
 }
 
 #[derive(Clone)]
@@ -309,7 +314,85 @@ pub(crate) struct DuplicateActionReport {
 
 #[derive(Clone)]
 pub(crate) struct CleanupActionReport {
+    pub(crate) generation: u64,
     pub(crate) candidates: Vec<CleanupCandidate>,
+    candidate_key: [u8; 32],
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CleanupCandidatesPage {
+    source: CleanupSource,
+    generation: u64,
+    total_candidates: u64,
+    total_bytes: u64,
+    offset: usize,
+    next_offset: Option<usize>,
+    truncated: bool,
+    items: Vec<CleanupCandidateSummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(
+    tag = "candidateType",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum CleanupCandidateSummary {
+    SystemCleanup {
+        candidate_id: String,
+        category: CleanupCandidateKind,
+        confidence: CleanupConfidence,
+        logical_bytes: u64,
+        entry_count: u64,
+        inactive_days: u64,
+        reason_codes: Vec<&'static str>,
+        plan_eligible: bool,
+    },
+    DuplicateGroup {
+        candidate_id: String,
+        confidence: CleanupConfidence,
+        each_file_bytes: u64,
+        wasted_bytes: u64,
+        copy_count: u64,
+        cross_folder: bool,
+        reason_codes: Vec<&'static str>,
+        plan_eligible: bool,
+    },
+}
+
+pub(crate) struct CleanupPlanSelection {
+    pub(crate) item_count: u64,
+    pub(crate) total_bytes: u64,
+    pub(crate) review_count: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PendingCleanupPlanDetail {
+    plan_id: String,
+    source: String,
+    source_generation: u64,
+    item_count: u64,
+    total_bytes: u64,
+    review_count: u64,
+    expires_at_unix_ms: u64,
+    items: Vec<PendingCleanupPlanItem>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingCleanupPlanItem {
+    path: String,
+    name: String,
+    logical_bytes: u64,
+    confidence: CleanupConfidence,
+    detail: String,
+}
+
+pub(crate) enum CleanupPlanAction {
+    Duplicate(trash_actions::DuplicateTrashRequest),
+    System(trash_actions::CleanupTrashRequest),
 }
 
 impl StoredReports {
@@ -325,20 +408,27 @@ impl StoredReports {
         let snapshot = StoredScanSnapshot {
             generation,
             report: Arc::new(report),
+            candidate_key: random_candidate_key()?,
         };
         *stored = Some(snapshot.clone());
         Ok(snapshot)
     }
 
-    fn replace_cleanup(&self, report: &CleanupScanReport) -> Result<(), String> {
+    fn replace_cleanup(&self, report: &CleanupScanReport) -> Result<u64, String> {
+        let generation = self
+            .next_cleanup_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
         *self
             .cleanup
             .lock()
             .map_err(|_| "정리 후보 결과를 잠글 수 없습니다".to_owned())? =
             Some(CleanupActionReport {
+                generation,
                 candidates: report.candidates.clone(),
+                candidate_key: random_candidate_key()?,
             });
-        Ok(())
+        Ok(generation)
     }
 
     pub(crate) fn scan_report(&self) -> Result<DuplicateActionReport, String> {
@@ -375,6 +465,331 @@ impl StoredReports {
             .ok_or_else(|| "서버에 보관된 정리 후보 결과가 없습니다. 다시 스캔하세요".to_owned())
     }
 
+    pub(crate) fn cleanup_candidates_page(
+        &self,
+        source: CleanupSource,
+        expected_generation: Option<u64>,
+        offset: usize,
+        max_results: usize,
+    ) -> Result<CleanupCandidatesPage, String> {
+        match source {
+            CleanupSource::SystemCleanup => {
+                let snapshot = self.cleanup_report()?;
+                validate_generation(expected_generation, snapshot.generation)?;
+                if offset > snapshot.candidates.len() {
+                    return Err("정리 후보 시작 위치가 현재 결과 범위를 벗어났습니다".to_owned());
+                }
+                let end = offset
+                    .saturating_add(max_results)
+                    .min(snapshot.candidates.len());
+                let items = snapshot.candidates[offset..end]
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(relative_index, candidate)| CleanupCandidateSummary::SystemCleanup {
+                            candidate_id: cleanup_candidate_id(
+                                &snapshot.candidate_key,
+                                source,
+                                snapshot.generation,
+                                offset.saturating_add(relative_index),
+                            ),
+                            category: candidate.kind,
+                            confidence: candidate.confidence,
+                            logical_bytes: candidate.logical_bytes,
+                            entry_count: candidate.entry_count,
+                            inactive_days: candidate.inactive_days,
+                            reason_codes: cleanup_reason_codes(candidate.kind),
+                            plan_eligible: true,
+                        },
+                    )
+                    .collect();
+                Ok(CleanupCandidatesPage {
+                    source,
+                    generation: snapshot.generation,
+                    total_candidates: snapshot.candidates.len().try_into().unwrap_or(u64::MAX),
+                    total_bytes: snapshot.candidates.iter().fold(0_u64, |total, item| {
+                        total.saturating_add(item.logical_bytes)
+                    }),
+                    offset,
+                    next_offset: (end < snapshot.candidates.len()).then_some(end),
+                    truncated: end < snapshot.candidates.len(),
+                    items,
+                })
+            }
+            CleanupSource::DuplicateFiles => {
+                let snapshot = self.current_scan_snapshot()?;
+                validate_generation(expected_generation, snapshot.generation)?;
+                let groups = &snapshot.report.duplicate_groups;
+                if offset > groups.len() {
+                    return Err("중복 그룹 시작 위치가 현재 결과 범위를 벗어났습니다".to_owned());
+                }
+                let end = offset.saturating_add(max_results).min(groups.len());
+                let items = groups[offset..end]
+                    .iter()
+                    .enumerate()
+                    .map(|(relative_index, group)| {
+                        let move_count = group.files.len().saturating_sub(1);
+                        CleanupCandidateSummary::DuplicateGroup {
+                            candidate_id: cleanup_candidate_id(
+                                &snapshot.candidate_key,
+                                source,
+                                snapshot.generation,
+                                offset.saturating_add(relative_index),
+                            ),
+                            confidence: CleanupConfidence::Review,
+                            each_file_bytes: group.each_file_bytes,
+                            wasted_bytes: group.wasted_bytes,
+                            copy_count: group.files.len().try_into().unwrap_or(u64::MAX),
+                            cross_folder: duplicate_group_crosses_folders(group),
+                            reason_codes: vec![
+                                "verified_full_content",
+                                "keeps_one_copy",
+                                "manual_path_review",
+                            ],
+                            plan_eligible: move_count <= MAX_CLEANUP_RESULTS,
+                        }
+                    })
+                    .collect();
+                Ok(CleanupCandidatesPage {
+                    source,
+                    generation: snapshot.generation,
+                    total_candidates: groups.len().try_into().unwrap_or(u64::MAX),
+                    total_bytes: snapshot.report.duplicate_waste_bytes,
+                    offset,
+                    next_offset: (end < groups.len()).then_some(end),
+                    truncated: end < groups.len(),
+                    items,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn cleanup_plan_selection(
+        &self,
+        source: CleanupSource,
+        generation: u64,
+        candidate_ids: &[String],
+    ) -> Result<CleanupPlanSelection, String> {
+        match source {
+            CleanupSource::SystemCleanup => {
+                let snapshot = self.cleanup_report()?;
+                validate_generation(Some(generation), snapshot.generation)?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    source,
+                    generation,
+                    snapshot.candidates.len(),
+                    candidate_ids,
+                )?;
+                let mut total_bytes = 0_u64;
+                let mut review_count = 0_u64;
+                for index in indices {
+                    let candidate = &snapshot.candidates[index];
+                    total_bytes = total_bytes.saturating_add(candidate.logical_bytes);
+                    if candidate.confidence == CleanupConfidence::Review {
+                        review_count = review_count.saturating_add(1);
+                    }
+                }
+                Ok(CleanupPlanSelection {
+                    item_count: candidate_ids.len().try_into().unwrap_or(u64::MAX),
+                    total_bytes,
+                    review_count,
+                })
+            }
+            CleanupSource::DuplicateFiles => {
+                let snapshot = self.scan_snapshot(generation)?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    source,
+                    generation,
+                    snapshot.report.duplicate_groups.len(),
+                    candidate_ids,
+                )?;
+                let mut item_count = 0_u64;
+                let mut total_bytes = 0_u64;
+                for index in indices {
+                    let group = &snapshot.report.duplicate_groups[index];
+                    item_count = item_count.saturating_add(
+                        group
+                            .files
+                            .len()
+                            .saturating_sub(1)
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                    );
+                    total_bytes = total_bytes.saturating_add(group.wasted_bytes);
+                }
+                if item_count > MAX_CLEANUP_RESULTS.try_into().unwrap_or(u64::MAX) {
+                    return Err(format!(
+                        "한 정리 계획에서 이동할 실제 파일은 {MAX_CLEANUP_RESULTS}개 이하여야 합니다"
+                    ));
+                }
+                Ok(CleanupPlanSelection {
+                    item_count,
+                    total_bytes,
+                    review_count: item_count,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn pending_cleanup_plan_detail(
+        &self,
+        execution: &control_server::CleanupPlanExecution,
+    ) -> Result<PendingCleanupPlanDetail, String> {
+        let selection = self.cleanup_plan_selection(
+            execution.source,
+            execution.source_generation,
+            &execution.candidate_ids,
+        )?;
+        let items = self.cleanup_plan_items(execution)?;
+        Ok(PendingCleanupPlanDetail {
+            plan_id: execution.plan_id.clone(),
+            source: cleanup_source_ui_name(execution.source).to_owned(),
+            source_generation: execution.source_generation,
+            item_count: selection.item_count,
+            total_bytes: selection.total_bytes,
+            review_count: selection.review_count,
+            expires_at_unix_ms: execution.expires_at_unix_ms,
+            items,
+        })
+    }
+
+    pub(crate) fn cleanup_plan_action(
+        &self,
+        execution: &control_server::CleanupPlanExecution,
+        allow_review_candidates: bool,
+    ) -> Result<CleanupPlanAction, String> {
+        let selection = self.cleanup_plan_selection(
+            execution.source,
+            execution.source_generation,
+            &execution.candidate_ids,
+        )?;
+        if selection.review_count > 0 && !allow_review_candidates {
+            return Err("검토가 필요한 항목에 대한 앱 확인이 필요합니다".to_owned());
+        }
+        match execution.source {
+            CleanupSource::SystemCleanup => {
+                let snapshot = self.cleanup_report()?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    execution.source,
+                    execution.source_generation,
+                    snapshot.candidates.len(),
+                    &execution.candidate_ids,
+                )?;
+                Ok(CleanupPlanAction::System(
+                    trash_actions::CleanupTrashRequest {
+                        paths: indices
+                            .into_iter()
+                            .map(|index| snapshot.candidates[index].path.clone())
+                            .collect(),
+                        allow_review_candidates,
+                    },
+                ))
+            }
+            CleanupSource::DuplicateFiles => {
+                let snapshot = self.scan_snapshot(execution.source_generation)?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    execution.source,
+                    execution.source_generation,
+                    snapshot.report.duplicate_groups.len(),
+                    &execution.candidate_ids,
+                )?;
+                let groups = indices
+                    .into_iter()
+                    .map(|index| {
+                        let group = &snapshot.report.duplicate_groups[index];
+                        let keeper = duplicate_keeper_index(group);
+                        trash_actions::DuplicateTrashGroupSelection {
+                            content_hash: group.content_hash.clone(),
+                            paths: group
+                                .files
+                                .iter()
+                                .enumerate()
+                                .filter(|(file_index, _)| *file_index != keeper)
+                                .map(|(_, file)| file.path.clone())
+                                .collect(),
+                        }
+                    })
+                    .collect();
+                Ok(CleanupPlanAction::Duplicate(
+                    trash_actions::DuplicateTrashRequest { groups },
+                ))
+            }
+        }
+    }
+
+    fn cleanup_plan_items(
+        &self,
+        execution: &control_server::CleanupPlanExecution,
+    ) -> Result<Vec<PendingCleanupPlanItem>, String> {
+        match execution.source {
+            CleanupSource::SystemCleanup => {
+                let snapshot = self.cleanup_report()?;
+                validate_generation(Some(execution.source_generation), snapshot.generation)?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    execution.source,
+                    execution.source_generation,
+                    snapshot.candidates.len(),
+                    &execution.candidate_ids,
+                )?;
+                Ok(indices
+                    .into_iter()
+                    .map(|index| {
+                        let candidate = &snapshot.candidates[index];
+                        PendingCleanupPlanItem {
+                            path: candidate.path.clone(),
+                            name: candidate.name.clone(),
+                            logical_bytes: candidate.logical_bytes,
+                            confidence: candidate.confidence,
+                            detail: candidate.evidence.join(" · "),
+                        }
+                    })
+                    .collect())
+            }
+            CleanupSource::DuplicateFiles => {
+                let snapshot = self.scan_snapshot(execution.source_generation)?;
+                let indices = resolve_candidate_indices(
+                    &snapshot.candidate_key,
+                    execution.source,
+                    execution.source_generation,
+                    snapshot.report.duplicate_groups.len(),
+                    &execution.candidate_ids,
+                )?;
+                let mut items = Vec::new();
+                for index in indices {
+                    let group = &snapshot.report.duplicate_groups[index];
+                    let keeper = duplicate_keeper_index(group);
+                    let keeper_path = group.files[keeper].path.clone();
+                    for (file_index, file) in group.files.iter().enumerate() {
+                        if file_index == keeper {
+                            continue;
+                        }
+                        items.push(PendingCleanupPlanItem {
+                            path: file.path.clone(),
+                            name: file.name.clone(),
+                            logical_bytes: file.logical_bytes,
+                            confidence: CleanupConfidence::Review,
+                            detail: format!("같은 내용의 파일 1개는 남깁니다: {keeper_path}"),
+                        });
+                    }
+                }
+                Ok(items)
+            }
+        }
+    }
+
+    fn current_scan_snapshot(&self) -> Result<StoredScanSnapshot, String> {
+        self.scan
+            .lock()
+            .map_err(|_| "스캔 결과를 잠글 수 없습니다".to_owned())?
+            .clone()
+            .ok_or_else(|| "서버에 보관된 중복 스캔 결과가 없습니다. 다시 스캔하세요".to_owned())
+    }
+
     pub(crate) fn clear_scan(&self) -> Result<(), String> {
         *self
             .scan
@@ -394,6 +809,113 @@ impl StoredReports {
     pub(crate) fn clear_all(&self) -> Result<(), String> {
         self.clear_scan()?;
         self.clear_cleanup()
+    }
+}
+
+fn random_candidate_key() -> Result<[u8; 32], String> {
+    let mut key = [0_u8; 32];
+    getrandom::fill(&mut key)
+        .map_err(|_| "정리 후보 번호용 난수를 만들지 못했습니다".to_owned())?;
+    Ok(key)
+}
+
+fn cleanup_candidate_id(
+    key: &[u8; 32],
+    source: CleanupSource,
+    generation: u64,
+    index: usize,
+) -> String {
+    let mut hasher = blake3::Hasher::new_keyed(key);
+    hasher.update(b"bloomsweepy-cleanup-candidate-v1\0");
+    let source_label: &[u8] = match source {
+        CleanupSource::DuplicateFiles => b"duplicate_files",
+        CleanupSource::SystemCleanup => b"system_cleanup",
+    };
+    hasher.update(source_label);
+    hasher.update(&generation.to_le_bytes());
+    hasher.update(&index.to_le_bytes());
+    hasher.finalize().to_hex().to_string()[..32].to_owned()
+}
+
+fn resolve_candidate_indices(
+    key: &[u8; 32],
+    source: CleanupSource,
+    generation: u64,
+    candidate_count: usize,
+    candidate_ids: &[String],
+) -> Result<Vec<usize>, String> {
+    let requested: HashMap<String, usize> = candidate_ids
+        .iter()
+        .enumerate()
+        .map(|(position, id)| (id.to_ascii_lowercase(), position))
+        .collect();
+    let mut resolved = vec![None; candidate_ids.len()];
+    for index in 0..candidate_count {
+        let id = cleanup_candidate_id(key, source, generation, index);
+        if let Some(position) = requested.get(&id) {
+            resolved[*position] = Some(index);
+        }
+    }
+    resolved
+        .into_iter()
+        .map(|index| index.ok_or_else(|| "현재 검사 결과에 없는 정리 후보 번호입니다".to_owned()))
+        .collect()
+}
+
+fn validate_generation(expected: Option<u64>, actual: u64) -> Result<(), String> {
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err("검사 결과가 새 검사 세대로 바뀌었습니다".to_owned());
+    }
+    Ok(())
+}
+
+fn cleanup_reason_codes(kind: CleanupCandidateKind) -> Vec<&'static str> {
+    match kind {
+        CleanupCandidateKind::TemporaryEntry => vec!["inactive", "user_temporary_root"],
+        CleanupCandidateKind::CacheDirectory => vec!["inactive", "operating_system_cache"],
+        CleanupCandidateKind::AppDataDirectory => {
+            vec!["inactive", "unmatched_installed_app", "manual_review"]
+        }
+    }
+}
+
+fn duplicate_group_crosses_folders(group: &DuplicateGroup) -> bool {
+    let mut parents = group.files.iter().filter_map(|file| {
+        Path::new(&file.path)
+            .parent()
+            .map(|parent| parent.to_string_lossy().into_owned())
+    });
+    let Some(first) = parents.next() else {
+        return false;
+    };
+    parents.any(|parent| {
+        if cfg!(windows) {
+            !parent.eq_ignore_ascii_case(&first)
+        } else {
+            parent != first
+        }
+    })
+}
+
+fn duplicate_keeper_index(group: &DuplicateGroup) -> usize {
+    group
+        .files
+        .iter()
+        .enumerate()
+        .min_by(|(_, left), (_, right)| {
+            left.path
+                .len()
+                .cmp(&right.path.len())
+                .then_with(|| left.path.to_lowercase().cmp(&right.path.to_lowercase()))
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+fn cleanup_source_ui_name(source: CleanupSource) -> &'static str {
+    match source {
+        CleanupSource::DuplicateFiles => "duplicateFiles",
+        CleanupSource::SystemCleanup => "systemCleanup",
     }
 }
 
@@ -1039,9 +1561,16 @@ pub fn run() {
         .manage(assistant_provider::AssistantProviderState::default())
         .manage(docker_tools::DockerManagerState::default())
         .manage(control_server::ControlStatusStore::default())
+        .manage(mcp_registration::McpRegistrationRuntime::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            let window_title = format!("BroomSweepy {}", app.package_info().version);
+            let main_window = app.get_webview_window("main").ok_or_else(|| {
+                std::io::Error::other("main 창을 찾지 못해 버전 제목을 설정할 수 없습니다")
+            })?;
+            main_window.set_title(&window_title)?;
+
             #[cfg(windows)]
             if let Err(error) = windows_tray::setup(app) {
                 windows_tray::log_setup_failure(&error);
@@ -1061,6 +1590,13 @@ pub fn run() {
             control_server::get_control_status,
             control_server::configure_control_search_access,
             control_server::configure_control_scan_access,
+            control_server::configure_control_cleanup_access,
+            control_server::get_pending_cleanup_plan,
+            control_server::approve_cleanup_plan,
+            control_server::reject_cleanup_plan,
+            mcp_registration::get_mcp_registration_statuses,
+            mcp_registration::register_mcp_client,
+            mcp_registration::unregister_mcp_client,
             assistant_provider::get_assistant_provider_status,
             assistant_provider::ask_assistant,
             assistant_provider::cancel_assistant,
@@ -1367,5 +1903,206 @@ mod tests {
         assert!(reports.scan_snapshot(1).is_err());
         let second = reports.replace_scan(report()).expect("store second report");
         assert_eq!(second.generation, 2);
+    }
+
+    #[test]
+    fn external_cleanup_candidates_are_pathless_bounded_and_generation_bound() {
+        const SECRET_NAME: &str = "private-session-cache.jsonl";
+        const SECRET_PATH: &str = "C:/Users/private/.codex/private-session-cache.jsonl";
+
+        let reports = StoredReports::default();
+        let report = CleanupScanReport {
+            completed_at_unix_ms: 1,
+            duration_ms: 2,
+            scanned_roots: 1,
+            processed_entries: 1,
+            processed_bytes: 4_096,
+            unreadable_entries: 0,
+            candidate_bytes: 4_096,
+            candidates: vec![CleanupCandidate {
+                kind: CleanupCandidateKind::CacheDirectory,
+                confidence: CleanupConfidence::Review,
+                name: SECRET_NAME.to_owned(),
+                path: SECRET_PATH.to_owned(),
+                source_label: "private root".to_owned(),
+                logical_bytes: 4_096,
+                entry_count: 1,
+                modified_at_unix_ms: Some(1),
+                inactive_days: 30,
+                evidence: vec![format!("private evidence: {SECRET_PATH}")],
+            }],
+            limit_reached: false,
+            issues: Vec::new(),
+        };
+
+        let first_generation = reports
+            .replace_cleanup(&report)
+            .expect("store cleanup report");
+        let page = reports
+            .cleanup_candidates_page(
+                CleanupSource::SystemCleanup,
+                Some(first_generation),
+                0,
+                MAX_CLEANUP_RESULTS,
+            )
+            .expect("build candidate page");
+        let encoded = serde_json::to_vec(&page).expect("serialize candidate page");
+        let json: serde_json::Value =
+            serde_json::from_slice(&encoded).expect("parse candidate page");
+        let encoded_text = String::from_utf8(encoded.clone()).expect("utf-8 response");
+
+        assert!(
+            encoded.len() <= 32 * 1_024,
+            "candidate page must stay compact"
+        );
+        assert!(!encoded_text.contains(SECRET_NAME));
+        assert!(!encoded_text.contains(SECRET_PATH));
+        assert!(!encoded_text.contains("private evidence"));
+        let candidate_id = json["items"][0]["candidateId"]
+            .as_str()
+            .expect("opaque candidate id")
+            .to_owned();
+        assert_eq!(candidate_id.len(), 32);
+        assert!(candidate_id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let selection = reports
+            .cleanup_plan_selection(
+                CleanupSource::SystemCleanup,
+                first_generation,
+                std::slice::from_ref(&candidate_id),
+            )
+            .expect("resolve current candidate");
+        assert_eq!(selection.item_count, 1);
+        assert_eq!(selection.total_bytes, 4_096);
+        assert_eq!(selection.review_count, 1);
+
+        let second_generation = reports
+            .replace_cleanup(&report)
+            .expect("replace cleanup report");
+        assert!(second_generation > first_generation);
+        assert!(
+            reports
+                .cleanup_plan_selection(
+                    CleanupSource::SystemCleanup,
+                    first_generation,
+                    std::slice::from_ref(&candidate_id),
+                )
+                .is_err(),
+            "a candidate from an older generation must be rejected"
+        );
+        assert!(
+            reports
+                .cleanup_plan_selection(
+                    CleanupSource::SystemCleanup,
+                    second_generation,
+                    &["00".repeat(16)],
+                )
+                .is_err(),
+            "an unknown candidate id must be rejected"
+        );
+    }
+
+    #[test]
+    fn duplicate_cleanup_plan_keeps_one_copy_and_requires_local_review() {
+        let reports = StoredReports::default();
+        let report = ScanReport {
+            root: "root".to_owned(),
+            completed_at_unix_ms: 1,
+            duration_ms: 2,
+            total_files: 3,
+            total_logical_bytes: 30,
+            hard_links_skipped: 0,
+            hard_link_identity_limit_reached: false,
+            unreadable_entries: 0,
+            candidate_limit_reached: false,
+            large_files: Vec::new(),
+            duplicate_groups: vec![DuplicateGroup {
+                content_hash: "verified-content-hash".to_owned(),
+                each_file_bytes: 10,
+                wasted_bytes: 20,
+                files: vec![
+                    bloomsweepy_core::FileEntry {
+                        name: "keep.txt".to_owned(),
+                        path: "root/keep.txt".to_owned(),
+                        logical_bytes: 10,
+                        modified_at_unix_ms: Some(1),
+                    },
+                    bloomsweepy_core::FileEntry {
+                        name: "copy.txt".to_owned(),
+                        path: "root/folder/copy.txt".to_owned(),
+                        logical_bytes: 10,
+                        modified_at_unix_ms: Some(1),
+                    },
+                    bloomsweepy_core::FileEntry {
+                        name: "copy-two.txt".to_owned(),
+                        path: "root/other/copy-two.txt".to_owned(),
+                        logical_bytes: 10,
+                        modified_at_unix_ms: Some(1),
+                    },
+                ],
+            }],
+            duplicate_waste_bytes: 20,
+            issues: Vec::new(),
+        };
+        let snapshot = reports
+            .replace_scan(report)
+            .expect("store duplicate report");
+        let page = reports
+            .cleanup_candidates_page(
+                CleanupSource::DuplicateFiles,
+                Some(snapshot.generation),
+                0,
+                MAX_CLEANUP_RESULTS,
+            )
+            .expect("build duplicate page");
+        let json = serde_json::to_value(&page).expect("serialize duplicate page");
+        let encoded = serde_json::to_string(&page).expect("serialize duplicate page text");
+        assert!(!encoded.contains("keep.txt"));
+        assert!(!encoded.contains("copy.txt"));
+        assert_eq!(json["items"][0]["crossFolder"], true);
+        assert_eq!(json["items"][0]["copyCount"], 3);
+        let candidate_id = json["items"][0]["candidateId"]
+            .as_str()
+            .expect("opaque duplicate id")
+            .to_owned();
+        let execution = control_server::CleanupPlanExecution {
+            plan_id: "ab".repeat(16),
+            source: CleanupSource::DuplicateFiles,
+            source_generation: snapshot.generation,
+            candidate_ids: vec![candidate_id],
+            expires_at_unix_ms: u64::MAX,
+        };
+
+        let selection = reports
+            .cleanup_plan_selection(
+                execution.source,
+                execution.source_generation,
+                &execution.candidate_ids,
+            )
+            .expect("resolve duplicate group");
+        assert_eq!(selection.item_count, 2);
+        assert_eq!(selection.total_bytes, 20);
+        assert_eq!(selection.review_count, 2);
+        assert!(reports.cleanup_plan_action(&execution, false).is_err());
+
+        let CleanupPlanAction::Duplicate(request) = reports
+            .cleanup_plan_action(&execution, true)
+            .expect("build locally approved trash request")
+        else {
+            panic!("expected duplicate trash action");
+        };
+        assert_eq!(request.groups.len(), 1);
+        assert_eq!(
+            request.groups[0].paths,
+            vec![
+                "root/folder/copy.txt".to_owned(),
+                "root/other/copy-two.txt".to_owned()
+            ]
+        );
+        assert!(
+            !request.groups[0]
+                .paths
+                .contains(&"root/keep.txt".to_owned())
+        );
     }
 }

@@ -1,0 +1,45 @@
+---
+config:
+  theme: base
+  themeVariables:
+    primaryColor: "#f5f5f5"
+    primaryTextColor: "#2d3142"
+    primaryBorderColor: "#4f5d75"
+    lineColor: "#4f5d75"
+---
+flowchart TD
+    Start([설정에서 외부 AI 연결 상태 열기]) --> Helper{설치된 MCP 도구가 있고<br/>앱과 버전이 같은가?}
+    Helper -->|아니요| Repair[다시 설치 또는 연결 복구 안내]
+    Helper -->|예| Client{Codex 또는 Claude Code<br/>명령줄 도구가 설치됐는가?}
+    Client -->|아니요| Missing[CLI 없음 표시<br/>외부 설정은 바꾸지 않음]
+    Client -->|예| Get[[각 제품의 공식 mcp get 명령으로 조회]]
+    Get --> Existing{bloomsweepy 이름의<br/>기존 연결이 있는가?}
+    Existing -->|없음| Ready[연결 안 됨 표시]
+    Existing -->|있고 앱 영수증과 일치| Connected[연결됨 표시]
+    Existing -->|있지만 앱 소유가 아님| Conflict[다른 설정과 충돌 표시<br/>자동 덮어쓰기 금지]
+
+    Ready --> Connect{사용자가 연결 버튼과<br/>변경 내용을 확인했는가?}
+    Connect -->|아니요| Stop([변경 없이 종료])
+    Connect -->|예| Add[[인수를 분리해 공식 mcp add 명령 실행]]
+    Add --> Verify{공식 get 명령 결과가<br/>설치된 도구 경로와 일치하는가?}
+    Verify -->|예| Receipt[앱 소유 연결 영수증 저장]
+    Receipt --> Restart[Codex·Claude Code 재시작 안내]
+    Verify -->|아니요| Rollback[방금 만든 연결만 제거 시도]
+    Rollback --> Failed[부분 실패와 수동 복구 방법 표시]
+
+    Connected --> Disconnect{사용자가 연결 해제를<br/>다시 확인했는가?}
+    Disconnect -->|아니요| Stop
+    Disconnect -->|예| StillOwned{현재 연결이 저장한 영수증과<br/>정확히 같은가?}
+    StillOwned -->|아니요| Conflict
+    StillOwned -->|예| Remove[[공식 mcp remove 명령 실행]]
+    Remove --> Removed{get에서 연결이 사라졌는가?}
+    Removed -->|예| Clear[앱 영수증 삭제]
+    Removed -->|아니요| Failed
+    Clear --> Restart
+
+    Connected --> Moved{앱 이동·업데이트로<br/>도구 경로 또는 버전이 달라졌는가?}
+    Moved -->|예| Repair
+    Repair --> Ready
+
+    classDef accent fill:#eef3ff,stroke:#3478d4,stroke-width:2px,color:#182235
+    class Connected,Receipt,Restart accent

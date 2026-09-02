@@ -1,0 +1,108 @@
+name: Windows check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-check:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Install Tauri frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      - name: Prepare native MCP sidecar
+        working-directory: apps/desktop
+        env:
+          TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        run: npm run prepare:sidecar
+
+      - name: Check Rust workspace
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Check Tauri frontend
+        working-directory: apps/desktop
+        run: |
+          node --check scripts/prepare-sidecar.mjs
+          npm run check
+          npm run test:file-policy
+          npm run build
+
+      - name: Build Windows installers
+        working-directory: apps/desktop
+        run: npx tauri build --bundles msi,nsis
+
+      - name: Validate Windows installers and MCP sidecar
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $version = (Get-Content apps/desktop/src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $helper = "apps/desktop/src-tauri/binaries/bloomsweepy-mcp-x86_64-pc-windows-msvc.exe"
+          if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+            throw "The packaged MCP sidecar is missing."
+          }
+          $helperVersion = & $helper --version
+          if ($LASTEXITCODE -ne 0 -or $helperVersion -ne "bloomsweepy-mcp $version") {
+            throw "The MCP sidecar version does not match the app."
+          }
+
+          $msi = Get-ChildItem -Path "target/release/bundle/msi" -Filter "*.msi" -File -Recurse |
+            Select-Object -First 1
+          $nsis = Get-ChildItem -Path "target/release/bundle/nsis" -Filter "*.exe" -File -Recurse |
+            Select-Object -First 1
+          if ($null -eq $msi -or $null -eq $nsis) {
+            throw "MSI or NSIS output is missing."
+          }
+
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          foreach ($installer in @($msi, $nsis)) {
+            $listing = & $sevenZip l $installer.FullName
+            $listingText = $listing -join "`n"
+            if ($LASTEXITCODE -ne 0 -or $listingText -notmatch "bloomsweepy[-_]mcp\.exe") {
+              throw "The installer does not contain bloomsweepy-mcp.exe: $($installer.Name)"
+            }
+          }
+
+          Get-FileHash -Algorithm SHA256 $helper, $msi.FullName, $nsis.FullName
+
+      - name: Upload Windows installers
+        uses: actions/upload-artifact@v6
+        with:
+          name: BroomSweepy-Windows-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*.exe

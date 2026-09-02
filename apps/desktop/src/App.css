@@ -2351,9 +2351,17 @@ option {
 .control-status-panel__review {
   max-width: 340px;
   overflow: hidden;
+  font: inherit;
   color: var(--warning);
+  cursor: pointer;
   border-color: rgb(242 168 74 / 26%);
   text-overflow: ellipsis;
+}
+
+.control-status-panel__review:hover,
+.control-status-panel__review:focus-visible {
+  border-color: rgb(242 168 74 / 52%);
+  background: rgb(242 168 74 / 9%);
 }
 
 .control-status-panel__permissions {
@@ -2403,6 +2411,11 @@ option {
   align-items: stretch;
   border-color: rgb(110 149 255 / 20%);
   background: rgb(76 127 247 / 5%);
+}
+
+.control-permission--cleanup {
+  border-color: rgb(242 168 74 / 18%);
+  background: rgb(242 168 74 / 4%);
 }
 
 .control-permission__scan-copy {
@@ -2964,6 +2977,19 @@ option {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+.scan-status-dock.mcp-review-dock button {
+  min-height: 44px;
+  color: var(--text-primary);
+  border-color: rgb(242 168 74 / 34%);
+  background: rgb(242 168 74 / 10%);
+}
+
+.scan-status-dock.mcp-review-dock button:hover:not(:disabled),
+.scan-status-dock.mcp-review-dock button:focus-visible {
+  border-color: rgb(242 168 74 / 58%);
+  background: rgb(242 168 74 / 16%);
 }
 
 .empty-panel--page {
@@ -3739,6 +3765,64 @@ option {
   font-size: var(--font-size-ui-min);
 }
 
+.safety-dialog__intro {
+  margin: 12px 18px 0;
+  font-size: var(--font-size-ui-min);
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.safety-dialog__items {
+  display: grid;
+  max-height: min(260px, 34vh);
+  margin: 12px 18px 0;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 1.5%);
+}
+
+.safety-dialog__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.safety-dialog__item:last-child {
+  border-bottom: 0;
+}
+
+.safety-dialog__item > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.safety-dialog__item strong {
+  overflow: hidden;
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--font-size-ui-min);
+  font-weight: 560;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safety-dialog__item small {
+  font-size: var(--font-size-ui-min);
+  color: var(--text-faint);
+}
+
+.safety-dialog__item b {
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--font-size-ui-min);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
 .safety-dialog__warning,
 .review-acknowledgement {
   display: grid;
@@ -4318,6 +4402,153 @@ option {
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--canvas-elevated);
+}
+
+.mcp-connection-panel {
+  grid-column: 1 / -1;
+}
+
+.mcp-connection-panel .settings-panel__heading {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.mcp-connection-panel__refresh {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+}
+
+.mcp-connection-panel__notice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin: 14px 18px 0;
+  padding: 11px 12px;
+  color: #a9c0ff;
+  border: 1px solid rgb(110 149 255 / 20%);
+  border-radius: 10px;
+  background: rgb(76 127 247 / 5%);
+}
+
+.mcp-connection-panel__notice p,
+.mcp-connection-panel__empty,
+.mcp-connection-panel__footnote,
+.mcp-connection-panel__error {
+  margin: 0;
+  font-size: var(--font-size-ui-min);
+  line-height: 1.55;
+}
+
+.mcp-connection-panel__notice p,
+.mcp-connection-panel__empty,
+.mcp-connection-panel__footnote {
+  color: var(--text-muted);
+}
+
+.mcp-connection-panel__empty {
+  padding: 18px;
+}
+
+.mcp-client-list {
+  display: grid;
+  margin-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.mcp-client-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: center;
+  min-height: 92px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcp-client-row__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.mcp-client-row__copy > span:first-child {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.mcp-client-row strong,
+.mcp-client-row small,
+.mcp-client-row b,
+.mcp-client-row code {
+  font-size: var(--font-size-ui-min);
+}
+
+.mcp-client-row b {
+  padding: 3px 6px;
+  font-weight: 600;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.mcp-client-row b[data-state="registeredManaged"] {
+  color: var(--success);
+  border-color: rgb(99 212 91 / 28%);
+}
+
+.mcp-client-row b[data-state="registeredOther"],
+.mcp-client-row b[data-state="pathStale"],
+.mcp-client-row b[data-state="checkFailed"] {
+  color: var(--warning);
+  border-color: rgb(242 168 74 / 30%);
+}
+
+.mcp-client-row small {
+  color: var(--text-muted);
+}
+
+.mcp-client-row code {
+  overflow: hidden;
+  font-family: "JetBrains Mono", "Pretendard Variable", monospace;
+  color: var(--text-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-client-row .is-success {
+  color: var(--success);
+}
+
+.mcp-client-row > button {
+  min-width: 118px;
+  min-height: 44px;
+}
+
+.mcp-connection-panel__error {
+  margin: 12px 18px 0;
+  padding: 9px 11px;
+  color: #ffb2b2;
+  border: 1px solid rgb(242 100 100 / 28%);
+  border-radius: 9px;
+  background: rgb(78 31 35 / 28%);
+}
+
+.mcp-connection-panel__footnote {
+  padding: 12px 18px 16px;
+}
+
+@container (max-width: 680px) {
+  .mcp-client-row {
+    grid-template-columns: 1fr;
+  }
+
+  .mcp-client-row > button {
+    width: 100%;
+  }
 }
 
 .safety-contract {

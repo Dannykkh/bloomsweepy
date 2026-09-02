@@ -1,9 +1,9 @@
+use crate::external_program::{ExternalProgram, find_external_program};
 use serde::{Deserialize, Serialize};
-use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -422,7 +422,7 @@ fn build_prompt(
 
 fn run_provider(
     provider: AssistantProviderKind,
-    program: ProviderProgram,
+    program: ExternalProgram,
     model: Option<String>,
     workspace: PathBuf,
     request_id: u64,
@@ -728,51 +728,8 @@ fn provider_failure_message(provider: AssistantProviderKind, stderr: &str) -> St
     }
 }
 
-#[derive(Clone, Debug)]
-enum ProviderProgram {
-    Direct(PathBuf),
-    #[cfg(windows)]
-    CommandScript(PathBuf),
-}
-
-impl ProviderProgram {
-    fn command(&self) -> Command {
-        match self {
-            Self::Direct(path) => Command::new(path),
-            #[cfg(windows)]
-            Self::CommandScript(path) => {
-                let mut command = Command::new("cmd.exe");
-                command.arg("/D").arg("/C").arg(path);
-                command
-            }
-        }
-    }
-}
-
-fn find_provider_program(provider: AssistantProviderKind) -> Option<ProviderProgram> {
-    let path = env::var_os("PATH")?;
-    let executable_name = provider.executable_name();
-    for directory in env::split_paths(&path) {
-        #[cfg(windows)]
-        {
-            let executable = directory.join(format!("{executable_name}.exe"));
-            if executable.is_file() {
-                return Some(ProviderProgram::Direct(executable));
-            }
-            let command_script = directory.join(format!("{executable_name}.cmd"));
-            if command_script.is_file() {
-                return Some(ProviderProgram::CommandScript(command_script));
-            }
-        }
-        #[cfg(not(windows))]
-        {
-            let executable = directory.join(executable_name);
-            if executable.is_file() {
-                return Some(ProviderProgram::Direct(executable));
-            }
-        }
-    }
-    None
+fn find_provider_program(provider: AssistantProviderKind) -> Option<ExternalProgram> {
+    find_external_program(provider.executable_name())
 }
 
 fn provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
@@ -849,7 +806,7 @@ fn provider_status_failed(provider: AssistantProviderKind, busy: bool) -> Assist
 }
 
 fn authentication_command_succeeds(
-    program: &ProviderProgram,
+    program: &ExternalProgram,
     arguments: &[&str],
 ) -> AssistantAuthentication {
     if status_command_output(program, arguments).is_ok() {
@@ -859,7 +816,7 @@ fn authentication_command_succeeds(
     }
 }
 
-fn ollama_models(program: &ProviderProgram) -> Result<Vec<AssistantProviderModel>, String> {
+fn ollama_models(program: &ExternalProgram) -> Result<Vec<AssistantProviderModel>, String> {
     let output = status_command_output(program, &["list"])
         .map_err(|_| "Ollama 모델 목록을 읽지 못했습니다".to_owned())?;
     Ok(parse_ollama_models(&output))
@@ -883,7 +840,7 @@ fn parse_ollama_models(output: &str) -> Vec<AssistantProviderModel> {
         .collect()
 }
 
-fn status_command_output(program: &ProviderProgram, arguments: &[&str]) -> Result<String, ()> {
+fn status_command_output(program: &ExternalProgram, arguments: &[&str]) -> Result<String, ()> {
     let mut command = program.command();
     let mut child = command
         .args(arguments)

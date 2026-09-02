@@ -419,6 +419,7 @@ dependencies = [
 name = "bloomsweepy-desktop"
 version = "1.2.0"
 dependencies = [
+ "blake3",
  "bloomsweepy-control",
  "bloomsweepy-core",
  "dirs",

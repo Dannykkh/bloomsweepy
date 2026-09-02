@@ -1,6 +1,7 @@
 use bloomsweepy_control::{
-    ControlCommand, ControlInstanceLock, ControlOperationSource, ControlOperationState,
-    ControlOperationStatus, ControlRequest, ControlResponse, DocumentSearchRequest,
+    CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
+    ControlInstanceLock, ControlOperationSource, ControlOperationState, ControlOperationStatus,
+    ControlRequest, ControlResponse, CreateCleanupPlanRequest, DocumentSearchRequest,
     EndpointDescriptor, FileSearchRequest, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     OPERATION_ID_BYTES, OperationReference, PROTOCOL_VERSION, StorageScanSummary,
     acquire_instance_lock, default_descriptor_path, default_lock_path, random_operation_id,
@@ -34,6 +35,8 @@ const RESPONSE_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
 const MAX_RESULT_VALUE_BYTES: usize = MAX_RESPONSE_BYTES - RESPONSE_ENVELOPE_RESERVE_BYTES;
 const MAX_COMPLETED_OPERATIONS: usize = 16;
 const MAX_START_REQUESTS: usize = MAX_COMPLETED_OPERATIONS;
+const CLEANUP_PLAN_TTL: Duration = Duration::from_secs(5 * 60);
+const MAX_COMPLETED_CLEANUP_PLANS: usize = 16;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +52,7 @@ pub(crate) struct ControlStatus {
     protocol_version: u32,
     search_access: ControlSearchAccess,
     scan_access: ControlScanAccess,
+    cleanup_access: ControlCleanupAccess,
 }
 
 impl Default for ControlStatus {
@@ -65,6 +69,7 @@ impl Default for ControlStatus {
             protocol_version: u32::from(PROTOCOL_VERSION),
             search_access: ControlSearchAccess::default(),
             scan_access: ControlScanAccess::default(),
+            cleanup_access: ControlCleanupAccess::default(),
         }
     }
 }
@@ -104,6 +109,19 @@ pub(crate) struct ControlScanAccessRequest {
     config: Option<ScanConfig>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ControlCleanupAccess {
+    enabled: bool,
+    approved_at_unix_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ControlCleanupAccessRequest {
+    enabled: bool,
+}
+
 #[derive(Clone)]
 struct ControlScanPlan {
     root: String,
@@ -111,7 +129,6 @@ struct ControlScanPlan {
     config: ScanConfig,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingReviewStatus {
@@ -121,6 +138,67 @@ struct PendingReviewStatus {
     expires_at_unix_ms: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum CleanupPlanState {
+    AwaitingApproval,
+    Executing,
+    Completed,
+    Rejected,
+    Expired,
+    Stale,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupPlanResultSummary {
+    moved_count: u64,
+    moved_bytes: u64,
+    skipped_count: u64,
+    failed_count: u64,
+    cancelled: bool,
+    journal_complete: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CleanupPlanStatusResponse {
+    plan_id: String,
+    state: CleanupPlanState,
+    source: CleanupSource,
+    source_generation: u64,
+    item_count: u64,
+    total_bytes: u64,
+    review_count: u64,
+    created_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    result: Option<CleanupPlanResultSummary>,
+    message: Option<String>,
+}
+
+#[derive(Clone)]
+struct CleanupReviewPlan {
+    status: CleanupPlanStatusResponse,
+    candidate_ids: Vec<String>,
+}
+
+#[derive(Default)]
+struct CleanupReviewState {
+    pending: Option<CleanupReviewPlan>,
+    completed: VecDeque<CleanupPlanStatusResponse>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CleanupPlanExecution {
+    pub(crate) plan_id: String,
+    pub(crate) source: CleanupSource,
+    pub(crate) source_generation: u64,
+    pub(crate) candidate_ids: Vec<String>,
+    pub(crate) expires_at_unix_ms: u64,
+}
+
 pub(crate) struct ControlStatusStore {
     status: Mutex<ControlStatus>,
     search_scopes: Mutex<ControlSearchScopes>,
@@ -128,6 +206,7 @@ pub(crate) struct ControlStatusStore {
     scan_plan: Mutex<Option<ControlScanPlan>>,
     completed_operations: Mutex<VecDeque<ControlOperationStatus>>,
     start_requests: Mutex<VecDeque<(String, String)>>,
+    cleanup_review: Mutex<CleanupReviewState>,
 }
 
 impl Default for ControlStatusStore {
@@ -139,6 +218,7 @@ impl Default for ControlStatusStore {
             scan_plan: Mutex::new(None),
             completed_operations: Mutex::new(VecDeque::new()),
             start_requests: Mutex::new(VecDeque::new()),
+            cleanup_review: Mutex::new(CleanupReviewState::default()),
         }
     }
 }
@@ -282,6 +362,278 @@ impl ControlStatusStore {
             status.scan_access = access;
             status.last_error = None;
         })
+    }
+
+    fn configure_cleanup_access(
+        &self,
+        app: &AppHandle,
+        request: ControlCleanupAccessRequest,
+    ) -> Result<ControlStatus, String> {
+        if !request.enabled {
+            let mut review = self
+                .cleanup_review
+                .lock()
+                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+            if review
+                .pending
+                .as_ref()
+                .is_some_and(|plan| plan.status.state == CleanupPlanState::Executing)
+            {
+                return Err(
+                    "진행 중인 휴지통 작업이 끝난 뒤 정리 검토 허용을 끌 수 있습니다".to_owned(),
+                );
+            }
+            if let Some(mut plan) = review.pending.take() {
+                plan.status.state = CleanupPlanState::Rejected;
+                plan.status.message = Some("앱에서 외부 정리 검토 허용을 껐습니다".to_owned());
+                remember_cleanup_plan(&mut review.completed, plan.status);
+            }
+        }
+        self.update(app, |status| {
+            status.cleanup_access = if request.enabled {
+                ControlCleanupAccess {
+                    enabled: true,
+                    approved_at_unix_ms: Some(unix_time_ms()),
+                }
+            } else {
+                ControlCleanupAccess::default()
+            };
+            if !request.enabled {
+                status.pending_review = None;
+            }
+            status.last_error = None;
+        })
+    }
+
+    fn ensure_cleanup_access(&self) -> Result<(), String> {
+        let enabled = self
+            .status
+            .lock()
+            .map_err(|_| "채팅 CLI 연결 상태를 잠글 수 없습니다".to_owned())?
+            .cleanup_access
+            .enabled;
+        if enabled {
+            Ok(())
+        } else {
+            Err(
+                "앱의 대화 > 연결과 권한에서 이번 실행의 정리 계획 검토를 먼저 허용해 주세요"
+                    .to_owned(),
+            )
+        }
+    }
+
+    fn create_cleanup_plan(
+        &self,
+        app: &AppHandle,
+        request: &CreateCleanupPlanRequest,
+        selection: &super::CleanupPlanSelection,
+    ) -> Result<CleanupPlanStatusResponse, String> {
+        self.ensure_cleanup_access()?;
+        let now = unix_time_ms();
+        let mut candidate_ids = request.candidate_ids.clone();
+        candidate_ids.sort_unstable_by_key(|value| value.to_ascii_lowercase());
+        let mut review = self
+            .cleanup_review
+            .lock()
+            .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+
+        expire_pending_cleanup_plan(&mut review, now);
+        if let Some(existing) = review.pending.as_ref() {
+            if existing.status.source == request.source
+                && existing.status.source_generation == request.source_generation
+                && existing.candidate_ids == candidate_ids
+            {
+                return Ok(existing.status.clone());
+            }
+            return Err("다른 정리 계획이 앱의 최종 확인을 기다리고 있습니다".to_owned());
+        }
+
+        let plan_id =
+            random_operation_id().map_err(|_| "정리 계획 번호를 만들지 못했습니다".to_owned())?;
+        let expires_at_unix_ms =
+            now.saturating_add(u64::try_from(CLEANUP_PLAN_TTL.as_millis()).unwrap_or(u64::MAX));
+        let status = CleanupPlanStatusResponse {
+            plan_id: plan_id.clone(),
+            state: CleanupPlanState::AwaitingApproval,
+            source: request.source,
+            source_generation: request.source_generation,
+            item_count: selection.item_count,
+            total_bytes: selection.total_bytes,
+            review_count: selection.review_count,
+            created_at_unix_ms: now,
+            expires_at_unix_ms,
+            result: None,
+            message: Some("BroomSweepy 앱에서 최종 확인을 기다리고 있습니다".to_owned()),
+        };
+        review.pending = Some(CleanupReviewPlan {
+            status: status.clone(),
+            candidate_ids,
+        });
+        drop(review);
+
+        self.update(app, |control| {
+            control.pending_review = Some(PendingReviewStatus {
+                id: plan_id,
+                item_count: status.item_count,
+                total_bytes: status.total_bytes,
+                expires_at_unix_ms,
+            });
+        })?;
+        Ok(status)
+    }
+
+    fn cleanup_plan_status(
+        &self,
+        app: &AppHandle,
+        plan_id: &str,
+    ) -> Result<CleanupPlanStatusResponse, String> {
+        let now = unix_time_ms();
+        let (status, expired) = {
+            let mut review = self
+                .cleanup_review
+                .lock()
+                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+            let expired = expire_pending_cleanup_plan(&mut review, now);
+            let status = review
+                .pending
+                .as_ref()
+                .filter(|plan| plan.status.plan_id.eq_ignore_ascii_case(plan_id))
+                .map(|plan| plan.status.clone())
+                .or_else(|| {
+                    review
+                        .completed
+                        .iter()
+                        .find(|plan| plan.plan_id.eq_ignore_ascii_case(plan_id))
+                        .cloned()
+                })
+                .ok_or_else(|| "정리 계획을 찾을 수 없습니다".to_owned())?;
+            (status, expired)
+        };
+        if expired {
+            let _ = self.update(app, |control| control.pending_review = None);
+        }
+        Ok(status)
+    }
+
+    pub(crate) fn pending_cleanup_plan(
+        &self,
+        app: &AppHandle,
+    ) -> Result<Option<CleanupPlanExecution>, String> {
+        let now = unix_time_ms();
+        let (plan, expired) = {
+            let mut review = self
+                .cleanup_review
+                .lock()
+                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+            let expired = expire_pending_cleanup_plan(&mut review, now);
+            let plan = review.pending.as_ref().and_then(|plan| {
+                (plan.status.state == CleanupPlanState::AwaitingApproval).then(|| {
+                    CleanupPlanExecution {
+                        plan_id: plan.status.plan_id.clone(),
+                        source: plan.status.source,
+                        source_generation: plan.status.source_generation,
+                        candidate_ids: plan.candidate_ids.clone(),
+                        expires_at_unix_ms: plan.status.expires_at_unix_ms,
+                    }
+                })
+            });
+            (plan, expired)
+        };
+        if expired {
+            let _ = self.update(app, |control| control.pending_review = None);
+        }
+        Ok(plan)
+    }
+
+    pub(crate) fn begin_cleanup_plan(
+        &self,
+        app: &AppHandle,
+        plan_id: &str,
+    ) -> Result<CleanupPlanExecution, String> {
+        let now = unix_time_ms();
+        let execution = {
+            let mut review = self
+                .cleanup_review
+                .lock()
+                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+            expire_pending_cleanup_plan(&mut review, now);
+            let plan = review
+                .pending
+                .as_mut()
+                .filter(|plan| plan.status.plan_id.eq_ignore_ascii_case(plan_id))
+                .ok_or_else(|| "정리 계획을 찾을 수 없거나 확인 시간이 지났습니다".to_owned())?;
+            if plan.status.state != CleanupPlanState::AwaitingApproval {
+                return Err("이미 처리 중이거나 끝난 정리 계획입니다".to_owned());
+            }
+            plan.status.state = CleanupPlanState::Executing;
+            plan.status.message = Some("앱이 선택 항목을 다시 확인하고 있습니다".to_owned());
+            CleanupPlanExecution {
+                plan_id: plan.status.plan_id.clone(),
+                source: plan.status.source,
+                source_generation: plan.status.source_generation,
+                candidate_ids: plan.candidate_ids.clone(),
+                expires_at_unix_ms: plan.status.expires_at_unix_ms,
+            }
+        };
+        self.update(app, |control| control.pending_review = None)?;
+        Ok(execution)
+    }
+
+    pub(crate) fn reject_cleanup_plan(
+        &self,
+        app: &AppHandle,
+        plan_id: &str,
+    ) -> Result<bool, String> {
+        let mut review = self
+            .cleanup_review
+            .lock()
+            .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+        expire_pending_cleanup_plan(&mut review, unix_time_ms());
+        let Some(mut plan) = review.pending.take() else {
+            return Ok(false);
+        };
+        if !plan.status.plan_id.eq_ignore_ascii_case(plan_id) {
+            review.pending = Some(plan);
+            return Err("다른 정리 계획 번호입니다".to_owned());
+        }
+        if plan.status.state != CleanupPlanState::AwaitingApproval {
+            review.pending = Some(plan);
+            return Err("처리 중인 정리 계획은 거부할 수 없습니다".to_owned());
+        }
+        plan.status.state = CleanupPlanState::Rejected;
+        plan.status.message = Some("사용자가 앱에서 정리 계획을 거부했습니다".to_owned());
+        remember_cleanup_plan(&mut review.completed, plan.status);
+        drop(review);
+        self.update(app, |control| control.pending_review = None)?;
+        Ok(true)
+    }
+
+    fn finish_cleanup_plan(
+        &self,
+        app: &AppHandle,
+        plan_id: &str,
+        state: CleanupPlanState,
+        result: Option<CleanupPlanResultSummary>,
+        message: String,
+    ) -> Result<(), String> {
+        let mut review = self
+            .cleanup_review
+            .lock()
+            .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+        let Some(mut plan) = review.pending.take() else {
+            return Err("마무리할 정리 계획이 없습니다".to_owned());
+        };
+        if !plan.status.plan_id.eq_ignore_ascii_case(plan_id) {
+            review.pending = Some(plan);
+            return Err("마무리할 정리 계획 번호가 다릅니다".to_owned());
+        }
+        plan.status.state = state;
+        plan.status.result = result;
+        plan.status.message = Some(message);
+        remember_cleanup_plan(&mut review.completed, plan.status);
+        drop(review);
+        self.update(app, |control| control.pending_review = None)?;
+        Ok(())
     }
 
     fn scan_plan(&self) -> Result<ControlScanPlan, String> {
@@ -489,6 +841,31 @@ impl ControlStatusStore {
     }
 }
 
+fn remember_cleanup_plan(
+    completed: &mut VecDeque<CleanupPlanStatusResponse>,
+    status: CleanupPlanStatusResponse,
+) {
+    completed.push_front(status);
+    completed.truncate(MAX_COMPLETED_CLEANUP_PLANS);
+}
+
+fn expire_pending_cleanup_plan(review: &mut CleanupReviewState, now: u64) -> bool {
+    let should_expire = review.pending.as_ref().is_some_and(|plan| {
+        plan.status.state == CleanupPlanState::AwaitingApproval
+            && now >= plan.status.expires_at_unix_ms
+    });
+    if !should_expire {
+        return false;
+    }
+    let Some(mut plan) = review.pending.take() else {
+        return false;
+    };
+    plan.status.state = CleanupPlanState::Expired;
+    plan.status.message = Some("앱 확인 시간이 지나 파일을 변경하지 않았습니다".to_owned());
+    remember_cleanup_plan(&mut review.completed, plan.status);
+    true
+}
+
 #[derive(Clone, Copy)]
 enum SearchScopeKind {
     Files,
@@ -526,6 +903,159 @@ pub(crate) fn configure_control_scan_access(
     state: State<'_, ControlStatusStore>,
 ) -> Result<ControlStatus, String> {
     state.configure_scan_access(&app, request)
+}
+
+#[tauri::command]
+pub(crate) fn configure_control_cleanup_access(
+    app: AppHandle,
+    request: ControlCleanupAccessRequest,
+    state: State<'_, ControlStatusStore>,
+) -> Result<ControlStatus, String> {
+    state.configure_cleanup_access(&app, request)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ApproveCleanupPlanRequest {
+    plan_id: String,
+    allow_review_candidates: bool,
+}
+
+#[tauri::command]
+pub(crate) fn get_pending_cleanup_plan(
+    app: AppHandle,
+    state: State<'_, ControlStatusStore>,
+    reports: State<'_, super::StoredReports>,
+) -> Result<Option<super::PendingCleanupPlanDetail>, String> {
+    let Some(execution) = state.pending_cleanup_plan(&app)? else {
+        return Ok(None);
+    };
+    match reports.pending_cleanup_plan_detail(&execution) {
+        Ok(detail) => Ok(Some(detail)),
+        Err(error) => {
+            let _ = state.finish_cleanup_plan(
+                &app,
+                &execution.plan_id,
+                CleanupPlanState::Stale,
+                None,
+                "검사 결과가 바뀌어 정리 계획을 실행하지 않았습니다".to_owned(),
+            );
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub(crate) fn reject_cleanup_plan(
+    app: AppHandle,
+    plan_id: String,
+    state: State<'_, ControlStatusStore>,
+) -> Result<bool, String> {
+    CleanupPlanReference::new(plan_id.clone()).map_err(|error| error.to_string())?;
+    state.reject_cleanup_plan(&app, &plan_id)
+}
+
+#[tauri::command]
+pub(crate) async fn approve_cleanup_plan(
+    app: AppHandle,
+    request: ApproveCleanupPlanRequest,
+    state: State<'_, ControlStatusStore>,
+    runtime: State<'_, super::ScanRuntime>,
+    reports: State<'_, super::StoredReports>,
+) -> Result<super::trash_actions::TrashOperationResult, String> {
+    CleanupPlanReference::new(request.plan_id.clone()).map_err(|error| error.to_string())?;
+    let execution = state.begin_cleanup_plan(&app, &request.plan_id)?;
+    let action = match reports.cleanup_plan_action(&execution, request.allow_review_candidates) {
+        Ok(action) => action,
+        Err(error) => {
+            let _ = state.finish_cleanup_plan(
+                &app,
+                &execution.plan_id,
+                CleanupPlanState::Stale,
+                None,
+                "검사 결과가 바뀌어 파일을 이동하지 않았습니다".to_owned(),
+            );
+            return Err(error);
+        }
+    };
+
+    let result = match action {
+        super::CleanupPlanAction::Duplicate(request) => {
+            super::trash_actions::trash_duplicate_files_internal(
+                app.clone(),
+                runtime.inner(),
+                reports.inner(),
+                request,
+            )
+            .await
+        }
+        super::CleanupPlanAction::System(request) => {
+            super::trash_actions::trash_cleanup_candidates_internal(
+                app.clone(),
+                runtime.inner(),
+                reports.inner(),
+                request,
+            )
+            .await
+        }
+    };
+
+    match result {
+        Ok(result) => {
+            let failed_count = result
+                .items
+                .iter()
+                .filter(|item| item.status == super::trash_actions::TrashItemStatus::Failed)
+                .count()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            let skipped_count = result
+                .items
+                .iter()
+                .filter(|item| item.status == super::trash_actions::TrashItemStatus::Skipped)
+                .count()
+                .try_into()
+                .unwrap_or(u64::MAX);
+            let summary = CleanupPlanResultSummary {
+                moved_count: result.moved_count.try_into().unwrap_or(u64::MAX),
+                moved_bytes: result.moved_bytes,
+                skipped_count,
+                failed_count,
+                cancelled: result.cancelled,
+                journal_complete: result.journal_complete,
+            };
+            let plan_state = if result.cancelled {
+                CleanupPlanState::Cancelled
+            } else {
+                CleanupPlanState::Completed
+            };
+            let message = if result.cancelled {
+                "사용자가 정리 작업 중단을 요청했습니다"
+            } else if failed_count > 0 || skipped_count > 0 {
+                "정리 작업을 마쳤지만 일부 항목은 이동하지 못했습니다"
+            } else {
+                "앱에서 확인한 항목을 운영체제 휴지통으로 이동했습니다"
+            };
+            state.finish_cleanup_plan(
+                &app,
+                &execution.plan_id,
+                plan_state,
+                Some(summary),
+                message.to_owned(),
+            )?;
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = state.finish_cleanup_plan(
+                &app,
+                &execution.plan_id,
+                CleanupPlanState::Failed,
+                None,
+                "안전 재검사를 통과하지 못해 파일을 이동하지 않았습니다".to_owned(),
+            );
+            Err(error)
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -938,6 +1468,9 @@ fn handle_authenticated_request(
         ControlCommand::StartStorageScan => start_storage_scan(app, &request_id),
         ControlCommand::OperationStatus(reference) => operation_status(app, reference),
         ControlCommand::CancelOperation(reference) => cancel_operation(app, reference),
+        ControlCommand::CleanupCandidates(request) => cleanup_candidates(app, request),
+        ControlCommand::CreateCleanupPlan(request) => create_cleanup_plan(app, request),
+        ControlCommand::CleanupPlanStatus(reference) => cleanup_plan_status(app, reference),
     };
 
     match result {
@@ -1147,6 +1680,98 @@ fn storage_scan_summary(snapshot: &super::StoredScanSnapshot) -> StorageScanSumm
         issue_count: report.issues.len().try_into().unwrap_or(u64::MAX),
         candidate_limit_reached: report.candidate_limit_reached,
         hard_link_identity_limit_reached: report.hard_link_identity_limit_reached,
+    }
+}
+
+fn cleanup_candidates(
+    app: &AppHandle,
+    request: CleanupCandidatesRequest,
+) -> Result<Value, RequestFailure> {
+    request.validate().map_err(invalid_request)?;
+    app.state::<ControlStatusStore>()
+        .ensure_cleanup_access()
+        .map_err(|message| RequestFailure {
+            code: "cleanup_approval_required",
+            message,
+            retryable: false,
+        })?;
+    let page = app
+        .state::<super::StoredReports>()
+        .cleanup_candidates_page(
+            request.source,
+            request.expected_generation,
+            request.offset,
+            request.max_results,
+        )
+        .map_err(cleanup_report_failure)?;
+    to_value(page)
+}
+
+fn create_cleanup_plan(
+    app: &AppHandle,
+    request: CreateCleanupPlanRequest,
+) -> Result<Value, RequestFailure> {
+    request.validate().map_err(invalid_request)?;
+    let status_store = app.state::<ControlStatusStore>();
+    status_store
+        .ensure_cleanup_access()
+        .map_err(|message| RequestFailure {
+            code: "cleanup_approval_required",
+            message,
+            retryable: false,
+        })?;
+    let selection = app
+        .state::<super::StoredReports>()
+        .cleanup_plan_selection(
+            request.source,
+            request.source_generation,
+            &request.candidate_ids,
+        )
+        .map_err(cleanup_report_failure)?;
+    let status = status_store
+        .create_cleanup_plan(app, &request, &selection)
+        .map_err(|message| RequestFailure {
+            code: if message.contains("다른 정리 계획") {
+                "review_pending"
+            } else {
+                "cleanup_plan_failed"
+            },
+            message,
+            retryable: false,
+        })?;
+    to_value(status)
+}
+
+fn cleanup_plan_status(
+    app: &AppHandle,
+    reference: CleanupPlanReference,
+) -> Result<Value, RequestFailure> {
+    reference.validate().map_err(invalid_request)?;
+    let status = app
+        .state::<ControlStatusStore>()
+        .cleanup_plan_status(app, &reference.plan_id)
+        .map_err(|message| RequestFailure {
+            code: "cleanup_plan_not_found",
+            message,
+            retryable: false,
+        })?;
+    to_value(status)
+}
+
+fn cleanup_report_failure(message: String) -> RequestFailure {
+    let code = if message.contains("바뀌") || message.contains("세대") {
+        "stale_generation"
+    } else if message.contains("없습니다") {
+        "cleanup_report_missing"
+    } else if message.contains("후보") || message.contains("그룹") {
+        "invalid_candidate"
+    } else {
+        "cleanup_report_failed"
+    };
+    RequestFailure {
+        code,
+        message,
+        retryable: false,
     }
 }
 
@@ -1564,7 +2189,42 @@ mod tests {
         assert!(!status.search_access.documents);
         assert!(!status.scan_access.enabled);
         assert!(status.scan_access.root.is_none());
+        assert!(!status.cleanup_access.enabled);
+        assert!(status.pending_review.is_none());
         assert_eq!(status.revision, 0);
+    }
+
+    #[test]
+    fn expired_cleanup_plan_is_removed_and_remains_queryable_as_terminal_history() {
+        let mut review = CleanupReviewState {
+            pending: Some(CleanupReviewPlan {
+                status: CleanupPlanStatusResponse {
+                    plan_id: "ab".repeat(16),
+                    state: CleanupPlanState::AwaitingApproval,
+                    source: CleanupSource::SystemCleanup,
+                    source_generation: 1,
+                    item_count: 1,
+                    total_bytes: 4_096,
+                    review_count: 0,
+                    created_at_unix_ms: 100,
+                    expires_at_unix_ms: 200,
+                    result: None,
+                    message: None,
+                },
+                candidate_ids: vec!["cd".repeat(16)],
+            }),
+            completed: VecDeque::new(),
+        };
+
+        assert!(expire_pending_cleanup_plan(&mut review, 200));
+        assert!(review.pending.is_none());
+        assert_eq!(review.completed.len(), 1);
+        assert_eq!(review.completed[0].state, CleanupPlanState::Expired);
+        assert_eq!(
+            review.completed[0].message.as_deref(),
+            Some("앱 확인 시간이 지나 파일을 변경하지 않았습니다")
+        );
+        assert!(!expire_pending_cleanup_plan(&mut review, 201));
     }
 
     #[test]

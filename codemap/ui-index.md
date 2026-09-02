@@ -1,13 +1,13 @@
 ﻿# UI
 
 > 웹 컴포넌트, XAML View/Window/Control, 모바일 Widget/View 빠른 색인.
-> total: 89 signals
+> total: 90 signals
 
 ## apps/desktop/src/components/AppShell.tsx
 - **component** `AppShell` (L163) — `apps/desktop/src/components/AppShell.tsx:163`
 
 ## apps/desktop/src/components/ControlStatusPanel.tsx
-- **component** `ControlStatusPanel` (L91) — `apps/desktop/src/components/ControlStatusPanel.tsx:91`
+- **component** `ControlStatusPanel` (L97) — `apps/desktop/src/components/ControlStatusPanel.tsx:97`
 
 ## apps/desktop/src/components/DockerCleanupDialog.tsx
 - **component** `DockerCleanupResultView` (L307) — `apps/desktop/src/components/DockerCleanupDialog.tsx:307`
@@ -21,12 +21,15 @@
 ## apps/desktop/src/components/FileTable.tsx
 - **component** `FileTable` (L21) — `apps/desktop/src/components/FileTable.tsx:21`
 
+## apps/desktop/src/components/McpConnectionPanel.tsx
+- **component** `McpConnectionPanel` (L24) — `apps/desktop/src/components/McpConnectionPanel.tsx:24`
+
 ## apps/desktop/src/components/RecoveryNotice.tsx
 - **component** `RecoveryNotice` (L34) — `apps/desktop/src/components/RecoveryNotice.tsx:34`
 - **component** `RecoveryCheckNotice` (L213) — `apps/desktop/src/components/RecoveryNotice.tsx:213`
 
 ## apps/desktop/src/components/SafetyActionDialog.tsx
-- **component** `SafetyActionDialog` (L19) — `apps/desktop/src/components/SafetyActionDialog.tsx:19`
+- **component** `SafetyActionDialog` (L26) — `apps/desktop/src/components/SafetyActionDialog.tsx:26`
 
 ## apps/desktop/src/components/StorageRing.tsx
 - **component** `StorageRing` (L10) — `apps/desktop/src/components/StorageRing.tsx:10`
@@ -42,10 +45,10 @@
 - **component** `TrashResultPanel` (L9) — `apps/desktop/src/components/TrashResultPanel.tsx:9`
 
 ## apps/desktop/src/views/AssistantView.tsx
-- **component** `FolderScopeMetrics` (L813) — `apps/desktop/src/views/AssistantView.tsx:813`
-- **component** `DockerScopeMetrics` (L832) — `apps/desktop/src/views/AssistantView.tsx:832`
-- **component** `DriveShareIndicator` (L851) — `apps/desktop/src/views/AssistantView.tsx:851`
-- **component** `AssistantEmptyState` (L897) — `apps/desktop/src/views/AssistantView.tsx:897`
+- **component** `FolderScopeMetrics` (L831) — `apps/desktop/src/views/AssistantView.tsx:831`
+- **component** `DockerScopeMetrics` (L850) — `apps/desktop/src/views/AssistantView.tsx:850`
+- **component** `DriveShareIndicator` (L869) — `apps/desktop/src/views/AssistantView.tsx:869`
+- **component** `AssistantEmptyState` (L915) — `apps/desktop/src/views/AssistantView.tsx:915`
 
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70) — `apps/desktop/src/views/CleanupView.tsx:70`
@@ -78,7 +81,7 @@
 - **component** `OverviewView` (L55) — `apps/desktop/src/views/OverviewView.tsx:55`
 
 ## apps/desktop/src/views/SettingsView.tsx
-- **component** `SettingsView` (L17) — `apps/desktop/src/views/SettingsView.tsx:17`
+- **component** `SettingsView` (L18) — `apps/desktop/src/views/SettingsView.tsx:18`
 
 ## BroomSweepy/BroomSweepyApp.swift
 - **view** `MenuBarPopover` : View (L231) — `BroomSweepy/BroomSweepyApp.swift:231`

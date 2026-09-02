@@ -1,8 +1,9 @@
 use std::error::Error;
 
 use bloomsweepy_control::{
-    ControlCommand, DEFAULT_TIMEOUT, DocumentSearchRequest, FileEntryKind, FileSearchRequest,
-    FileSearchSort, OperationReference, ProtocolError, call,
+    CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
+    CreateCleanupPlanRequest, DEFAULT_CLEANUP_RESULTS, DEFAULT_TIMEOUT, DocumentSearchRequest,
+    FileEntryKind, FileSearchRequest, FileSearchSort, OperationReference, ProtocolError, call,
 };
 use rmcp::{
     Json, ServerHandler, ServiceExt, handler::server::wrapper::Parameters, tool, tool_handler,
@@ -117,12 +118,64 @@ impl BroomSweepyMcp {
             .map_err(|error| Json(McpToolError::from_protocol(&error)))?;
         bridge(ControlCommand::CancelOperation(reference)).await
     }
+
+    #[tool(
+        name = "cleanup_candidates",
+        description = "Read a bounded summary of anonymous cleanup candidates from a currently completed BroomSweepy report. BroomSweepy accepts no raw file identity here, and this tool performs no cleanup."
+    )]
+    async fn cleanup_candidates(
+        &self,
+        Parameters(arguments): Parameters<CleanupCandidatesArguments>,
+    ) -> Result<Json<Value>, Json<McpToolError>> {
+        let request = CleanupCandidatesRequest {
+            source: arguments.source.into(),
+            expected_generation: arguments.expected_generation,
+            offset: arguments.offset,
+            max_results: arguments.max_results,
+        };
+        request
+            .validate()
+            .map_err(|error| Json(McpToolError::from_protocol(&error)))?;
+        bridge(ControlCommand::CleanupCandidates(request)).await
+    }
+
+    #[tool(
+        name = "create_cleanup_plan",
+        description = "Ask BroomSweepy to prepare a review plan from candidate IDs in its current completed report. Nothing is moved until the user approves the exact plan inside the BroomSweepy app."
+    )]
+    async fn create_cleanup_plan(
+        &self,
+        Parameters(arguments): Parameters<CreateCleanupPlanArguments>,
+    ) -> Result<Json<Value>, Json<McpToolError>> {
+        let request = CreateCleanupPlanRequest {
+            source: arguments.source.into(),
+            source_generation: arguments.source_generation,
+            candidate_ids: arguments.candidate_ids,
+        };
+        request
+            .validate()
+            .map_err(|error| Json(McpToolError::from_protocol(&error)))?;
+        bridge(ControlCommand::CreateCleanupPlan(request)).await
+    }
+
+    #[tool(
+        name = "cleanup_plan_status",
+        description = "Read the bounded summary status of a BroomSweepy cleanup review plan. Any file operation happens only after final user approval inside the BroomSweepy app."
+    )]
+    async fn cleanup_plan_status(
+        &self,
+        Parameters(arguments): Parameters<CleanupPlanStatusArguments>,
+    ) -> Result<Json<Value>, Json<McpToolError>> {
+        let reference = CleanupPlanReference::new(arguments.plan_id)
+            .map_err(|error| Json(McpToolError::from_protocol(&error)))?;
+        bridge(ControlCommand::CleanupPlanStatus(reference)).await
+    }
 }
 
 #[tool_handler(
     name = "bloomsweepy",
     version = "1.2.0",
-    instructions = "Bridge to the running BroomSweepy app. The bridge interprets structured requests, while the app performs approved scans and searches. No delete or trash tool is exposed."
+    instructions = "Bridge to the running BroomSweepy app. Cleanup tools return bounded summaries from currently completed reports and can prepare a review plan, but file operations happen only after final user approval inside the app. No approval or direct cleanup tool is exposed."
 )]
 impl ServerHandler for BroomSweepyMcp {}
 
@@ -204,8 +257,57 @@ struct OperationArguments {
     operation_id: String,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupCandidatesArguments {
+    source: CleanupSourceArgument,
+    #[serde(default)]
+    expected_generation: Option<u64>,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default = "default_cleanup_results")]
+    #[schemars(description = "Maximum candidate summaries from 1 through 50.")]
+    max_results: usize,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CreateCleanupPlanArguments {
+    source: CleanupSourceArgument,
+    source_generation: u64,
+    #[schemars(description = "One through 50 opaque 32-character candidate IDs.")]
+    candidate_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CleanupPlanStatusArguments {
+    #[schemars(description = "The exact opaque 32-character plan ID returned by BroomSweepy.")]
+    plan_id: String,
+}
+
 const fn default_max_results() -> usize {
     100
+}
+
+const fn default_cleanup_results() -> usize {
+    DEFAULT_CLEANUP_RESULTS
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum CleanupSourceArgument {
+    DuplicateFiles,
+    SystemCleanup,
+}
+
+impl From<CleanupSourceArgument> for CleanupSource {
+    fn from(value: CleanupSourceArgument) -> Self {
+        match value {
+            CleanupSourceArgument::DuplicateFiles => Self::DuplicateFiles,
+            CleanupSourceArgument::SystemCleanup => Self::SystemCleanup,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, JsonSchema)]
@@ -254,7 +356,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_the_seven_explicit_tools_without_delete_or_trash() {
+    fn exposes_exactly_ten_tools_without_direct_cleanup_actions() {
         let mut names: Vec<String> = BroomSweepyMcp::tool_router()
             .list_all()
             .iter()
@@ -265,6 +367,9 @@ mod tests {
             names,
             [
                 "cancel_operation",
+                "cleanup_candidates",
+                "cleanup_plan_status",
+                "create_cleanup_plan",
                 "operation_status",
                 "search_documents",
                 "search_files",
@@ -273,11 +378,65 @@ mod tests {
                 "system_overview"
             ]
         );
-        assert!(
-            names
+        let forbidden_actions = ["approve", "execute", "delete", "trash"];
+        assert!(names.iter().all(|name| {
+            forbidden_actions
                 .iter()
-                .all(|name| !name.contains("delete") && !name.contains("trash"))
-        );
+                .all(|forbidden| !name.contains(forbidden))
+        }));
+    }
+
+    #[test]
+    fn cleanup_tool_schemas_expose_only_opaque_bounded_inputs() {
+        let cleanup_tools = BroomSweepyMcp::tool_router()
+            .list_all()
+            .into_iter()
+            .filter(|tool| {
+                matches!(
+                    tool.name.as_ref(),
+                    "cleanup_candidates" | "create_cleanup_plan" | "cleanup_plan_status"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(cleanup_tools.len(), 3);
+
+        for tool in cleanup_tools {
+            let schema = Value::Object((*tool.input_schema).clone());
+            let mut property_names = Vec::new();
+            collect_property_names(&schema, &mut property_names);
+            for forbidden in ["path", "paths", "name", "names", "hash", "hashes"] {
+                assert!(
+                    !property_names.iter().any(|name| name == forbidden),
+                    "{} unexpectedly exposes {forbidden}",
+                    tool.name
+                );
+            }
+            assert_eq!(schema["additionalProperties"], Value::Bool(false));
+        }
+    }
+
+    #[test]
+    fn cleanup_tool_arguments_reject_unknown_identity_fields_and_invalid_bounds() {
+        let unknown = serde_json::from_value::<CleanupCandidatesArguments>(serde_json::json!({
+            "source": "system_cleanup",
+            "path": "C:\\untrusted"
+        }));
+        assert!(unknown.is_err());
+
+        let bounded = CleanupCandidatesRequest {
+            source: CleanupSource::SystemCleanup,
+            expected_generation: None,
+            offset: 0,
+            max_results: bloomsweepy_control::MAX_CLEANUP_RESULTS + 1,
+        };
+        assert!(bounded.validate().is_err());
+
+        let invalid_id = CreateCleanupPlanRequest {
+            source: CleanupSource::DuplicateFiles,
+            source_generation: 1,
+            candidate_ids: vec!["not-an-id".to_owned()],
+        };
+        assert!(invalid_id.validate().is_err());
     }
 
     #[test]
@@ -287,5 +446,24 @@ mod tests {
         assert!(output.contains("app_not_running"));
         assert!(!output.contains("control-v1.json"));
         assert!(!output.contains("token"));
+    }
+
+    fn collect_property_names(value: &Value, output: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(Value::Object(properties)) = object.get("properties") {
+                    output.extend(properties.keys().cloned());
+                }
+                for value in object.values() {
+                    collect_property_names(value, output);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    collect_property_names(value, output);
+                }
+            }
+            _ => {}
+        }
     }
 }

@@ -9,11 +9,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_SEARCH_RESULTS: usize = 250;
 pub const MAX_SEARCH_QUERY_CHARS: usize = 256;
+pub const DEFAULT_CLEANUP_RESULTS: usize = 20;
+pub const MAX_CLEANUP_RESULTS: usize = 50;
+pub const CLEANUP_ID_BYTES: usize = 16;
 pub const OPERATION_ID_BYTES: usize = 16;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DESCRIPTOR_BYTES: u64 = 64 * 1024;
@@ -148,6 +151,94 @@ pub enum ControlCommand {
     StartStorageScan,
     OperationStatus(OperationReference),
     CancelOperation(OperationReference),
+    CleanupCandidates(CleanupCandidatesRequest),
+    CreateCleanupPlan(CreateCleanupPlanRequest),
+    CleanupPlanStatus(CleanupPlanReference),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupSource {
+    DuplicateFiles,
+    SystemCleanup,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CleanupCandidatesRequest {
+    pub source: CleanupSource,
+    #[serde(default)]
+    pub expected_generation: Option<u64>,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "default_cleanup_results")]
+    pub max_results: usize,
+}
+
+impl CleanupCandidatesRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.expected_generation == Some(0) {
+            return Err(ProtocolError::InvalidRequest(
+                "검사 세대 번호는 1 이상이어야 합니다".to_owned(),
+            ));
+        }
+        validate_cleanup_result_count(self.max_results)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateCleanupPlanRequest {
+    pub source: CleanupSource,
+    pub source_generation: u64,
+    pub candidate_ids: Vec<String>,
+}
+
+impl CreateCleanupPlanRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.source_generation == 0 {
+            return Err(ProtocolError::InvalidRequest(
+                "검사 세대 번호는 1 이상이어야 합니다".to_owned(),
+            ));
+        }
+        if self.candidate_ids.is_empty() || self.candidate_ids.len() > MAX_CLEANUP_RESULTS {
+            return Err(ProtocolError::InvalidRequest(format!(
+                "정리 후보 수는 1에서 {MAX_CLEANUP_RESULTS} 사이여야 합니다"
+            )));
+        }
+        for (index, candidate_id) in self.candidate_ids.iter().enumerate() {
+            validate_cleanup_id(candidate_id, "정리 후보 번호")?;
+            if self.candidate_ids[..index]
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(candidate_id))
+            {
+                return Err(ProtocolError::InvalidRequest(
+                    "정리 후보 번호는 중복될 수 없습니다".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CleanupPlanReference {
+    pub plan_id: String,
+}
+
+impl CleanupPlanReference {
+    pub fn new(plan_id: impl Into<String>) -> Result<Self, ProtocolError> {
+        let reference = Self {
+            plan_id: plan_id.into(),
+        };
+        reference.validate()?;
+        Ok(reference)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_cleanup_id(&self.plan_id, "정리 계획 번호")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -294,6 +385,28 @@ impl DocumentSearchRequest {
 
 fn default_search_results() -> usize {
     100
+}
+
+const fn default_cleanup_results() -> usize {
+    DEFAULT_CLEANUP_RESULTS
+}
+
+fn validate_cleanup_result_count(max_results: usize) -> Result<(), ProtocolError> {
+    if max_results == 0 || max_results > MAX_CLEANUP_RESULTS {
+        return Err(ProtocolError::InvalidRequest(format!(
+            "정리 후보 수는 1에서 {MAX_CLEANUP_RESULTS} 사이여야 합니다"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_cleanup_id(value: &str, label: &str) -> Result<(), ProtocolError> {
+    if value.len() != CLEANUP_ID_BYTES * 2 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ProtocolError::InvalidRequest(format!(
+            "{label}가 올바르지 않습니다"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_query(query: &str, max_results: usize) -> Result<(), ProtocolError> {
@@ -862,6 +975,178 @@ mod tests {
                 "params": { "operationId": "ab".repeat(OPERATION_ID_BYTES) }
             })
         );
+    }
+
+    #[test]
+    fn cleanup_commands_have_stable_v3_wire_contract() {
+        assert_eq!(PROTOCOL_VERSION, 3);
+
+        let candidates = serde_json::to_value(ControlCommand::CleanupCandidates(
+            CleanupCandidatesRequest {
+                source: CleanupSource::SystemCleanup,
+                expected_generation: Some(7),
+                offset: 20,
+                max_results: DEFAULT_CLEANUP_RESULTS,
+            },
+        ))
+        .expect("serialize cleanup candidates");
+        assert_eq!(
+            candidates,
+            serde_json::json!({
+                "method": "cleanup_candidates",
+                "params": {
+                    "source": "system_cleanup",
+                    "expectedGeneration": 7,
+                    "offset": 20,
+                    "maxResults": 20
+                }
+            })
+        );
+
+        let candidate_id = "ab".repeat(CLEANUP_ID_BYTES);
+        let create = serde_json::to_value(ControlCommand::CreateCleanupPlan(
+            CreateCleanupPlanRequest {
+                source: CleanupSource::DuplicateFiles,
+                source_generation: 9,
+                candidate_ids: vec![candidate_id.clone()],
+            },
+        ))
+        .expect("serialize cleanup plan");
+        assert_eq!(
+            create,
+            serde_json::json!({
+                "method": "create_cleanup_plan",
+                "params": {
+                    "source": "duplicate_files",
+                    "sourceGeneration": 9,
+                    "candidateIds": [candidate_id]
+                }
+            })
+        );
+
+        let plan_id = "cd".repeat(CLEANUP_ID_BYTES);
+        let status = serde_json::to_value(ControlCommand::CleanupPlanStatus(
+            CleanupPlanReference::new(plan_id.clone()).expect("plan reference"),
+        ))
+        .expect("serialize cleanup plan status");
+        assert_eq!(
+            status,
+            serde_json::json!({
+                "method": "cleanup_plan_status",
+                "params": { "planId": plan_id }
+            })
+        );
+
+        let request = ControlRequest::new("f".repeat(64), ControlCommand::AppStatus)
+            .expect("control request");
+        let request_json = serde_json::to_value(request).expect("serialize control request");
+        assert_eq!(request_json["protocolVersion"], 3);
+    }
+
+    #[test]
+    fn cleanup_candidate_request_defaults_and_limits_are_bounded() {
+        let command = serde_json::from_value::<ControlCommand>(serde_json::json!({
+            "method": "cleanup_candidates",
+            "params": { "source": "system_cleanup" }
+        }))
+        .expect("default cleanup request");
+        let ControlCommand::CleanupCandidates(request) = command else {
+            panic!("cleanup candidates command expected");
+        };
+        assert_eq!(request.max_results, DEFAULT_CLEANUP_RESULTS);
+        assert_eq!(request.offset, 0);
+        assert_eq!(request.expected_generation, None);
+        request.validate().expect("default request is valid");
+
+        for max_results in [0, MAX_CLEANUP_RESULTS + 1] {
+            let request = CleanupCandidatesRequest {
+                source: CleanupSource::SystemCleanup,
+                expected_generation: None,
+                offset: 0,
+                max_results,
+            };
+            assert!(matches!(
+                request.validate(),
+                Err(ProtocolError::InvalidRequest(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn cleanup_plan_requests_enforce_fixed_hex_ids_and_candidate_bounds() {
+        let valid_id = "ab".repeat(CLEANUP_ID_BYTES);
+        let valid = CreateCleanupPlanRequest {
+            source: CleanupSource::DuplicateFiles,
+            source_generation: 1,
+            candidate_ids: vec![valid_id.clone()],
+        };
+        valid.validate().expect("valid cleanup plan");
+        CleanupPlanReference::new(valid_id.clone()).expect("valid plan reference");
+
+        for invalid_id in ["short".to_owned(), "zz".repeat(CLEANUP_ID_BYTES)] {
+            let request = CreateCleanupPlanRequest {
+                source: CleanupSource::SystemCleanup,
+                source_generation: 1,
+                candidate_ids: vec![invalid_id.clone()],
+            };
+            assert!(request.validate().is_err());
+            assert!(CleanupPlanReference::new(invalid_id).is_err());
+        }
+
+        let empty = CreateCleanupPlanRequest {
+            source: CleanupSource::SystemCleanup,
+            source_generation: 1,
+            candidate_ids: Vec::new(),
+        };
+        assert!(empty.validate().is_err());
+
+        let too_many = CreateCleanupPlanRequest {
+            source: CleanupSource::SystemCleanup,
+            source_generation: 1,
+            candidate_ids: (0..=MAX_CLEANUP_RESULTS)
+                .map(|index| format!("{index:032x}"))
+                .collect(),
+        };
+        assert!(too_many.validate().is_err());
+
+        let duplicate = CreateCleanupPlanRequest {
+            source: CleanupSource::SystemCleanup,
+            source_generation: 1,
+            candidate_ids: vec![valid_id.to_ascii_lowercase(), valid_id.to_ascii_uppercase()],
+        };
+        assert!(duplicate.validate().is_err());
+    }
+
+    #[test]
+    fn cleanup_request_dtos_reject_unknown_raw_identity_fields() {
+        let candidates = serde_json::from_value::<ControlCommand>(serde_json::json!({
+            "method": "cleanup_candidates",
+            "params": {
+                "source": "system_cleanup",
+                "path": "C:\\untrusted"
+            }
+        }));
+        assert!(candidates.is_err());
+
+        let create = serde_json::from_value::<ControlCommand>(serde_json::json!({
+            "method": "create_cleanup_plan",
+            "params": {
+                "source": "duplicate_files",
+                "sourceGeneration": 1,
+                "candidateIds": ["ab".repeat(CLEANUP_ID_BYTES)],
+                "name": "untrusted"
+            }
+        }));
+        assert!(create.is_err());
+
+        let status = serde_json::from_value::<ControlCommand>(serde_json::json!({
+            "method": "cleanup_plan_status",
+            "params": {
+                "planId": "cd".repeat(CLEANUP_ID_BYTES),
+                "hash": "untrusted"
+            }
+        }));
+        assert!(status.is_err());
     }
 
     #[test]

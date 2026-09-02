@@ -3,17 +3,17 @@
 > WPF View/Window/Panel
 
 ## apps/desktop/src/views/AssistantView.tsx
-- **component** `FolderScopeMetrics` (L813)
-- **component** `DockerScopeMetrics` (L832)
-- **component** `DriveShareIndicator` (L851)
-- **component** `AssistantEmptyState` (L897)
-- **hook** `userMutation()` (L412)
+- **component** `FolderScopeMetrics` (L831)
+- **component** `DockerScopeMetrics` (L850)
+- **component** `DriveShareIndicator` (L869)
+- **component** `AssistantEmptyState` (L915)
+- **hook** `userMutation()` (L424)
 - **type** `CSSProperties` (L21)
 - **type** `FormEvent` (L22)
 - **type** `KeyboardEvent` (L23)
 - **type** `AssistantDisplayTurn` (L60)
 - **type** `AssistantViewProps` (L68)
-- **type** `FolderDriveShare` (L846)
+- **type** `FolderDriveShare` (L864)
 
 ## apps/desktop/src/views/CleanupView.tsx
 - **component** `CleanupView` (L70)
@@ -63,8 +63,8 @@
 - **type** `OverviewViewProps` (L25)
 
 ## apps/desktop/src/views/SettingsView.tsx
-- **component** `SettingsView` (L17)
-- **type** `SettingsViewProps` (L4)
+- **component** `SettingsView` (L18)
+- **type** `SettingsViewProps` (L5)
 
 ## BroomSweepy/Views/AppUninstallerView.swift
 - **view** `AppUninstallerView` : View (L3)

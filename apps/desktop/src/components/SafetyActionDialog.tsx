@@ -12,6 +12,13 @@ interface SafetyActionDialogProps {
   busy: boolean;
   progress: TrashProgress | null;
   error: string | null;
+  intro?: string;
+  items?: Array<{
+    path: string;
+    logicalBytes: number;
+    detail?: string;
+  }>;
+  confirmLabel?: string;
   onConfirm: (reviewAcknowledged: boolean) => void;
   onCancel: () => void;
   onClose: () => void;
@@ -26,6 +33,9 @@ export function SafetyActionDialog({
   busy,
   progress,
   error,
+  intro,
+  items = [],
+  confirmLabel = "휴지통으로 이동",
   onConfirm,
   onCancel,
   onClose,
@@ -113,6 +123,22 @@ export function SafetyActionDialog({
           <div><span>복구 위치</span><strong>운영체제 휴지통</strong></div>
         </div>
 
+        {intro ? <p className="safety-dialog__intro">{intro}</p> : null}
+
+        {items.length > 0 ? (
+          <div className="safety-dialog__items" aria-label="휴지통으로 이동할 항목">
+            {items.map((item) => (
+              <div className="safety-dialog__item" key={item.path}>
+                <span>
+                  <strong title={item.path}>{item.path}</strong>
+                  {item.detail ? <small>{item.detail}</small> : null}
+                </span>
+                <b>{formatBytes(item.logicalBytes)}</b>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         <div className="safety-dialog__warning">
           <ShieldAlert size={18} aria-hidden="true" />
           <p>
@@ -160,7 +186,7 @@ export function SafetyActionDialog({
             onClick={() => onConfirm(reviewAcknowledged)}
           >
             <Trash2 size={16} aria-hidden="true" />
-            휴지통으로 이동
+            {confirmLabel}
           </button>
         </footer>
       </div>

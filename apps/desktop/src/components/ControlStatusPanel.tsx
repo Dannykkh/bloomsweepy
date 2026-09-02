@@ -14,6 +14,12 @@ interface ControlStatusPanelProps {
   updatingScanAccess: boolean;
   scanAccessError: string | null;
   onToggleScanAccess: () => void;
+  canEnableCleanup: boolean;
+  cleanupAccessLocked: boolean;
+  updatingCleanupAccess: boolean;
+  cleanupAccessError: string | null;
+  onToggleCleanupAccess: () => void;
+  onReviewPending: () => void;
 }
 
 const operationNames: Record<string, string> = {
@@ -101,6 +107,12 @@ export function ControlStatusPanel({
   updatingScanAccess,
   scanAccessError,
   onToggleScanAccess,
+  canEnableCleanup,
+  cleanupAccessLocked,
+  updatingCleanupAccess,
+  cleanupAccessError,
+  onToggleCleanupAccess,
+  onReviewPending,
 }: ControlStatusPanelProps) {
   const copy = connectionCopy(status);
   const operation = status.activeOperation;
@@ -109,6 +121,7 @@ export function ControlStatusPanel({
   const processedBytes = operation?.processedBytes ?? null;
   const searchEnabled = status.searchAccess.files || status.searchAccess.documents;
   const scanEnabled = status.scanAccess.enabled;
+  const cleanupEnabled = status.cleanupAccess.enabled;
   const allowedSearches = [
     status.searchAccess.files ? "파일" : null,
     status.searchAccess.documents ? "문서" : null,
@@ -160,12 +173,14 @@ export function ControlStatusPanel({
             : "연결 꺼짐"}
         </span>
         {pendingReview ? (
-          <span
+          <button
+            type="button"
             className="control-status-panel__review"
             title={`확인 가능 시각 ${formatDate(pendingReview.expiresAtUnixMs)}까지`}
+            onClick={onReviewPending}
           >
-            앱에서 최종 확인 대기 · {formatCount(pendingReview.itemCount)}개 · {formatBytes(pendingReview.totalBytes)}
-          </span>
+            검토 열기 · {formatCount(pendingReview.itemCount)}개 · {formatBytes(pendingReview.totalBytes)}
+          </button>
         ) : null}
       </div>
 
@@ -243,6 +258,43 @@ export function ControlStatusPanel({
               : scanEnabled
                 ? "검사 허용 끄기"
                 : "이번 실행에서 검사 허용"}
+          </button>
+        </div>
+
+        <div className="control-permission control-permission--cleanup">
+          <div>
+            <strong>정리 계획 검토 허용</strong>
+            <p>
+              {cleanupEnabled
+                ? "외부 AI가 익명 후보 번호로 계획을 만들 수 있습니다. 실제 경로와 승인은 앱에만 표시됩니다."
+                : "AI에는 종류와 용량 요약만 전달하고, 파일 이동은 앱에서 다시 확인합니다."}
+            </p>
+            <small>
+              {cleanupAccessLocked
+                ? "진행 중인 검사나 휴지통 작업이 끝난 뒤 이 권한을 바꿀 수 있습니다."
+                : canEnableCleanup || cleanupEnabled
+                ? "MCP에는 승인·실행·영구 삭제 기능이 없습니다. 앱을 닫으면 허용이 꺼집니다."
+                : "큰 파일·중복 검사 또는 정리 후보 검사를 먼저 완료해 주세요."}
+            </small>
+            {cleanupAccessError ? <small role="alert">정리 검토 허용 오류: {cleanupAccessError}</small> : null}
+          </div>
+          <button
+            type="button"
+            className="control-permission__scan-button"
+            aria-pressed={cleanupEnabled}
+            disabled={
+              !status.bridgeAvailable ||
+              cleanupAccessLocked ||
+              updatingCleanupAccess ||
+              (!cleanupEnabled && !canEnableCleanup)
+            }
+            onClick={onToggleCleanupAccess}
+          >
+            {updatingCleanupAccess
+              ? "바꾸는 중…"
+              : cleanupEnabled
+                ? "정리 검토 허용 끄기"
+                : "이번 실행에서 검토 허용"}
           </button>
         </div>
       </div>

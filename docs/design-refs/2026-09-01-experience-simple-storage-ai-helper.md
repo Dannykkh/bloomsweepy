@@ -12,7 +12,7 @@
 | Tauri 앱에는 폴더별 면적 비교와 하위 폴더 이동이 가능한 저장공간 트리맵이 있다 | `apps/desktop/src/components/StorageTreemapPanel.tsx` | 2026-09-01 | current | `폴더 용량 지도`로 쉬운 말로 표시 |
 | 기존 macOS 앱은 용량 관련 기능을 `공간` 범주의 하위 탭으로 묶었다 | `BroomSweepy/Views/SpaceCategoryView.swift` | 2026-09-01 | current | Tauri 메뉴 그룹의 구조 근거로만 사용 |
 | 로컬 CLI는 BroomSweepy 앱에 MCP 요청을 전달하고 실제 파일 작업은 앱이 수행한다 | `docs/cli-control.md` | 2026-09-01 | current | AI 도우미 화면에서 책임 경계를 그대로 표시 |
-| CLI 설치만으로 자동 연결되지 않으며 현재 설치본에는 연결 도구가 포함되지 않는다 | `docs/cli-control.md` | 2026-09-01 | current | 선택 기능의 준비 상태로 명시 |
+| Windows 설치본에는 앱과 같은 버전의 MCP 도구가 포함되지만 Codex·Claude Code 연결은 사용자가 설정에서 경로와 변경 내용을 확인한 뒤에만 수행한다 | `docs/cli-control.md` | 2026-09-02 | current | 설치와 외부 설정 변경 동의를 분리 |
 
 ## Benchmark Sources
 
