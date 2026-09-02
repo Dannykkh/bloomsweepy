@@ -26,11 +26,11 @@ BroomSweepyは、WindowsとmacOS向けのストレージ分析・クリーンア
 
 ## 画面プレビュー
 
-![日本語表示のBroomSweepy設定画面](docs/assets/screenshots/v1.3.0-settings-ja.png)
+![日本語表示のBroomSweepy設定画面](docs/assets/screenshots/v1.4.0-settings-ja.png)
 
 言語選択で変わるのは既存アプリの表示です。別エディションのインストールやOS設定の変更は行いません。
 
-## v1.3.0の主な更新
+## v1.4.0の主な更新
 
 - 英語を初期表示とし、英語・韓国語・日本語・簡体字中国語を1つのアプリで切り替えられるようにしました。
 - 選択した言語をHTMLの言語情報、Windowsのトレイメニュー、インストール済みAI CLIへの応答言語指定にも反映します。

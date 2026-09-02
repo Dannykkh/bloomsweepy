@@ -47,7 +47,7 @@
 - 선택 언어를 HTML `lang`, 숫자·날짜 포맷, Windows 트레이 메뉴, AI 응답 언어 요청에 함께 연결했다.
 - Rust가 보내는 한국어 진행 설명을 화면에 그대로 노출하지 않고, 작업 종류별 로컬 문구로 표시해 검사 중에도 선택 언어를 유지한다.
 - `SettingsView` 첫 영역에 가시적 label과 44px native select를 추가했고, 선택은 이 컴퓨터의 localStorage에만 저장한다.
-- 창 제목과 Windows 트레이 tooltip은 `BroomSweepy 1.3.0`으로 맞췄다.
+- 창 제목과 Windows 트레이 tooltip은 릴리스 버전인 `BroomSweepy 1.4.0`으로 맞췄다.
 - 기존 남보라색 둥근 타일을 보존하면서 빗자루 손잡이와 솔을 굵게 한 master를 만들고 Tauri·Windows·macOS·모바일 파생 아이콘을 다시 생성했다.
 - `README.md`, `README.en.md`, `README.ja.md`, `README.zh-CN.md`에 언어 이동 링크, 언어별 실제 설정 화면, 단일 설치본과 English 기본값을 기록했다.
 
@@ -66,6 +66,6 @@
 - `cargo test -p bloomsweepy-desktop --lib`: 84 PASS, 2 ignored.
 - `cargo check --workspace --locked`: PASS.
 - `cargo clippy --workspace --all-targets --locked -- -D warnings`: PASS.
-- `npm run tauri -- build`: PASS. `BroomSweepy_1.3.0_x64_en-US.msi`와 `BroomSweepy_1.3.0_x64-setup.exe` 생성, `bloomsweepy-mcp 1.3.0` sidecar 준비 확인.
+- `npm run tauri -- build`: PASS. `BroomSweepy_1.4.0_x64_en-US.msi`와 `BroomSweepy_1.4.0_x64-setup.exe` 생성, `bloomsweepy-mcp 1.4.0` sidecar 포함 확인.
 - 16px, 32px, 128px 파생 아이콘: 투명 모서리·정확한 크기·빗자루 실루엣 육안 확인 PASS.
 - README용 언어별 설정 화면은 로컬 frontend 실제 렌더를 사용했으며, 네이티브 backend가 없는 브라우저에서만 생기는 연결 오류 표시는 캡처에서 제외했다.

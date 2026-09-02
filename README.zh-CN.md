@@ -26,11 +26,11 @@ BroomSweepy 是一款适用于 Windows 和 macOS 的存储分析与清理审核�
 
 ## 界面预览
 
-![BroomSweepy 简体中文设置界面](docs/assets/screenshots/v1.3.0-settings-zh-CN.png)
+![BroomSweepy 简体中文设置界面](docs/assets/screenshots/v1.4.0-settings-zh-CN.png)
 
 语言选择只会更改现有应用的显示内容，不会安装另一个版本，也不会更改操作系统设置。
 
-## v1.3.0 主要更新
+## v1.4.0 主要更新
 
 - 一个应用内完整提供英语、韩语、日语和简体中文，并以英语作为默认显示语言。
 - 所选语言同时应用于 HTML 语言信息、Windows 托盘菜单，以及发送给已安装 AI CLI 的回复语言要求。

@@ -32,11 +32,11 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 
 | English | 한국어 |
 |---|---|
-| ![영어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-en.png) | ![한국어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-ko.png) |
+| ![영어 표시 언어 설정](docs/assets/screenshots/v1.4.0-settings-en.png) | ![한국어 표시 언어 설정](docs/assets/screenshots/v1.4.0-settings-ko.png) |
 
 | 日本語 | 简体中文 |
 |---|---|
-| ![일본어 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-ja.png) | ![중국어 간체 표시 언어 설정](docs/assets/screenshots/v1.3.0-settings-zh-CN.png) |
+| ![일본어 표시 언어 설정](docs/assets/screenshots/v1.4.0-settings-ja.png) | ![중국어 간체 표시 언어 설정](docs/assets/screenshots/v1.4.0-settings-zh-CN.png) |
 
 ![BroomSweepy 대시보드에서 드라이브 용량과 최근 변화를 확인하는 화면](docs/assets/screenshots/v1.2.0-dashboard.png)
 
@@ -44,7 +44,7 @@ BroomSweepy는 저장공간을 분석하고 파일·큰 파일·검증된 중복
 |---|---|
 | ![이미지, 컨테이너, 볼륨과 빌드 캐시를 구분하는 Docker 용량 화면](docs/assets/screenshots/v1.2.0-docker.png) | ![설치된 로컬 AI CLI와 Docker 용량 요약으로 대화하는 화면](docs/assets/screenshots/v1.2.0-docker-chat.png) |
 
-## v1.3.0 주요 업데이트
+## v1.4.0 주요 업데이트
 
 - 하나의 설치본에서 English·한국어·日本語·简体中文을 즉시 전환하고, 기본 언어는 English로 고정
 - 선택 언어를 앱 화면·HTML 언어 정보·Windows 트레이 메뉴·AI 응답 언어에 함께 적용하고 이 컴퓨터에 저장

@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-09-03
+
+### Features
+
+- **localization**: Use English by default and let users switch the desktop UI, Windows tray menu, number and date formatting, and requested AI response language between English, Korean, Japanese, and Simplified Chinese. (`3c2384d`)
+- **branding**: Replace the app icon set with a clearer broom silhouette that remains recognizable at taskbar, tray, Dock, and installer sizes. (`3c2384d`)
+
+### User Interface
+
+- Localize the main screens and progress descriptions while retaining one installer and storing the selected display language only on the current computer. (`3c2384d`)
+- Show `BroomSweepy 1.4.0` in the native window title and use English as the first-run language. (`3c2384d`)
+
+### Documentation
+
+- Add English, Korean, Japanese, and Simplified Chinese README navigation with matching settings screenshots and consistent safety guidance. (`3c2384d`)
+
+### Testing
+
+- Validate all 846 localized message keys and placeholders, four-language switching and persistence, compact-window overflow, Rust desktop behavior, and Windows installer packaging. (`3c2384d`)
+
 ## [1.3.0] - 2026-09-02
 
 ### Features

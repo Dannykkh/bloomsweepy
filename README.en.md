@@ -26,11 +26,11 @@ Use `Find files` for name and path searches, and `Search documents` for text sea
 
 ## Preview
 
-![BroomSweepy settings in English](docs/assets/screenshots/v1.3.0-settings-en.png)
+![BroomSweepy settings in English](docs/assets/screenshots/v1.4.0-settings-en.png)
 
 The language selector changes the existing application; it does not install another edition or change operating-system settings.
 
-## Highlights in v1.3.0
+## Highlights in v1.4.0
 
 - One local UI with English as the default and complete English, Korean, Japanese, and Simplified Chinese catalogs.
 - The selected language also updates HTML language metadata, the Windows tray menu, and the response-language request sent to an installed AI CLI.
