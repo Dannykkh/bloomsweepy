@@ -30,6 +30,13 @@ Use `Find files` for name and path searches, and `Search documents` for text sea
 
 The language selector changes the existing application; it does not install another edition or change operating-system settings.
 
+## Highlights in v1.5.0
+
+- Explicitly enable or disable launch at login on Windows and macOS; Settings rechecks the operating-system state after every change.
+- Login launches start with the main window hidden, while a normal second launch restores the existing window without leaving another process.
+- Inspect total, available, used, and platform-reported swap memory from a read-only Settings panel.
+- Windows swap is labeled as a commit-based estimate rather than current pagefile usage. BroomSweepy does not trim Working Sets, purge other apps, or claim to repair memory leaks.
+
 ## Highlights in v1.4.0
 
 - One local UI with English as the default and complete English, Korean, Japanese, and Simplified Chinese catalogs.
@@ -51,7 +58,7 @@ The language selector changes the existing application; it does not install anot
 - Background scanning, bounded memory and result counts, cancellation checkpoints, and stale-file revalidation.
 - Operating-system Trash or Recycle Bin moves with a synchronized JSONL journal and interrupted-operation review.
 - An optional Docker view for images, stopped containers, and old build cache. Docker volumes are never pruned.
-- Development branch, pending release verification: opt-in launch at login on Windows and macOS with OS-state rechecks, plus read-only total, available, used, and `sysinfo`-reported swap metrics. Windows swap values are commit-based estimates, not current pagefile usage. The panel does not purge caches or clean memory leaks.
+- Opt-in launch at login on Windows and macOS with OS-state rechecks, plus read-only total, available, used, and `sysinfo`-reported swap metrics. Windows swap values are commit-based estimates, not current pagefile usage. The panel does not purge caches or clean memory leaks.
 
 ## AI, CLI, and MCP boundary
 

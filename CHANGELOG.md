@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2026-09-03
+
+### Features
+
+- **startup**: Let users explicitly enable or disable launch at login on Windows and macOS, with the operating-system registration state rechecked after every change. (`b86a689`)
+- **memory**: Add a read-only system-memory panel for total, available, used, and platform-reported swap metrics. (`b86a689`)
+
+### Reliability
+
+- Start login launches with the main window hidden from creation time, keep one Windows process through an early named mutex and foreground event, and restore the existing window on a normal second launch. (`b86a689`)
+- Move Windows tray and window mutations away from nested Wry main-thread dispatch paths that could stall hide, restore, or exit handling. (`b86a689`)
+
+### Safety
+
+- Do not expose Working Set trimming, cache pressure, other-process purging, or memory-leak cleanup as a memory-cleaning action. (`b86a689`)
+- Label the Windows swap value as a commit-based estimate rather than current pagefile usage. (`b86a689`)
+
+### Documentation
+
+- Document startup defaults, platform lifecycle behavior, memory-metric limits, and the boundary with the legacy SwiftUI memory-pressure helper in all four README languages. (`b86a689`)
+
+### Testing
+
+- Validate the Windows hidden-start, background and foreground second-launch paths, tray close and restore behavior, early-launch race, Rust workspace, frontend catalogs, and MSI/NSIS packaging. (`b86a689`)
+
 ## [1.4.0] - 2026-09-03
 
 ### Features
