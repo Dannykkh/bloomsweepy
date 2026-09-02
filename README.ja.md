@@ -51,6 +51,7 @@ BroomSweepyは、WindowsとmacOS向けのストレージ分析・クリーンア
 - バックグラウンドスキャン、メモリ・結果件数の上限、キャンセル地点、実行直前の再検証。
 - OSのゴミ箱移動、同期JSONLジャーナル、中断した操作の確認。
 - 任意で有効にするDocker専用画面。Dockerボリュームは削除対象にしません。
+- 開発ブランチ（リリース前検証中）：利用者が明示的に切り替えるWindows・macOSのログイン時起動と、総容量・使用可能・使用中・`sysinfo`が報告するスワップ指標だけを読むシステムメモリ表示。Windowsのスワップ値はコミット量ベースの推定であり、ページファイルの現在使用量ではありません。キャッシュの削除やメモリリークの解消は行いません。
 
 ## AI・CLI・MCPの境界
 
@@ -74,7 +75,7 @@ npm install
 npm run tauri dev
 ```
 
-詳細な実装・安全設計は、[韓国語の詳細README](README.md)、[CLI制御](docs/cli-control.md)、[クロスプラットフォーム構成](docs/architecture/cross-platform-desktop.md)、[安全なゴミ箱操作](docs/architecture/safe-trash-actions.md)を参照してください。
+詳細な実装・安全設計は、[韓国語の詳細README](README.md)、[CLI制御](docs/cli-control.md)、[クロスプラットフォーム構成](docs/architecture/cross-platform-desktop.md)、[自動起動とシステムメモリ状態](docs/architecture/startup-memory-status.md)、[安全なゴミ箱操作](docs/architecture/safe-trash-actions.md)を参照してください。
 
 ## 重要：データ損失と復元に関する責任
 

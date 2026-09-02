@@ -13,12 +13,15 @@ use bloomsweepy_core::{
 };
 use serde::Serialize;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use sysinfo::Disks;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+const BACKGROUND_ARG: &str = "--background";
 
 mod action_recovery;
 mod assistant_provider;
@@ -28,7 +31,10 @@ mod docker_tools;
 mod external_program;
 mod mcp_registration;
 mod system_inventory;
+mod system_memory;
 mod trash_actions;
+#[cfg(windows)]
+mod windows_single_instance;
 #[cfg(windows)]
 mod windows_tray;
 
@@ -37,16 +43,74 @@ use system_inventory::{
     registry_residue_inventory_with_cancellation,
 };
 
+struct ForegroundActivationState {
+    requested: AtomicBool,
+    #[cfg(windows)]
+    listener_stopped: AtomicBool,
+    #[cfg(windows)]
+    windows_instance: windows_single_instance::PrimaryInstance,
+}
+
+impl ForegroundActivationState {
+    #[cfg(windows)]
+    fn with_windows_instance(windows_instance: windows_single_instance::PrimaryInstance) -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+            listener_stopped: AtomicBool::new(false),
+            windows_instance,
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn new() -> Self {
+        Self {
+            requested: AtomicBool::new(false),
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+    }
+
+    #[cfg(windows)]
+    fn stop_listener(&self) {
+        self.listener_stopped.store(true, Ordering::Release);
+    }
+
+    #[cfg(windows)]
+    fn listener_is_stopped(&self) -> bool {
+        self.listener_stopped.load(Ordering::Acquire)
+    }
+
+    fn is_requested(&self) -> bool {
+        if self.requested.load(Ordering::Acquire) {
+            return true;
+        }
+        #[cfg(windows)]
+        if self.windows_instance.foreground_requested() {
+            return true;
+        }
+        false
+    }
+}
+
 #[tauri::command]
-fn set_application_language(app: AppHandle, language: String) -> Result<(), String> {
+async fn set_application_language(app: AppHandle, language: String) -> Result<(), String> {
     if !matches!(language.as_str(), "en" | "ko" | "ja" | "zh-CN") {
         return Err("unsupported application language".to_owned());
     }
     #[cfg(windows)]
-    windows_tray::set_language(&app, &language)?;
+    {
+        tauri::async_runtime::spawn_blocking(move || windows_tray::set_language(&app, &language))
+            .await
+            .map_err(|error| format!("Windows tray language worker failed: {error}"))?
+    }
     #[cfg(not(windows))]
-    let _ = app;
-    Ok(())
+    {
+        let _ = (app, language);
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -1567,7 +1631,52 @@ fn cleanup_scan_config(installed_apps: &InstalledAppInventory) -> CleanupScanCon
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
+    let background_launch = should_start_hidden(std::env::args_os());
+    #[cfg(windows)]
+    let windows_instance = match windows_single_instance::acquire_or_activate(!background_launch) {
+        Ok(windows_single_instance::AcquireOutcome::Primary(instance)) => instance,
+        Ok(windows_single_instance::AcquireOutcome::Secondary) => return,
+        Err(error) => {
+            eprintln!("Windows 단일 실행 잠금을 준비하지 못했습니다: {error}");
+            return;
+        }
+    };
+    #[cfg(windows)]
+    let foreground_activation_requested = Arc::new(
+        ForegroundActivationState::with_windows_instance(windows_instance),
+    );
+    #[cfg(not(windows))]
+    let foreground_activation_requested = Arc::new(ForegroundActivationState::new());
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let single_instance_activation = Arc::clone(&foreground_activation_requested);
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(
+        move |app, args, _cwd| {
+            if !contains_background_arg(&args) {
+                single_instance_activation.request();
+                queue_main_window_restore(app.clone());
+            }
+        },
+    ));
+    #[cfg(any(windows, target_os = "macos"))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        Some(vec![BACKGROUND_ARG]),
+    ));
+    let mut context = tauri::generate_context!();
+    if background_launch
+        && let Some(main_window) = context
+            .config_mut()
+            .app
+            .windows
+            .iter_mut()
+            .find(|window| window.label == "main")
+    {
+        main_window.visible = false;
+    }
+
+    let app = builder
         .manage(ScanRuntime::default())
         .manage(StoredReports::default())
         .manage(assistant_provider::AssistantProviderState::default())
@@ -1618,6 +1727,7 @@ pub fn run() {
             docker_tools::cancel_docker_cleanup,
             set_application_language,
             get_system_overview,
+            system_memory::get_system_memory_status,
             is_scan_running,
             start_scan,
             get_scan_report_snapshot,
@@ -1639,19 +1749,36 @@ pub fn run() {
             trash_actions::trash_cleanup_candidates,
             cancel_scan
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("failed to build BroomSweepy");
 
-    app.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::Ready)
-            && let Some(main_window) = app_handle.get_webview_window("main")
-        {
-            let window_title = format!("BroomSweepy {}", app_handle.package_info().version);
-            if let Err(error) = main_window.set_title(&window_title) {
-                eprintln!("BroomSweepy 버전 제목을 설정하지 못했습니다: {error}");
+    app.run(move |app_handle, event| {
+        if matches!(event, tauri::RunEvent::Ready) {
+            #[cfg(windows)]
+            queue_windows_activation_listener(
+                app_handle.clone(),
+                Arc::clone(&foreground_activation_requested),
+            );
+            queue_ready_window_updates(
+                app_handle.clone(),
+                background_launch,
+                Arc::clone(&foreground_activation_requested),
+            );
+        }
+        #[cfg(target_os = "macos")]
+        if matches!(
+            event,
+            tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
             }
+        ) {
+            foreground_activation_requested.request();
+            queue_main_window_restore(app_handle.clone());
         }
         if matches!(event, tauri::RunEvent::Exit) {
+            #[cfg(windows)]
+            foreground_activation_requested.stop_listener();
             assistant_provider::shutdown(app_handle);
             docker_tools::shutdown(app_handle);
             if let Some(runtime) = app_handle.try_state::<ScanRuntime>() {
@@ -1664,12 +1791,144 @@ pub fn run() {
     });
 }
 
+fn contains_background_arg<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    args.into_iter()
+        .any(|arg| arg.as_ref() == OsStr::new(BACKGROUND_ARG))
+}
+
+fn should_start_hidden<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    cfg!(any(windows, target_os = "macos")) && contains_background_arg(args)
+}
+
+fn restore_main_window_from_worker(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+#[cfg(windows)]
+fn queue_windows_activation_listener(
+    app: AppHandle,
+    foreground_activation_requested: Arc<ForegroundActivationState>,
+) {
+    let worker = std::thread::Builder::new()
+        .name("broomsweepy-single-instance-listener".to_owned())
+        .spawn(move || {
+            while !foreground_activation_requested.listener_is_stopped() {
+                match foreground_activation_requested
+                    .windows_instance
+                    .wait_for_foreground_request(Duration::from_millis(250))
+                {
+                    Ok(false) => continue,
+                    Ok(true) => {
+                        // This process-local flag is intentionally never reset: once a
+                        // normal launch requested the window, startup must not hide it.
+                        foreground_activation_requested.request();
+                        if let Err(error) = foreground_activation_requested
+                            .windows_instance
+                            .reset_foreground_request()
+                        {
+                            eprintln!("기존 창 활성화 신호를 초기화하지 못했습니다: {error}");
+                            break;
+                        }
+                        restore_main_window_from_worker(&app);
+                    }
+                    Err(error) => {
+                        eprintln!("기존 창 활성화 신호를 기다리지 못했습니다: {error}");
+                        break;
+                    }
+                }
+            }
+        });
+
+    if let Err(error) = worker {
+        eprintln!("단일 실행 활성화 작업자를 시작하지 못했습니다: {error}");
+    }
+}
+
+fn queue_ready_window_updates(
+    app: AppHandle,
+    background_launch: bool,
+    foreground_activation_requested: Arc<ForegroundActivationState>,
+) {
+    let worker = std::thread::Builder::new()
+        .name("broomsweepy-window-ready".to_owned())
+        .spawn(move || {
+            let Some(main_window) = app.get_webview_window("main") else {
+                return;
+            };
+            let window_title = format!("BroomSweepy {}", app.package_info().version);
+            if let Err(error) = main_window.set_title(&window_title) {
+                eprintln!("BroomSweepy 버전 제목을 설정하지 못했습니다: {error}");
+            }
+            if !background_launch {
+                return;
+            }
+
+            if foreground_activation_requested.is_requested() {
+                restore_main_window_from_worker(&app);
+                return;
+            }
+            if let Err(error) = main_window.hide() {
+                eprintln!("자동 시작 창을 숨기지 못했습니다: {error}");
+                return;
+            }
+
+            if foreground_activation_requested.is_requested() {
+                restore_main_window_from_worker(&app);
+            }
+        });
+
+    if let Err(error) = worker {
+        eprintln!("초기 창 설정 작업자를 시작하지 못했습니다: {error}");
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn queue_main_window_restore(app: AppHandle) {
+    let worker = std::thread::Builder::new()
+        .name("broomsweepy-window-restore".to_owned())
+        .spawn(move || {
+            restore_main_window_from_worker(&app);
+        });
+
+    if let Err(error) = worker {
+        eprintln!("기존 창 복원 작업자를 시작하지 못했습니다: {error}");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn background_launch_requires_the_explicit_flag() {
+        assert!(contains_background_arg(["broomsweepy", "--background"]));
+        assert!(!contains_background_arg(["broomsweepy"]));
+        assert!(!contains_background_arg([
+            "broomsweepy",
+            "--background-task"
+        ]));
+
+        assert_eq!(
+            should_start_hidden(["broomsweepy", "--background"]),
+            cfg!(any(windows, target_os = "macos"))
+        );
+    }
 
     #[cfg(windows)]
     #[test]

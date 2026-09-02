@@ -51,6 +51,7 @@ BroomSweepy 是一款适用于 Windows 和 macOS 的存储分析与清理审核�
 - 后台扫描、内存与结果数量上限、取消检查点，以及执行前重新验证。
 - 使用同步 JSONL 日志记录操作，移动到操作系统回收站，并审核中断的操作。
 - 可选的 Docker 专用界面；Docker 卷永远不会被清理。
+- 开发分支（发布前验证中）：由用户明确开关的 Windows/macOS 登录时启动，以及只读的内存总量、可用量、已用量和 `sysinfo` 所报告的交换空间指标。Windows 交换空间数值是基于提交量的估算值，并非页面文件的当前使用量；该面板不会清理缓存或内存泄漏。
 
 ## AI、CLI 与 MCP 的边界
 
@@ -74,7 +75,7 @@ npm install
 npm run tauri dev
 ```
 
-有关详细实现和安全边界，请参阅[韩语详细 README](README.md)、[CLI 控制](docs/cli-control.md)、[跨平台架构](docs/architecture/cross-platform-desktop.md)和[安全回收站操作](docs/architecture/safe-trash-actions.md)。
+有关详细实现和安全边界，请参阅[韩语详细 README](README.md)、[CLI 控制](docs/cli-control.md)、[跨平台架构](docs/architecture/cross-platform-desktop.md)、[自动启动与系统内存状态](docs/architecture/startup-memory-status.md)和[安全回收站操作](docs/architecture/safe-trash-actions.md)。
 
 ## 重要提示：数据丢失与恢复责任
 

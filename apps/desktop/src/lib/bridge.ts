@@ -21,6 +21,7 @@ import type {
   ScanConfig,
   ScanProgress,
   ScanReport,
+  SystemMemoryStatus,
   SystemOverview,
   CleanupTrashRequest,
   DuplicateTrashRequest,
@@ -179,6 +180,10 @@ export function unregisterMcpClient(
 
 export function getSystemOverview(): Promise<SystemOverview> {
   return invoke<SystemOverview>("get_system_overview");
+}
+
+export function getSystemMemoryStatus(): Promise<SystemMemoryStatus> {
+  return invoke<SystemMemoryStatus>("get_system_memory_status");
 }
 
 export function startScan(root: string, config: ScanConfig): Promise<ScanReport> {

@@ -7033,6 +7033,144 @@ option {
   transform: translateX(20px);
 }
 
+.developer-tool-toggle__control input:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.memory-status-panel .settings-panel__heading {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.memory-status-panel__refresh {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+}
+
+.memory-status-panel__body {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.memory-status-panel__usage {
+  display: grid;
+  gap: 8px;
+}
+
+.memory-status-panel__usage > span {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.memory-status-panel__usage strong,
+.memory-status-panel__usage b,
+.memory-status-panel__metrics dt,
+.memory-status-panel__metrics dd,
+.memory-status-panel__captured,
+.memory-status-panel__estimate-note,
+.memory-status-panel__notice,
+.settings-inline-state,
+.settings-inline-error {
+  font-size: var(--font-size-ui-min);
+}
+
+.memory-status-panel__usage b,
+.memory-status-panel__metrics dd {
+  font-family: "JetBrains Mono", "Pretendard Variable", monospace;
+}
+
+.memory-status-panel__usage b {
+  color: #b7c8ff;
+}
+
+.memory-status-panel__meter {
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--canvas-elevated);
+}
+
+.memory-status-panel__meter > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 180ms ease;
+}
+
+.memory-status-panel__metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  border-top: 1px solid var(--line);
+  border-left: 1px solid var(--line);
+}
+
+.memory-status-panel__metrics > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 10px 11px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.memory-status-panel__metrics dt {
+  color: var(--text-muted);
+}
+
+.memory-status-panel__metrics dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.settings-panel .memory-status-panel__captured,
+.settings-panel .memory-status-panel__estimate-note,
+.settings-panel .memory-status-panel__notice {
+  margin: 0;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.settings-panel .memory-status-panel__estimate-note {
+  padding-left: 10px;
+  border-left: 2px solid var(--warning);
+}
+
+.settings-panel .memory-status-panel__notice {
+  padding: 12px 18px 15px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-panel .settings-inline-state {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin: 0;
+  padding: 11px 18px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  border-top: 1px solid var(--line);
+}
+
+.settings-panel .settings-inline-error {
+  margin: 12px 18px;
+  padding: 9px 11px;
+  line-height: 1.5;
+  color: #ffb2b2;
+  border: 1px solid rgb(242 100 100 / 28%);
+  border-radius: 9px;
+  background: rgb(78 31 35 / 28%);
+}
+
 .docker-settings-link-row {
   display: flex;
   gap: 18px;
@@ -7507,6 +7645,10 @@ option {
 
   .developer-tool-toggle__control {
     justify-content: space-between;
+  }
+
+  .memory-status-panel__metrics {
+    grid-template-columns: 1fr;
   }
 
   .docker-settings-link-row .secondary-button,

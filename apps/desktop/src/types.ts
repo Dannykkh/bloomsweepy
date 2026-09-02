@@ -476,6 +476,16 @@ export interface SystemOverview {
   volumes: VolumeInfo[];
 }
 
+export interface SystemMemoryStatus {
+  platform: string;
+  totalBytes: number;
+  availableBytes: number;
+  usedBytes: number;
+  totalSwapBytes: number;
+  usedSwapBytes: number;
+  capturedAtUnixMs: number;
+}
+
 export type ScanUiState = "idle" | "scanning" | "success" | "cancelled" | "error";
 
 export type StorageCategoryKind =

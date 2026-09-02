@@ -94,6 +94,41 @@ const englishMessages = {
     "Your language choice is stored only on this computer.",
   "언어 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 언어를 사용합니다.":
     "The language choice could not be saved. The selected language will remain active for this session.",
+  "로그인 시 자동 시작": "Start at login",
+  "운영체제에 등록된 실제 시작 상태를 표시합니다.":
+    "Shows the startup state currently registered with the operating system.",
+  "BroomSweepy 자동 시작": "BroomSweepy autostart",
+  "기본값은 사용 안 함입니다. 켜면 로그인할 때 창을 띄우지 않고 백그라운드에서 시작합니다.":
+    "Off by default. When enabled, BroomSweepy starts in the background without opening a window when you sign in.",
+  "Windows 시작 앱 또는 macOS 로그인 항목 설정에서도 끌 수 있습니다.":
+    "You can also turn it off in Windows Startup apps or macOS Login Items.",
+  "자동 시작 사용": "Use autostart",
+  "시작 설정 적용 중…": "Applying startup setting…",
+  "시작 설정 확인 중…": "Checking startup setting…",
+  "확인 불가": "Unavailable",
+  "켜짐": "On",
+  "꺼짐": "Off",
+  "자동 시작 설정을 처리하지 못했습니다. {{detail}}":
+    "Could not update the startup setting. {{detail}}",
+  "요청한 자동 시작 상태가 운영체제에 반영되지 않았습니다.":
+    "The operating system did not apply the requested autostart state.",
+  "시스템 메모리 상태": "System memory status",
+  "운영체제가 보고하는 현재 메모리 수치를 읽습니다.":
+    "Reads the current memory figures reported by the operating system.",
+  "메모리 상태 새로 고침": "Refresh memory status",
+  "메모리 상태 확인 중…": "Checking memory status…",
+  "메모리 사용률": "Memory usage",
+  "전체 메모리": "Total memory",
+  "사용 가능": "Available",
+  "스왑 사용량": "Swap usage",
+  "스왑/커밋 추정": "Swap/commit estimate",
+  "Windows에서는 커밋 사용량에서 전체 물리 메모리를 뺀 추정치이며 페이지 파일의 실제 사용량이 아닙니다.":
+    "On Windows, this is estimated as committed memory minus total physical memory; it is not actual pagefile usage.",
+  "{{platform}} · {{date}} 확인": "{{platform}} · checked {{date}}",
+  "이 화면은 상태만 읽습니다. 다른 앱의 메모리, 누수 메모리 또는 대기(standby) 메모리를 정리하지 않습니다.":
+    "This view only reads status. It does not clean memory used by other apps, leaked memory, or standby memory.",
+  "메모리 상태를 확인하지 못했습니다. {{detail}}":
+    "Could not check memory status. {{detail}}",
   "파일 크기 기준": "File size thresholds",
   "다음 스캔부터 적용됩니다.": "Applied to the next scan.",
   "큰 파일 최소 크기": "Minimum large-file size",

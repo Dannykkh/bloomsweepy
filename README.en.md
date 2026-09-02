@@ -51,6 +51,7 @@ The language selector changes the existing application; it does not install anot
 - Background scanning, bounded memory and result counts, cancellation checkpoints, and stale-file revalidation.
 - Operating-system Trash or Recycle Bin moves with a synchronized JSONL journal and interrupted-operation review.
 - An optional Docker view for images, stopped containers, and old build cache. Docker volumes are never pruned.
+- Development branch, pending release verification: opt-in launch at login on Windows and macOS with OS-state rechecks, plus read-only total, available, used, and `sysinfo`-reported swap metrics. Windows swap values are commit-based estimates, not current pagefile usage. The panel does not purge caches or clean memory leaks.
 
 ## AI, CLI, and MCP boundary
 
@@ -94,7 +95,7 @@ npm run check
 npm run build
 ```
 
-For detailed architecture and safety notes, see the [Korean reference README](README.md), [CLI control](docs/cli-control.md), [cross-platform architecture](docs/architecture/cross-platform-desktop.md), and [safe Trash actions](docs/architecture/safe-trash-actions.md).
+For detailed architecture and safety notes, see the [Korean reference README](README.md), [CLI control](docs/cli-control.md), [cross-platform architecture](docs/architecture/cross-platform-desktop.md), [startup and system-memory status](docs/architecture/startup-memory-status.md), and [safe Trash actions](docs/architecture/safe-trash-actions.md).
 
 ## Important: data loss and recovery responsibility
 
