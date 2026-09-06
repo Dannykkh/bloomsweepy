@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.1] - 2026-09-06
+
+### Fixed
+
+- **build**: Align the shared Tauri configuration with the common `macos-private-api` Cargo feature so Windows `cargo clippy` and test builds no longer fail the feature/configuration consistency check. Preserve macOS native glass and opaque window defaults on other platforms. ([738cd1d](https://github.com/Dannykkh/bloomsweepy/commit/738cd1d))
+
+### Tests
+
+- Add regressions for the shared feature/configuration contract and platform-specific window materials. The frontend suite now contains 37 tests. ([738cd1d](https://github.com/Dannykkh/bloomsweepy/commit/738cd1d))
+
+The v1.6.0 Mac release and tag remain unchanged. Its Windows CI failed before installers were produced; v1.6.1 carries the build fix. The UI is unchanged, so the v1.6.0 documentation screenshots still apply. Platform-specific runtime and signing limitations remain as documented below.
+
 ## [1.6.0] - 2026-09-06
 
 ### Features
