@@ -5,11 +5,17 @@ import {
   Folder,
   FolderOpen,
   HardDrive,
+  Ellipsis,
+  MapPin,
   RefreshCw,
   Search,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
+import { SafetyActionDialog } from "./SafetyActionDialog";
+import { TreemapItemMenu, type TreemapMenuTarget } from "./TreemapItemMenu";
+import { revealPath } from "../lib/bridge";
 import { formatBytes, formatCount, formatDate, formatDuration } from "../lib/format";
 import type {
   DirectoryBreadcrumb,
@@ -17,6 +23,8 @@ import type {
   DirectoryScanProgress,
   DirectoryScanReport,
   ScanUiState,
+  TrashOperationResult,
+  TrashProgress,
 } from "../types";
 import { useLanguage } from "../i18n";
 
@@ -32,6 +40,10 @@ interface StorageTreemapPanelProps {
   onPickFolder: () => void;
   onStart: (path: string, breadcrumbs?: DirectoryBreadcrumb[]) => void;
   onCancel: () => void;
+  onReveal?: (path: string) => Promise<void>;
+  onTrash?: (path: string, generation: number) => Promise<TrashOperationResult>;
+  onCancelTrash?: () => void;
+  trashProgress?: TrashProgress | null;
 }
 
 interface DisplayItem {
@@ -65,9 +77,24 @@ export function StorageTreemapPanel({
   onPickFolder,
   onStart,
   onCancel,
+  onReveal = revealPath,
+  onTrash,
+  onCancelTrash,
+  trashProgress = null,
 }: StorageTreemapPanelProps) {
   const { t } = useLanguage();
   const scanning = state === "scanning";
+  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const [menu, setMenu] = useState<TreemapMenuTarget | null>(null);
+  const [pendingTrash, setPendingTrash] = useState<{ node: DirectoryNode; generation: number } | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(false);
+  const activePath = menu?.node.path ?? hoveredPath ?? focusedPath;
+  const itemBlocked = blocked || scanning || actionBusy;
   const mapItems = useMemo(
     () => prepareDisplayItems(report, (count) => t("기타 {{count}}개", { count })),
     [report, t],
@@ -77,13 +104,84 @@ export function StorageTreemapPanel({
     () => layoutTreemap(mapItems, canvasSize.width, canvasSize.height),
     [canvasSize.height, canvasSize.width, mapItems],
   );
+  const tones = useMemo(() => new Map(layout.map((item) => [item.path, item.tone])), [layout]);
+  const closeMenu = useCallback(() => {
+    setMenu(null);
+    if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
+  }, []);
+
+  useEffect(() => {
+    setMenu(null);
+    setHoveredPath(null);
+    setFocusedPath(null);
+  }, [report, itemBlocked]);
+
+  function showMenu(node: DirectoryNode, trigger: HTMLElement, x: number, y: number) {
+    if (itemBlocked) return;
+    returnFocusRef.current = trigger;
+    setMenu({ node, trigger, x, y });
+  }
+
+  function keyboardMenu(event: KeyboardEvent<HTMLElement>, node: DirectoryNode) {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    const rect = event.currentTarget.getBoundingClientRect();
+    showMenu(node, event.currentTarget, rect.left, rect.bottom);
+  }
+
+  async function revealNode(node: DirectoryNode) {
+    if (itemBlocked) return;
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      await onReveal(node.path);
+      setActionNotice(t("{{name}} 위치를 열었습니다", { name: node.name }));
+    } catch (reason) {
+      setActionError(String(reason));
+    }
+  }
 
   function openNode(node: DirectoryNode) {
-    if (!node.isDirectory || scanning || blocked) return;
+    if (itemBlocked) return;
+    if (!node.isDirectory) { void revealNode(node); return; }
+    setActionError(null);
+    setActionNotice(null);
     onStart(node.path, [
       ...breadcrumbs,
       { name: node.name, path: node.path },
     ]);
+  }
+
+  function closeTrash() {
+    if (busyRef.current) return;
+    setPendingTrash(null);
+    setActionError(null);
+    requestAnimationFrame(() => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
+      else document.getElementById("storage-map-title")?.focus({ preventScroll: true });
+    });
+  }
+
+  async function confirmTrash() {
+    if (!pendingTrash || !onTrash || busyRef.current || itemBlocked) return;
+    busyRef.current = true;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      const result = await onTrash(pendingTrash.node.path, pendingTrash.generation);
+      if (result.movedCount === 0) {
+        setActionError(result.items.find((item) => item.message)?.message ?? t("이동하지 않았습니다. 창을 닫고 다시 검사하세요."));
+      } else {
+        setActionNotice(t("{{name}}을 휴지통으로 이동했습니다", { name: pendingTrash.node.name }));
+        busyRef.current = false;
+        closeTrash();
+      }
+    } catch (reason) {
+      setActionError(`${String(reason)} · ${t("창을 닫고 지도를 다시 검사하세요.")}`);
+    } finally {
+      busyRef.current = false;
+      setActionBusy(false);
+    }
   }
 
   function navigateTo(index: number) {
@@ -93,12 +191,13 @@ export function StorageTreemapPanel({
   }
 
   return (
-    <section className="storage-map" id="storage-map" aria-labelledby="storage-map-title">
+    <>
+    <section className="storage-map" id="storage-map" aria-labelledby="storage-map-title" inert={pendingTrash ? true : undefined}>
       <header className="storage-map__header">
         <div>
           <p className="eyebrow">{t("저장공간 트리맵")}</p>
-          <h2 id="storage-map-title">{t("폴더 용량 지도")}</h2>
-          <p>{t("사각형이 클수록 더 많은 용량을 사용합니다. 폴더를 누르면 안쪽으로 이동합니다.")}</p>
+          <h2 id="storage-map-title" tabIndex={-1}>{t("폴더 용량 지도")}</h2>
+          <p>{t("큰 사각형이 더 많은 용량을 차지합니다. 폴더는 안쪽으로, 파일은 위치를 엽니다.")}</p>
         </div>
         {showAction ? <div className="storage-map__actions">
           {scanning ? (
@@ -183,16 +282,29 @@ export function StorageTreemapPanel({
             <div className="storage-map__workspace">
               <div className="storage-map__canvas" ref={canvasRef} aria-label={t("파일과 폴더 크기 비교 지도")}>
                 {layout.map((item) => {
-                  const canOpen = item.node?.isDirectory === true;
+                  const isFolder = item.node?.isDirectory === true;
+                  const canOpen = Boolean(item.node) && !itemBlocked;
                   const showName = item.width >= 70 && item.height >= 34;
                   const showSize = item.width >= 92 && item.height >= 56;
                   return (
                     <button
-                      className={`storage-map-cell storage-map-cell--tone-${item.tone}`}
+                      className={`storage-map-cell storage-map-cell--tone-${item.tone}${item.path && activePath === item.path ? " is-highlighted" : ""}`}
                       key={item.id}
                       type="button"
                       aria-disabled={!canOpen}
                       tabIndex={canOpen ? 0 : -1}
+                      aria-label={`${item.name} · ${formatBytes(item.logicalBytes)}${item.node ? ` · ${isFolder ? t("하위 폴더 탐색") : t("파일 위치 열기")}` : ""}`}
+                      data-path={item.path ?? undefined}
+                      onMouseEnter={() => setHoveredPath(item.path)}
+                      onMouseLeave={() => setHoveredPath(null)}
+                      onFocus={() => setFocusedPath(item.path)}
+                      onBlur={() => setFocusedPath(null)}
+                      onKeyDown={(event) => { if (item.node) keyboardMenu(event, item.node); }}
+                      onContextMenu={(event) => {
+                        if (!item.node) return;
+                        event.preventDefault();
+                        showMenu(item.node, event.currentTarget, event.clientX, event.clientY);
+                      }}
                       onClick={() => {
                         if (item.node) openNode(item.node);
                       }}
@@ -201,12 +313,13 @@ export function StorageTreemapPanel({
                         top: item.y + 2,
                         width: Math.max(1, item.width - 4),
                         height: Math.max(1, item.height - 4),
+                        padding: showName ? 8 : 0,
                       }}
-                      title={`${item.name} · ${formatBytes(item.logicalBytes)}${canOpen ? ` · ${t("하위 폴더 탐색")}` : ""}`}
+                      title={`${item.name} · ${formatBytes(item.logicalBytes)}${item.node ? ` · ${isFolder ? t("하위 폴더 탐색") : t("파일 위치 열기")}` : ""}`}
                     >
                       {showName ? (
                         <span className="storage-map-cell__name">
-                          {canOpen ? <Folder size={14} aria-hidden="true" /> : <File size={14} aria-hidden="true" />}
+                          {isFolder ? <Folder size={14} aria-hidden="true" /> : <File size={14} aria-hidden="true" />}
                           {item.name}
                         </span>
                       ) : null}
@@ -221,18 +334,30 @@ export function StorageTreemapPanel({
               <aside className="storage-map__ranking" aria-label={t("현재 폴더 용량 순위")}>
                 <div className="storage-map__ranking-heading">
                   <strong>{t("용량 순위")}</strong>
-                  <small>{t("폴더를 선택하면 하위로 이동")}</small>
+                  <small>{t("클릭으로 열기 · 더보기로 작업")}</small>
                 </div>
                 <div className="storage-map__ranking-list">
                   {report.children.slice(0, 12).map((node, index) => (
+                    <div key={node.path} data-path={node.path}
+                      className={`storage-map__ranking-row${activePath === node.path ? " is-highlighted" : ""}`}
+                      onMouseEnter={() => setHoveredPath(node.path)} onMouseLeave={() => setHoveredPath(null)}
+                      onFocus={() => setFocusedPath(node.path)}
+                      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setFocusedPath(null); }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        const trigger = event.currentTarget.querySelector<HTMLButtonElement>(".storage-map__item-more");
+                        if (trigger) showMenu(node, trigger, event.clientX, event.clientY);
+                      }}>
                     <button
+                      className="storage-map__rank-open"
                       type="button"
-                      key={node.path}
-                      disabled={!node.isDirectory || scanning || blocked}
+                      disabled={itemBlocked}
+                      aria-label={`${node.name} · ${node.isDirectory ? t("하위 폴더 탐색") : t("파일 위치 열기")}`}
                       onClick={() => openNode(node)}
+                      onKeyDown={(event) => keyboardMenu(event, node)}
                       title={node.path}
                     >
-                      <span className={`storage-map__rank storage-map__rank--tone-${index % 6}`}>
+                      <span className={`storage-map__rank storage-map__rank--tone-${tones.get(node.path) ?? "neutral"}`}>
                         {index + 1}
                       </span>
                       <span>
@@ -248,9 +373,18 @@ export function StorageTreemapPanel({
                       </span>
                       <span>
                         <strong>{formatBytes(node.logicalBytes)}</strong>
-                        {node.isDirectory ? <ChevronRight size={13} aria-hidden="true" /> : null}
+                        {node.isDirectory ? <ChevronRight size={13} aria-hidden="true" /> : <MapPin size={13} aria-hidden="true" />}
                       </span>
                     </button>
+                    <button className="storage-map__item-more" type="button" disabled={itemBlocked}
+                      aria-label={t("{{name}} 더보기", { name: node.name })} aria-haspopup="menu"
+                      aria-expanded={menu?.node.path === node.path}
+                      onKeyDown={(event) => keyboardMenu(event, node)}
+                      onClick={(event) => {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        showMenu(node, event.currentTarget, rect.right, rect.bottom);
+                      }}><Ellipsis size={18} aria-hidden="true" /></button>
+                    </div>
                   ))}
                 </div>
               </aside>
@@ -348,7 +482,28 @@ export function StorageTreemapPanel({
           <small>{root ? t("위 안내의 버튼으로 폴더 용량 지도를 만드세요.") : t("폴더를 고른 뒤 용량 지도를 만들 수 있습니다.")}</small>
         </div>
       )}
+      {actionNotice ? <p className="storage-map__action-notice" role="status">{actionNotice}</p> : null}
+      {actionError && !pendingTrash ? <p className="storage-map__error" role="alert">{actionError}</p> : null}
     </section>
+    {menu ? <TreemapItemMenu target={menu} canTrash={Boolean(onTrash && report?.generation)}
+      onClose={closeMenu}
+      onOpen={() => { closeMenu(); openNode(menu.node); }}
+      onReveal={() => { closeMenu(); void revealNode(menu.node); }}
+      onTrash={() => {
+        if (!report || menu.node.isDirectory || !onTrash || itemBlocked) return;
+        setActionError(null);
+        setActionNotice(null);
+        setPendingTrash({ node: menu.node, generation: report.generation });
+        setMenu(null);
+      }} /> : null}
+    {pendingTrash ? createPortal(<SafetyActionDialog open title={t("파일 휴지통 이동")}
+      itemCount={1} logicalBytes={pendingTrash.node.logicalBytes} busy={actionBusy}
+      progress={trashProgress} error={actionError}
+      intro={t("이 파일이 필요 없는지 확인하세요. 폴더는 이동하지 않습니다.")}
+      items={[{ path: pendingTrash.node.path, logicalBytes: pendingTrash.node.logicalBytes }]}
+      onConfirm={() => void confirmTrash()} onCancel={() => onCancelTrash?.()} onClose={closeTrash}
+    />, document.body) : null}
+    </>
   );
 }
 

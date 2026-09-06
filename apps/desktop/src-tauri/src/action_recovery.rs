@@ -59,6 +59,7 @@ pub(crate) struct ActionHistoryEntry {
 pub(crate) enum ActionHistoryKind {
     DuplicateFiles,
     CleanupCandidates,
+    DirectoryFile,
     #[default]
     Unknown,
 }

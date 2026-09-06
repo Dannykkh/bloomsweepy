@@ -1,25 +1,21 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import {
   Boxes,
-  FileSearch,
+  Folder,
   FolderOpen,
+  Gauge,
   HardDrive,
   LayoutDashboard,
-  Map,
   Menu,
   MessageSquare,
-  Search,
   Settings,
   Sparkles,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { formatBytes, formatDate } from "../lib/format";
 import { useLanguage, type MessageKey } from "../i18n";
-import type {
-  ScanReport,
-  ViewId,
-  VolumeInfo,
-} from "../types";
+import type { ScanReport, ViewId, VolumeInfo } from "../types";
 
 interface AppShellProps {
   activeView: ViewId;
@@ -35,76 +31,99 @@ interface AppShellProps {
   onPickFolder: () => void;
 }
 
-const navigationBeforeDocker: Array<{
+type NavigationTone =
+  | "dashboard"
+  | "space"
+  | "files"
+  | "performance"
+  | "assistant"
+  | "docker"
+  | "settings";
+
+interface NavigationItem {
   id: ViewId;
   label: MessageKey;
   description: MessageKey;
-  icon: typeof Map;
-}> = [
-  {
-    id: "dashboard",
-    label: "대시보드",
-    description: "디스크와 최근 변화",
-    icon: LayoutDashboard,
-  },
-  {
-    id: "overview",
-    label: "용량 관리",
-    description: "지도·큰 파일·중복",
-    icon: Map,
-  },
-];
+  icon: LucideIcon;
+  tone: NavigationTone;
+  activeViews: ReadonlySet<ViewId>;
+}
 
-const dockerNavigation: {
-  id: ViewId;
-  label: MessageKey;
-  description: MessageKey;
-  icon: typeof Map;
-} = {
-  id: "docker" as ViewId,
-  label: "Docker 용량",
-  description: "이미지·캐시·컨테이너",
-  icon: Boxes,
-};
-
-const navigationAfterDocker: Array<{
-  id: ViewId;
-  label: MessageKey;
-  description: MessageKey;
-  icon: typeof Map;
-}> = [
-  {
-    id: "files",
-    label: "파일 이름 찾기",
-    description: "이름과 위치로 찾기",
-    icon: Search,
-  },
-  {
-    id: "documents",
-    label: "문서 내용 찾기",
-    description: "문장으로 찾기",
-    icon: FileSearch,
-  },
-  {
-    id: "assistant",
-    label: "대화",
-    description: "설치된 AI CLI",
-    icon: MessageSquare,
-  },
-  {
-    id: "settings",
-    label: "설정",
-    description: "스캔 기준과 안전",
-    icon: Settings,
-  },
-];
-
+const dashboardViews = new Set<ViewId>(["dashboard"]);
 const storageViews = new Set<ViewId>([
   "overview",
   "large-files",
   "duplicates",
   "cleanup",
 ]);
+const fileViews = new Set<ViewId>(["files", "documents"]);
+const performanceViews = new Set<ViewId>(["performance"]);
+const assistantViews = new Set<ViewId>(["assistant"]);
+const dockerViews = new Set<ViewId>(["docker"]);
+const settingsViews = new Set<ViewId>(["settings"]);
+
+const navigationBeforeDocker: NavigationItem[] = [
+  {
+    id: "dashboard",
+    label: "대시보드",
+    description: "디스크와 최근 변화",
+    icon: LayoutDashboard,
+    tone: "dashboard",
+    activeViews: dashboardViews,
+  },
+  {
+    id: "overview",
+    label: "공간 정리",
+    description: "지도·큰 파일·중복",
+    icon: HardDrive,
+    tone: "space",
+    activeViews: storageViews,
+  },
+  {
+    id: "files",
+    label: "파일 관리",
+    description: "이름과 문서 내용으로 찾기",
+    icon: Folder,
+    tone: "files",
+    activeViews: fileViews,
+  },
+  {
+    id: "performance",
+    label: "성능",
+    description: "CPU·메모리 상태",
+    icon: Gauge,
+    tone: "performance",
+    activeViews: performanceViews,
+  },
+  {
+    id: "assistant",
+    label: "AI 도우미",
+    description: "설치된 AI CLI",
+    icon: MessageSquare,
+    tone: "assistant",
+    activeViews: assistantViews,
+  },
+];
+
+const dockerNavigation: NavigationItem = {
+  id: "docker",
+  label: "Docker 관리",
+  description: "이미지·캐시·컨테이너",
+  icon: Boxes,
+  tone: "docker",
+  activeViews: dockerViews,
+};
+
+const navigationAfterDocker: NavigationItem[] = [
+  {
+    id: "settings",
+    label: "설정",
+    description: "스캔 기준과 안전",
+    icon: Settings,
+    tone: "settings",
+    activeViews: settingsViews,
+  },
+];
 
 const folderViews = new Set<ViewId>([
   "overview",
@@ -158,6 +177,11 @@ const titles: Record<
     title: "중복 파일",
     description: "파일 내용을 끝까지 비교해 실제로 같은 결과만 표시합니다.",
   },
+  performance: {
+    eyebrow: "실시간 상태",
+    title: "성능",
+    description: "실제 CPU와 메모리 사용량, 많이 사용하는 앱을 확인합니다.",
+  },
   assistant: {
     eyebrow: "선택한 대상과 대화",
     title: "대화",
@@ -184,6 +208,7 @@ export function AppShell({
   onPickFolder,
 }: AppShellProps) {
   const { t } = useLanguage();
+  const mobileNavigationButtonRef = useRef<HTMLButtonElement>(null);
   const navigation = dockerEnabled
     ? [...navigationBeforeDocker, dockerNavigation, ...navigationAfterDocker]
     : [...navigationBeforeDocker, ...navigationAfterDocker];
@@ -203,7 +228,10 @@ export function AppShell({
     if (!mobileNavigationOpen) return;
 
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") onMobileNavigationChange(false);
+      if (event.key === "Escape") {
+        onMobileNavigationChange(false);
+        requestAnimationFrame(() => mobileNavigationButtonRef.current?.focus());
+      }
     }
 
     window.addEventListener("keydown", closeOnEscape);
@@ -221,6 +249,7 @@ export function AppShell({
         {t("본문으로 건너뛰기")}
       </a>
       <button
+        ref={mobileNavigationButtonRef}
         className="mobile-nav-button icon-button"
         type="button"
         aria-label={mobileNavigationOpen ? t("내비게이션 닫기") : t("내비게이션 열기")}
@@ -245,31 +274,36 @@ export function AppShell({
             <Sparkles size={19} />
           </span>
           <span className="brand-lockup__copy">
-            <strong>BroomSweepy</strong>
-            <small>{t("저장공간 도구")}</small>
+            <strong translate="no">BroomSweepy</strong>
           </span>
         </div>
 
         <nav className="primary-navigation" aria-label={t("주요 화면")}>
           {navigation.map((item) => {
             const Icon = item.icon;
-            const active =
-              item.id === "overview"
-                ? storageViews.has(activeView)
-                : activeView === item.id;
+            const active = item.activeViews.has(activeView);
+            const current = activeView === item.id;
+            const stateClasses = [
+              `nav-item--${item.tone}`,
+              active ? "is-active" : "",
+              current ? "is-current" : "",
+            ]
+              .filter(Boolean)
+              .join(" ");
             return (
               <button
                 type="button"
-                className={`nav-item ${active ? "is-active" : ""}`}
+                className={`nav-item ${stateClasses}`}
                 aria-label={`${t(item.label)}: ${t(item.description)}`}
-                aria-current={active ? "page" : undefined}
+                aria-current={current ? "page" : undefined}
+                data-tone={item.tone}
                 data-tooltip={t(item.label)}
                 title={`${t(item.label)} - ${t(item.description)}`}
                 key={item.id}
                 onClick={() => navigate(item.id)}
               >
                 <span className="nav-item__icon" aria-hidden="true">
-                  <Icon size={17} />
+                  <Icon size={18} strokeWidth={2} />
                 </span>
                 <span className="nav-item__copy">
                   <strong>{t(item.label)}</strong>
@@ -305,32 +339,46 @@ export function AppShell({
         />
       ) : null}
 
-      <main className="main-content" id="main-content" tabIndex={-1}>
-        <header className="utility-header">
-          <div>
-            <p className="eyebrow">
-              {storageViews.has(activeView) && report
-                ? t("마지막 검사 {{date}}", { date: formatDate(report.completedAtUnixMs) })
-                : t(page.eyebrow)}
-            </p>
-            <h1>{t(page.title)}</h1>
-            <p>{t(page.description)}</p>
-          </div>
-          {showFolderButton ? (
-            <button
-              className="folder-button"
-              type="button"
-              disabled={selectionBlocked}
-              onClick={onPickFolder}
-            >
-              <FolderOpen size={17} aria-hidden="true" />
-              <span>
-                <small>{t(folderLabel)}</small>
-                <strong title={root ?? undefined}>{root ?? t("폴더 선택")}</strong>
-              </span>
-            </button>
-          ) : null}
-        </header>
+      <main
+        className="main-content"
+        id="main-content"
+        inert={mobileNavigationOpen ? true : undefined}
+        tabIndex={-1}
+      >
+        {activeView !== "dashboard" ? (
+          <header className={[
+            "utility-header utility-header--compact",
+            storageViews.has(activeView) ? "utility-header--storage" : "",
+            activeView === "assistant" ? "utility-header--assistant" : "",
+          ].filter(Boolean).join(" ")}>
+            <div className="utility-header__identity">
+              <p className="eyebrow utility-header__context">
+                {storageViews.has(activeView) && report
+                  ? t("마지막 검사 {{date}}", {
+                      date: formatDate(report.completedAtUnixMs),
+                    })
+                  : t(page.eyebrow)}
+              </p>
+              <h1>{t(page.title)}</h1>
+              <p className="utility-header__description">{t(page.description)}</p>
+            </div>
+            {showFolderButton ? (
+              <button
+                className="folder-button utility-header__folder"
+                type="button"
+                aria-label={`${t(folderLabel)}: ${root ?? t("폴더 선택")}`}
+                disabled={selectionBlocked}
+                onClick={onPickFolder}
+              >
+                <FolderOpen size={17} aria-hidden="true" />
+                <span>
+                  <small>{t(folderLabel)}</small>
+                  <strong title={root ?? undefined}>{root ?? t("폴더 선택")}</strong>
+                </span>
+              </button>
+            ) : null}
+          </header>
+        ) : null}
         {children}
       </main>
     </div>

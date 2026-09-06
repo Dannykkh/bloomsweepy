@@ -73,7 +73,7 @@ jobs:
         working-directory: apps/desktop
         run: |
           npm run check
-          npm run test:file-policy
+          npm run test:all
           npm run build
 
       - name: Build ad-hoc signed Tauri app

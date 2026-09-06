@@ -21,6 +21,18 @@ import simplifiedChineseCatalog from "./zh-CN.json";
 export type { LanguagePreference, ResolvedLanguage } from "./preference";
 
 const englishMessages = {
+  "파일 위치 열기": "Reveal in file manager",
+  "{{name}} 작업": "Actions for {{name}}",
+  "{{name}} 더보기": "More actions for {{name}}",
+  "휴지통 이동 검토": "Review move to Trash",
+  "{{name}} 위치를 열었습니다": "Revealed {{name}}",
+  "{{name}}을 휴지통으로 이동했습니다": "Moved {{name}} to Trash",
+  "이동하지 않았습니다. 창을 닫고 다시 검사하세요.": "Nothing was moved. Close this dialog and scan again.",
+  "창을 닫고 지도를 다시 검사하세요.": "Close this dialog and scan the map again.",
+  "파일 휴지통 이동": "Move file to Trash",
+  "이 파일이 필요 없는지 확인하세요. 폴더는 이동하지 않습니다.": "Confirm that you no longer need this file. Folders will not be moved.",
+  "큰 사각형이 더 많은 용량을 차지합니다. 폴더는 안쪽으로, 파일은 위치를 엽니다.": "Larger rectangles use more space. Click a folder to explore, or a file to reveal its location.",
+  "클릭으로 열기 · 더보기로 작업": "Click to open · More for actions",
   "본문으로 건너뛰기": "Skip to main content",
   "내비게이션 닫기": "Close navigation",
   "내비게이션 열기": "Open navigation",
@@ -30,10 +42,15 @@ const englishMessages = {
   "대시보드": "Dashboard",
   "디스크와 최근 변화": "Drives and recent changes",
   "용량 관리": "Storage",
+  "공간 정리": "Space cleanup",
   "지도·큰 파일·중복": "Map, large files, duplicates",
   "Docker 용량": "Docker storage",
+  "Docker 관리": "Docker management",
   "이미지·캐시·컨테이너": "Images, cache, containers",
   "파일 이름 찾기": "Find files",
+  "파일 관리": "File management",
+  "파일 관리 화면": "File management views",
+  "이름과 문서 내용으로 찾기": "Search by name and document content",
   "이름과 위치로 찾기": "Search by name and location",
   "문서 내용 찾기": "Search documents",
   "문장으로 찾기": "Search by text",
@@ -42,6 +59,20 @@ const englishMessages = {
   "설정": "Settings",
   "스캔 기준과 안전": "Scan rules and safety",
   "오늘의 저장공간": "Storage today",
+  "저장공간 상태": "Storage status",
+  "한눈에 보고, 한 번 눌러 원인을 찾습니다.":
+    "See it at a glance and find the cause with one click.",
+  "검사 중단": "Stop scan",
+  "전체 검사 시작": "Start full scan",
+  "정리 후보 검사 중단": "Stop cleanup scan",
+  "정리 후보 다시 찾기": "Scan cleanup candidates again",
+  "정리 후보 찾기": "Find cleanup candidates",
+  "전체 검사를 완료하지 못했습니다": "Full scan failed",
+  "빠른 실행": "Quick actions",
+  "필요한 결과로 바로 이동하세요": "Go straight to the result you need",
+  "실제 보고서 요약": "Actual report summary",
+  "결과 용량은 서로 합산하지 않습니다": "Result sizes are not combined",
+  "검증된 중복": "Verified duplicates",
   "드라이브 상태와 최근 변화를 한 번에 확인합니다.":
     "See drive health and recent changes at a glance.",
   "폴더 용량 지도": "Folder storage map",
@@ -74,6 +105,13 @@ const englishMessages = {
   "문서를 읽을 폴더": "Document folder",
   "검사할 폴더": "Folder to scan",
   "기본 디스크 상태": "Primary disk status",
+  "시스템 드라이브": "System drive",
+  "선택한 드라이브": "Selected drive",
+  "드라이브 선택": "Drive selection",
+  "다른 드라이브": "Other drives",
+  "이 드라이브 검사": "Scan this drive",
+  "{{name}} 선택": "Select {{name}}",
+  "{{name}} 드라이브를 크게 표시합니다": "{{name}} is now shown as the main drive",
   "{{size}} 여유": "{{size}} free",
   "디스크 확인 중": "Checking disk",
   "마지막 검사 {{date}}": "Last scan {{date}}",
@@ -144,6 +182,7 @@ const englishMessages = {
   "{{count}}개": "{{count}} items",
   "현재 안전 계약": "Current safety contract",
   "스캔은 파일을 수정하거나 이동하지 않습니다.": "Scanning does not modify or move files.",
+  "클라우드 동기화 폴더와 온라인 전용 항목은 검사에서 제외합니다.": "Cloud sync folders and online-only items are excluded from scans.",
   "같은 저장공간을 가리키는 여러 파일 이름은 중복 낭비로 세지 않습니다.":
     "Multiple names pointing to the same stored data are not counted as duplicate waste.",
   "일부 내용으로 후보를 줄인 뒤 전체 내용을 끝까지 비교해 중복을 확정합니다.":
@@ -1029,8 +1068,16 @@ const englishMessages = {
   "{{provider}} · 로그인됨": "{{provider}} · signed in",
   "Codex는 앱 전용 빈 폴더에서 읽기 전용 샌드박스로 실행합니다. Codex 자체 읽기 도구의 실제 범위는 Codex 샌드박스 정책을 따릅니다.":
     "Codex runs in a read-only sandbox from an empty app-specific folder. The actual reach of Codex read tools follows Codex sandbox policy.",
-  "Claude Code는 세션 저장과 도구 사용을 끄고, 승인 질문 없이 안전 모드로 실행합니다.":
-    "Claude Code runs in a safe mode with session storage and tool use disabled and without approval prompts.",
+  "Claude Code는 세션 저장·도구·MCP·사용자 설정·훅을 끄고 실행합니다. CLI의 조직 관리 정책은 적용될 수 있습니다.":
+    "Claude Code runs with session storage, tools, MCP, user settings and hooks disabled. Organization-managed CLI policies may still apply.",
+  "{{provider}} · CLI 실행 오류": "{{provider}} · CLI launch error",
+  "{{provider}} · 버전 호환 확인 필요": "{{provider}} · compatibility check needed",
+  "{{provider}} · 서비스 연결 필요": "{{provider}} · service unavailable",
+  "{{provider}} · 상태 확인 실패": "{{provider}} · status check failed",
+  "CLI 연결 상태": "CLI connection status",
+  "{{provider}} · CLI 준비됨": "{{provider}} · CLI ready",
+  "실행 경로와 버전": "Executable path and version",
+  "CLI 버전: {{version}}": "CLI version: {{version}}",
   "Grok은 단일 응답 모드에서 내장 도구, 하위 에이전트, 웹 검색을 끕니다. Grok CLI 자체 계정과 세션 정책은 그대로 적용됩니다.":
     "Grok runs in single-response mode with built-in tools, subagents, and web search disabled. Grok CLI account and session policies still apply.",
   "Antigravity는 비대화형 응답 모드와 샌드박스로 실행합니다. Antigravity 자체 계정과 설정 정책은 그대로 적용됩니다.":
@@ -1056,6 +1103,118 @@ const englishMessages = {
   "위치 불명": "Location unknown",
   "휴지통 확인 불가": "Could not inspect Trash",
   "경로 확인 불가": "Could not inspect path",
+  "성능": "Performance",
+  "CPU·메모리 상태": "CPU and memory status",
+  "실시간 상태": "Live status",
+  "실제 CPU와 메모리 사용량, 많이 사용하는 앱을 확인합니다.":
+    "Review actual CPU and memory usage and the apps using the most resources.",
+  "성능 측정 상태": "Performance measurement status",
+  "업데이트 지연": "Update delayed",
+  "읽기 전용 측정": "Read-only measurement",
+  "실시간 측정": "Live measurement",
+  "마지막 측정 {{date}}": "Last measured {{date}}",
+  "성능 상태 새로 고침": "Refresh performance status",
+  "성능 상태를 새로 고쳤습니다.": "Performance status refreshed.",
+  "성능 상태를 확인하지 못했습니다": "Could not check performance status",
+  "성능 상태 측정 중…": "Measuring performance…",
+  "정확한 CPU 사용량을 위해 짧은 표본을 준비하고 있습니다.":
+    "Preparing a short sample for accurate CPU usage.",
+  "마지막 정상 측정값을 보여줍니다. 종료 요청은 새 측정 전까지 꺼집니다.":
+    "Showing the last successful reading. Quit requests are disabled until a fresh reading is available.",
+  "시스템 성능": "System performance",
+  "CPU 사용량": "CPU usage",
+  "{{count}}개 논리 코어": "{{count}} logical cores",
+  "메모리 사용량": "Memory usage",
+  "{{used}} / {{total}} 사용": "{{used}} of {{total}} used",
+  "표본 시간": "Sample window",
+  "논리 코어": "Logical cores",
+  "CPU 부하는 실행 중인 작업을 줄이면 낮아집니다. 아래에서 많이 사용하는 앱을 확인하세요.":
+    "Reduce running work to lower CPU load. Check the top resource-using apps below.",
+  "앱 메모리 정리": "Clean app memory",
+  "앱 메모리 정리 중…": "Cleaning app memory…",
+  "BroomSweepy 전용": "BroomSweepy only",
+  "이 화면은 사용량만 측정하며 메모리를 인위적으로 정리하지 않습니다.":
+    "This view only measures usage and does not artificially purge memory.",
+  "메모리 정리": "Clean memory",
+  "메모리 정리 중…": "Cleaning memory…",
+  "BroomSweepy 본체의 반환 가능한 메모리만 정리":
+    "Return only memory available from the BroomSweepy host",
+  "BroomSweepy 본체가 사용하지 않는 메모리만 macOS에 반환합니다. 다른 앱의 메모리는 건드리지 않습니다.":
+    "Returns only unused memory from the BroomSweepy host to macOS. Other apps are not touched.",
+  "이 플랫폼에서는 사용량만 측정하며 BroomSweepy 메모리 정리는 지원하지 않습니다.":
+    "This platform measures usage but does not support BroomSweepy memory cleanup.",
+  "BroomSweepy가 {{amount}}의 자체 메모리를 macOS에 반환했습니다.":
+    "BroomSweepy returned {{amount}} of its own memory to macOS.",
+  "메모리 정리를 완료했습니다. 현재 반환 가능한 자체 메모리는 없습니다.":
+    "Memory cleanup finished. There is currently no app memory available to return.",
+  "메모리 정리가 이미 진행 중입니다.": "Memory cleanup is already in progress.",
+  "이 플랫폼에서는 BroomSweepy 메모리 정리를 지원하지 않습니다.":
+    "BroomSweepy memory cleanup is not supported on this platform.",
+  "메모리 정리를 완료하지 못했습니다. {{detail}}":
+    "Could not complete memory cleanup. {{detail}}",
+  "실제 측정": "Live measurements",
+  "많이 사용하는 앱": "Top resource-using apps",
+  "실제 CPU와 메모리 사용량 순으로 비교합니다.":
+    "Compare apps by actual CPU and memory usage.",
+  "CPU순": "CPU",
+  "메모리순": "Memory",
+  "앱": "App",
+  "CPU": "CPU",
+  "메모리": "Memory",
+  "상태": "Status",
+  "{{count}}개 프로세스 포함": "Includes {{count}} processes",
+  "확인 중…": "Checking…",
+  "종료 요청": "Request quit",
+  "현재 앱": "Current app",
+  "보호됨": "Protected",
+  "측정만 가능": "Measurements only",
+  "보조 앱": "Accessory app",
+  "정상 종료 가능": "Can quit normally",
+  "표시할 실행 중인 앱이 없습니다": "No running apps to show",
+  "잠시 뒤 다시 측정하거나 새로 고침해 주세요.":
+    "Measure again in a moment or refresh now.",
+  "종료 요청은 macOS의 일반 앱에만 보내며, 대상을 다시 확인하고 강제 종료하지 않습니다.":
+    "Quit requests are limited to regular macOS apps. The target is revalidated and never force-quit.",
+  "이 플랫폼에서는 프로세스 사용량만 표시하며 앱 종료 요청은 지원하지 않습니다.":
+    "This platform shows process usage but does not support app quit requests.",
+  "CPU와 메모리 상위 항목만 표시합니다.":
+    "Only the top CPU and memory entries are shown.",
+  "정상 종료 요청": "Normal quit request",
+  "{{name}} 종료 전 확인": "Review before quitting {{name}}",
+  "종료 확인 창 닫기": "Close quit confirmation",
+  "대상 앱": "Target app",
+  "프로세스 ID": "Process ID",
+  "마지막 확인": "Last verified",
+  "저장하지 않은 작업이 있으면 사라질 수 있습니다. macOS가 앱에 정상 종료를 요청하며 강제 종료는 하지 않습니다.":
+    "Unsaved work may be lost. macOS will ask the app to quit normally; it will not be force-quit.",
+  "대상 앱과 저장하지 않은 작업 위험을 확인했습니다.":
+    "I reviewed the target app and the risk to unsaved work.",
+  "종료 요청 중…": "Sending quit request…",
+  "{{name}}에 종료 요청 보내기": "Ask {{name}} to quit",
+  "측정값이 오래되어 종료하지 않았습니다. 목록을 새로 고쳐 주세요.":
+    "The reading is stale, so no quit request was sent. Refresh the list.",
+  "앱 대상이 바뀌어 종료하지 않았습니다. 목록을 새로 고쳐 주세요.":
+    "The app target changed, so no quit request was sent. Refresh the list.",
+  "보호된 앱은 종료할 수 없습니다.": "Protected apps cannot be quit here.",
+  "이 플랫폼에서는 앱 종료 요청을 지원하지 않습니다.":
+    "App quit requests are not supported on this platform.",
+  "종료 확인을 준비하지 못했습니다.": "Could not prepare quit confirmation.",
+  "{{name}}이 종료됐습니다.": "{{name}} quit.",
+  "{{name}}에 정상 종료 요청을 보냈습니다. 저장 확인 창이 열려 있을 수 있습니다.":
+    "A normal quit request was sent to {{name}}. A save confirmation may be open.",
+  "{{name}}이 종료 요청을 받지 않았습니다.": "{{name}} did not accept the quit request.",
+  "앱이 이미 종료됐습니다.": "The app has already quit.",
+  "종료 확인이 만료됐습니다. 다시 선택해 주세요.":
+    "The quit confirmation expired. Select the app again.",
+  "이미 사용한 종료 확인입니다.": "This quit confirmation has already been used.",
+  "저장하지 않은 작업 위험 확인이 필요합니다.":
+    "You must acknowledge the risk to unsaved work.",
+  "성능 작업을 완료하지 못했습니다. {{detail}}":
+    "Could not complete the performance action. {{detail}}",
+  "CPU와 메모리 상세 보기": "View CPU and memory details",
+  "측정 준비 중…": "Preparing measurement…",
+  "측정 불가": "Measurement unavailable",
+  "CPU {{cpu}}% · 메모리 {{memory}}%": "CPU {{cpu}}% · Memory {{memory}}%",
 } as const;
 
 export type MessageKey = keyof typeof englishMessages;

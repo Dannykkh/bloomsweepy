@@ -58,7 +58,7 @@ jobs:
         run: |
           node --check scripts/prepare-sidecar.mjs
           npm run check
-          npm run test:file-policy
+          npm run test:all
           npm run build
 
       - name: Build Windows installers

@@ -24,6 +24,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const BACKGROUND_ARG: &str = "--background";
 
 mod action_recovery;
+mod app_memory_cleanup;
 mod assistant_provider;
 mod assistant_sessions;
 mod control_server;
@@ -32,6 +33,7 @@ mod external_program;
 mod mcp_registration;
 mod system_inventory;
 mod system_memory;
+mod system_performance;
 mod trash_actions;
 #[cfg(windows)]
 mod windows_single_instance;
@@ -373,6 +375,16 @@ pub(crate) struct StoredReports {
     next_scan_generation: AtomicU64,
     cleanup: Mutex<Option<CleanupActionReport>>,
     next_cleanup_generation: AtomicU64,
+    directory: Mutex<Option<DirectoryScanResult>>,
+    next_directory_generation: AtomicU64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DirectoryScanResult {
+    generation: u64,
+    #[serde(flatten)]
+    report: DirectoryScanReport,
 }
 
 #[derive(Clone)]
@@ -884,7 +896,47 @@ impl StoredReports {
 
     pub(crate) fn clear_all(&self) -> Result<(), String> {
         self.clear_scan()?;
-        self.clear_cleanup()
+        self.clear_cleanup()?;
+        self.clear_directory()
+    }
+
+    fn clear_directory(&self) -> Result<(), String> {
+        *self
+            .directory
+            .lock()
+            .map_err(|_| "폴더 지도 결과를 잠글 수 없습니다".to_owned())? = None;
+        Ok(())
+    }
+
+    fn replace_directory(
+        &self,
+        report: DirectoryScanReport,
+    ) -> Result<DirectoryScanResult, String> {
+        let mut stored = self
+            .directory
+            .lock()
+            .map_err(|_| "폴더 지도 결과를 잠글 수 없습니다".to_owned())?;
+        let result = DirectoryScanResult {
+            generation: self
+                .next_directory_generation
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1),
+            report,
+        };
+        *stored = Some(result.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn directory_report(&self, generation: u64) -> Result<DirectoryScanReport, String> {
+        let stored = self
+            .directory
+            .lock()
+            .map_err(|_| "폴더 지도 결과를 잠글 수 없습니다".to_owned())?;
+        let result = stored
+            .as_ref()
+            .filter(|result| result.generation == generation)
+            .ok_or_else(|| "폴더 지도 결과가 만료되었습니다. 다시 검사하세요".to_owned())?;
+        Ok(result.report.clone())
     }
 }
 
@@ -1049,6 +1101,7 @@ struct VolumeInfo {
     available_bytes: u64,
     removable: bool,
     read_only: bool,
+    is_disk_image: bool,
     is_system: bool,
 }
 
@@ -1110,6 +1163,7 @@ async fn get_system_overview() -> Result<SystemOverview, String> {
 fn collect_system_overview() -> SystemOverview {
     let disks = Disks::new_with_refreshed_list();
     let system_root = system_volume_root();
+    let disk_image_mount_points = mounted_disk_image_mount_points();
     let mut volumes: Vec<VolumeInfo> = disks
         .list()
         .iter()
@@ -1121,6 +1175,9 @@ fn collect_system_overview() -> SystemOverview {
             available_bytes: disk.available_space(),
             removable: disk.is_removable(),
             read_only: disk.is_read_only(),
+            is_disk_image: disk_image_mount_points
+                .iter()
+                .any(|mount_point| same_mount_point(disk.mount_point(), mount_point)),
             is_system: system_root
                 .as_deref()
                 .is_some_and(|root| same_mount_point(disk.mount_point(), root)),
@@ -1138,6 +1195,52 @@ fn collect_system_overview() -> SystemOverview {
         platform: std::env::consts::OS,
         volumes,
     }
+}
+
+#[cfg(target_os = "macos")]
+fn mounted_disk_image_mount_points() -> Vec<PathBuf> {
+    let Ok(output) = std::process::Command::new("/usr/bin/hdiutil")
+        .args(["info", "-plist"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    disk_image_mount_points_from_plist(&output.stdout)
+}
+
+#[cfg(target_os = "macos")]
+fn disk_image_mount_points_from_plist(bytes: &[u8]) -> Vec<PathBuf> {
+    let Ok(value) = plist::Value::from_reader(std::io::Cursor::new(bytes)) else {
+        return Vec::new();
+    };
+    let Some(images) = value
+        .as_dictionary()
+        .and_then(|dictionary| dictionary.get("images"))
+        .and_then(plist::Value::as_array)
+    else {
+        return Vec::new();
+    };
+
+    images
+        .iter()
+        .filter_map(plist::Value::as_dictionary)
+        .filter_map(|image| image.get("system-entities"))
+        .filter_map(plist::Value::as_array)
+        .flatten()
+        .filter_map(plist::Value::as_dictionary)
+        .filter_map(|entity| entity.get("mount-point"))
+        .filter_map(plist::Value::as_string)
+        .map(PathBuf::from)
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn mounted_disk_image_mount_points() -> Vec<PathBuf> {
+    Vec::new()
 }
 
 #[cfg(windows)]
@@ -1309,11 +1412,13 @@ async fn start_drive_scan(
 async fn start_directory_scan(
     app: AppHandle,
     state: State<'_, ScanRuntime>,
+    reports: State<'_, StoredReports>,
     root: String,
     config: Option<DirectoryScanConfig>,
-) -> Result<DirectoryScanReport, String> {
+) -> Result<DirectoryScanResult, String> {
     let cancellation = state.begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
+    reports.clear_directory()?;
     let cancellation_for_worker = Arc::clone(&cancellation);
     let app_for_worker = app.clone();
 
@@ -1331,7 +1436,7 @@ async fn start_directory_scan(
 
     let result =
         worker_result.map_err(|error| format!("폴더 지도 스캔을 실행하지 못했습니다: {error}"))?;
-    result.map_err(|error| error.to_string())
+    reports.replace_directory(result.map_err(|error| error.to_string())?)
 }
 
 #[tauri::command]
@@ -1683,6 +1788,12 @@ pub fn run() {
         .manage(docker_tools::DockerManagerState::default())
         .manage(control_server::ControlStatusStore::default())
         .manage(mcp_registration::McpRegistrationRuntime::default())
+        .manage(Arc::new(
+            app_memory_cleanup::AppMemoryCleanupState::default(),
+        ))
+        .manage(Arc::new(
+            system_performance::PerformanceMonitorState::default(),
+        ))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -1728,6 +1839,10 @@ pub fn run() {
             set_application_language,
             get_system_overview,
             system_memory::get_system_memory_status,
+            app_memory_cleanup::clean_app_memory,
+            system_performance::get_performance_snapshot,
+            system_performance::prepare_graceful_process_termination,
+            system_performance::execute_graceful_process_termination,
             is_scan_running,
             start_scan,
             get_scan_report_snapshot,
@@ -1747,6 +1862,7 @@ pub fn run() {
             action_recovery::open_system_trash,
             trash_actions::trash_duplicate_files,
             trash_actions::trash_cleanup_candidates,
+            trash_actions::trash_directory_file,
             cancel_scan
         ])
         .build(context)
@@ -1916,6 +2032,25 @@ mod tests {
     use std::time::{Duration, Instant};
 
     #[test]
+    fn directory_generation_rejects_replaced_and_invalidated_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("file.txt"), b"test").unwrap();
+        let report =
+            scan_directory_level(temp.path(), Default::default(), |_| {}, || false).unwrap();
+        let reports = StoredReports::default();
+        let first = reports.replace_directory(report.clone()).unwrap();
+        assert!(reports.directory_report(first.generation).is_ok());
+        let json = serde_json::to_value(&first).unwrap();
+        assert!(json["children"][0].get("scanIdentity").is_none());
+        assert!(json["children"][0].get("scanModifiedAt").is_none());
+        let second = reports.replace_directory(report).unwrap();
+        assert!(reports.directory_report(first.generation).is_err());
+        assert!(reports.directory_report(second.generation).is_ok());
+        reports.clear_all().unwrap();
+        assert!(reports.directory_report(second.generation).is_err());
+    }
+
+    #[test]
     fn background_launch_requires_the_explicit_flag() {
         assert!(contains_background_arg(["broomsweepy", "--background"]));
         assert!(!contains_background_arg(["broomsweepy"]));
@@ -1948,6 +2083,37 @@ mod tests {
             Path::new("/Volumes/Data"),
             Path::new("/Volumes/data")
         ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_disk_image_plist_extracts_only_mounted_entities() {
+        let plist = br#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>images</key>
+  <array>
+    <dict>
+      <key>image-path</key><string>/Users/example/Installer.dmg</string>
+      <key>system-entities</key>
+      <array>
+        <dict><key>dev-entry</key><string>/dev/disk4</string></dict>
+        <dict>
+          <key>dev-entry</key><string>/dev/disk4s1</string>
+          <key>mount-point</key><string>/Volumes/Example Installer</string>
+        </dict>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>"#;
+
+        assert_eq!(
+            disk_image_mount_points_from_plist(plist),
+            vec![PathBuf::from("/Volumes/Example Installer")]
+        );
+        assert!(disk_image_mount_points_from_plist(b"not a plist").is_empty());
     }
 
     #[cfg(target_os = "macos")]

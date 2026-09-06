@@ -23,6 +23,11 @@ import type {
   ScanReport,
   SystemMemoryStatus,
   SystemOverview,
+  AppMemoryCleanupResult,
+  PerformanceSnapshot,
+  TerminationPreviewResponse,
+  ExecuteTerminationRequest,
+  TerminationResult,
   CleanupTrashRequest,
   DuplicateTrashRequest,
   TrashOperationResult,
@@ -186,6 +191,30 @@ export function getSystemMemoryStatus(): Promise<SystemMemoryStatus> {
   return invoke<SystemMemoryStatus>("get_system_memory_status");
 }
 
+export function getPerformanceSnapshot(): Promise<PerformanceSnapshot> {
+  return invoke<PerformanceSnapshot>("get_performance_snapshot");
+}
+
+export function cleanAppMemory(): Promise<AppMemoryCleanupResult> {
+  return invoke<AppMemoryCleanupResult>("clean_app_memory");
+}
+
+export function prepareGracefulProcessTermination(
+  snapshotId: string,
+  targetId: string,
+): Promise<TerminationPreviewResponse> {
+  return invoke<TerminationPreviewResponse>("prepare_graceful_process_termination", {
+    snapshotId,
+    targetId,
+  });
+}
+
+export function executeGracefulProcessTermination(
+  request: ExecuteTerminationRequest,
+): Promise<TerminationResult> {
+  return invoke<TerminationResult>("execute_graceful_process_termination", { request });
+}
+
 export function startScan(root: string, config: ScanConfig): Promise<ScanReport> {
   return invoke<ScanReport>("start_scan", { root, config });
 }
@@ -202,6 +231,10 @@ export function startDriveScan(root: string): Promise<DriveScanReport> {
 
 export function startDirectoryScan(root: string): Promise<DirectoryScanReport> {
   return invoke<DirectoryScanReport>("start_directory_scan", { root, config: null });
+}
+
+export function trashDirectoryFile(path: string, generation: number): Promise<TrashOperationResult> {
+  return invoke<TrashOperationResult>("trash_directory_file", { request: { path, generation } });
 }
 
 export function startCleanupScan(): Promise<CleanupScanReport> {

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findVolumeForPath } from "../src/lib/volumePath.ts";
+import {
+  findContainingVolumeForPath,
+  findVolumeForPath,
+} from "../src/lib/volumePath.ts";
 
 const volume = (name: string, mountPoint: string, isSystem = false) => ({
   name,
@@ -10,6 +13,7 @@ const volume = (name: string, mountPoint: string, isSystem = false) => ({
   availableBytes: 500,
   removable: false,
   readOnly: false,
+  isDiskImage: false,
   isSystem,
 });
 
@@ -27,4 +31,10 @@ test("uses mount boundaries for similarly named macOS volumes", () => {
   ];
   assert.equal(findVolumeForPath(volumes, "/Volumes/Data2/project")?.name, "Data 2");
   assert.equal(findVolumeForPath(volumes, "/Volumes/Data/project")?.name, "Data");
+});
+
+test("can require a strict containing volume without the system fallback", () => {
+  const visibleVolumes = [volume("system", "C:\\", true)];
+  assert.equal(findContainingVolumeForPath(visibleVolumes, "G:\\Cloud\\file.txt"), null);
+  assert.equal(findVolumeForPath(visibleVolumes, "G:\\Cloud\\file.txt")?.name, "system");
 });

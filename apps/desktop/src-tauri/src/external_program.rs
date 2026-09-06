@@ -43,8 +43,13 @@ impl ExternalProgram {
 }
 
 pub(crate) fn find_external_program(executable_name: &str) -> Option<ExternalProgram> {
+    find_external_programs(executable_name).into_iter().next()
+}
+
+/// Enumerate candidates so a caller can check health before accepting a launcher.
+pub(crate) fn find_external_programs(executable_name: &str) -> Vec<ExternalProgram> {
     if !valid_executable_name(executable_name) {
-        return None;
+        return Vec::new();
     }
 
     let directories = env::var_os("PATH")
@@ -64,7 +69,7 @@ pub(crate) fn find_external_program(executable_name: &str) -> Option<ExternalPro
     #[cfg(target_os = "macos")]
     append_macos_cli_directories(&mut directories);
 
-    find_in_directories(executable_name, &directories)
+    programs_in_directories(executable_name, &directories)
 }
 
 #[cfg(windows)]
@@ -85,28 +90,45 @@ fn valid_executable_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
+#[cfg(test)]
 fn find_in_directories(name: &str, directories: &[PathBuf]) -> Option<ExternalProgram> {
+    programs_in_directories(name, directories)
+        .into_iter()
+        .next()
+}
+
+fn programs_in_directories(name: &str, directories: &[PathBuf]) -> Vec<ExternalProgram> {
+    let mut programs = Vec::new();
     for directory in directories {
         #[cfg(windows)]
         {
             let executable = directory.join(format!("{name}.exe"));
             if executable.is_file() {
-                return Some(ExternalProgram::Direct(executable));
+                programs.push(ExternalProgram::Direct(executable));
             }
             let command_script = directory.join(format!("{name}.cmd"));
             if command_script.is_file() {
-                return Some(ExternalProgram::CommandScript(command_script));
+                programs.push(ExternalProgram::CommandScript(command_script));
             }
         }
         #[cfg(not(windows))]
         {
             let executable = directory.join(name);
             if executable.is_file() {
-                return Some(ExternalProgram::Direct(executable));
+                programs.push(ExternalProgram::Direct(executable));
             }
         }
     }
-    None
+    let mut seen = std::collections::HashSet::new();
+    programs.retain(|program| {
+        seen.insert(
+            program
+                .path()
+                .canonicalize()
+                .unwrap_or_else(|_| program.path().to_path_buf()),
+        )
+    });
+    programs
 }
 
 #[cfg(target_os = "macos")]
@@ -160,6 +182,30 @@ mod tests {
         .expect("program");
         assert_eq!(found.path(), expected);
         assert!(!found.is_command_script());
+    }
+
+    #[test]
+    fn enumerates_all_distinct_candidates_in_search_order() {
+        let first = tempdir().unwrap();
+        let second = tempdir().unwrap();
+        #[cfg(windows)]
+        let name = "probe.exe";
+        #[cfg(not(windows))]
+        let name = "probe";
+        fs::write(first.path().join(name), b"fixture").unwrap();
+        fs::write(second.path().join(name), b"fixture").unwrap();
+        let programs = programs_in_directories(
+            "probe",
+            &[
+                first.path().to_path_buf(),
+                first.path().to_path_buf(),
+                second.path().to_path_buf(),
+            ],
+        );
+        assert_eq!(programs.len(), 2);
+        assert_eq!(programs[0].path(), first.path().join(name));
+        assert_eq!(programs[1].path(), second.path().join(name));
+        assert!(find_external_programs("../probe").is_empty());
     }
 
     #[cfg(windows)]

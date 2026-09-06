@@ -1,6 +1,5 @@
 import { Database, HardDrive, Languages, ShieldCheck } from "lucide-react";
 import { DockerManagementPanel } from "../components/DockerManagementPanel";
-import { MemoryStatusPanel } from "../components/MemoryStatusPanel";
 import { McpConnectionPanel } from "../components/McpConnectionPanel";
 import { StartupSettingsPanel } from "../components/StartupSettingsPanel";
 import { useLanguage, type LanguagePreference } from "../i18n";
@@ -169,8 +168,6 @@ export function SettingsView({
       </section>
 
       <StartupSettingsPanel />
-
-      <MemoryStatusPanel />
 
       <DockerManagementPanel
         status={dockerStatus}

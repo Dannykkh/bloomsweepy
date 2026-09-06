@@ -7,13 +7,24 @@ export function findVolumeForPath(
   if (volumes.length === 0) return null;
   if (!path) return volumes.find((volume) => volume.isSystem) ?? volumes[0];
 
+  return (
+    findContainingVolumeForPath(volumes, path)
+    ?? volumes.find((volume) => volume.isSystem)
+    ?? volumes[0]
+  );
+}
+
+export function findContainingVolumeForPath(
+  volumes: readonly VolumeInfo[],
+  path: string | null,
+): VolumeInfo | null {
+  if (!path) return null;
   const normalizedPath = normalizePath(path);
   return (
     [...volumes]
       .sort((left, right) => right.mountPoint.length - left.mountPoint.length)
       .find((volume) => isInsideMount(normalizedPath, normalizePath(volume.mountPoint)))
-      ?? volumes.find((volume) => volume.isSystem)
-      ?? volumes[0]
+    ?? null
   );
 }
 

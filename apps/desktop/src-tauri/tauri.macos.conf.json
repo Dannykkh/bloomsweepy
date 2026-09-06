@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "BroomSweepy 1.5.0",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 760,
+        "minHeight": 600,
+        "center": true,
+        "theme": "Dark",
+        "backgroundColor": "#00000000",
+        "decorations": true,
+        "transparent": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": true,
+        "windowEffects": {
+          "effects": ["underWindowBackground"],
+          "state": "followsWindowActiveState"
+        }
+      }
+    ]
+  }
+}

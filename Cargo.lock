@@ -436,6 +436,8 @@ dependencies = [
  "dirs 6.0.0",
  "embed-resource",
  "getrandom 0.3.4",
+ "objc2",
+ "objc2-app-kit",
  "plist",
  "rusqlite",
  "serde",
@@ -2706,6 +2708,7 @@ checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
  "objc2-foundation",

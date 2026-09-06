@@ -1,4 +1,4 @@
-use crate::external_program::{ExternalProgram, find_external_program};
+use crate::external_program::{ExternalProgram, find_external_programs};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -50,6 +50,24 @@ pub(crate) struct AssistantProviderStatus {
     busy: bool,
     detail: String,
     models: Vec<AssistantProviderModel>,
+    state: AssistantCliState,
+    executable_path: Option<String>,
+    version: Option<String>,
+    #[serde(skip)]
+    passed_launch_checks: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AssistantCliState {
+    NotInstalled,
+    Broken,
+    Incompatible,
+    LoginRequired,
+    CheckFailed,
+    ServiceUnavailable,
+    NoModels,
+    Ready,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -139,6 +157,7 @@ const ASSISTANT_PROVIDERS: [AssistantProviderKind; 5] = [
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AssistantAuthentication {
+    Unknown,
     Authenticated,
     Required,
     NotRequired,
@@ -266,6 +285,39 @@ pub(crate) async fn ask_assistant(
     app: AppHandle,
     state: State<'_, AssistantProviderState>,
     request: AssistantChatRequest,
+) -> Result<AssistantChatResponse, AssistantChatError> {
+    ask_assistant_inner(app, state, request)
+        .await
+        .map_err(AssistantChatError::from)
+}
+
+const REAUTHENTICATION_PREFIX: &str = "reauth-required:";
+
+#[derive(Debug, Serialize)]
+pub(crate) struct AssistantChatError {
+    kind: &'static str,
+    message: String,
+}
+
+impl From<String> for AssistantChatError {
+    fn from(message: String) -> Self {
+        match message.strip_prefix(REAUTHENTICATION_PREFIX) {
+            Some(detail) => Self {
+                kind: "authentication",
+                message: detail.to_owned(),
+            },
+            None => Self {
+                kind: "other",
+                message,
+            },
+        }
+    }
+}
+
+async fn ask_assistant_inner(
+    app: AppHandle,
+    state: State<'_, AssistantProviderState>,
+    request: AssistantChatRequest,
 ) -> Result<AssistantChatResponse, String> {
     validate_request(&request)?;
     state
@@ -276,12 +328,26 @@ pub(crate) async fn ask_assistant(
     state.cancellation.store(false, Ordering::Release);
 
     let provider = request.provider;
-    let program = find_provider_program(provider).ok_or_else(|| {
-        format!(
-            "{}를 찾지 못했습니다. 먼저 설치하고 로그인하세요",
-            provider.label()
+    // Revalidate the very same candidate-selection policy used by the status UI.
+    // Never execute the first PATH hit without health and capability checks.
+    let preflight_cancellation = std::sync::Arc::clone(&state.cancellation);
+    let (status, program) = tauri::async_runtime::spawn_blocking(move || {
+        resolve_candidates_cancellable(
+            provider,
+            true,
+            find_external_programs(provider.executable_name()),
+            Some(&preflight_cancellation),
         )
-    })?;
+    })
+    .await
+    .map_err(|_| "AI CLI 실행 준비를 확인하지 못했습니다".to_owned())?;
+    if state.cancellation.load(Ordering::Acquire) {
+        return Err(format!("{} 응답을 취소했습니다", provider.label()));
+    }
+    if !status.available {
+        return Err(status.detail);
+    }
+    let program = program.ok_or_else(|| "AI CLI 실행 경로를 확인하지 못했습니다".to_owned())?;
     let request_id = state.next_request_id.fetch_add(1, Ordering::AcqRel);
     let workspace = app
         .path()
@@ -512,20 +578,8 @@ fn run_provider(
         AssistantProviderKind::ClaudeCode => {
             let response_file = File::create(&response_path)
                 .map_err(|error| format!("Claude Code 응답 파일을 준비하지 못했습니다: {error}"))?;
-            command
-                .arg("--print")
-                .arg("--no-session-persistence")
-                .arg("--safe-mode")
-                .arg("--tools")
-                .arg("")
-                .arg("--permission-mode")
-                .arg("dontAsk")
-                .arg("--strict-mcp-config")
-                .arg("--mcp-config")
-                .arg(r#"{"mcpServers":{}}"#)
-                .arg("--output-format")
-                .arg("text")
-                .stdout(Stdio::from(response_file));
+            configure_claude_chat(&mut command);
+            command.stdout(Stdio::from(response_file));
         }
         AssistantProviderKind::Grok => {
             let response_file = File::create(&response_path)
@@ -660,7 +714,15 @@ fn run_provider(
     let _ = remove_private_file(&error_path);
 
     if !status.success() {
-        return Err(provider_failure_message(provider, &provider_error));
+        // Server errors can arrive on stdout. Classify both bounded streams,
+        // but never return raw provider output or account details on failure.
+        return Err(provider_failure_message(
+            provider,
+            &format!(
+                "{provider_error}\n{}",
+                response.as_deref().unwrap_or_default()
+            ),
+        ));
     }
     let response = response?.trim().to_owned();
     if response.is_empty() {
@@ -715,22 +777,32 @@ fn provider_failure_message(provider: AssistantProviderKind, stderr: &str) -> St
         || lower.contains("invalid argument")
     {
         format!(
-            "{} 실행 옵션이 현재 CLI 버전과 맞지 않습니다. AI CLI 상태를 다시 확인하거나 앱을 업데이트해 주세요",
+            "{} 실행 옵션 호환성 오류입니다. CLI 상태에서 경로와 버전을 다시 확인해 주세요. BroomSweepy 연동 코드가 지원하지 않는 옵션을 전달했을 수도 있습니다",
             provider.label()
         )
     } else if lower.contains("login")
         || lower.contains("authentication")
+        || lower.contains("authenticate")
+        || lower.contains("oauth access token has expired")
+        || lower.contains("invalid api key")
+        || lower.contains("api error: 401")
         || lower.contains("unauthorized")
     {
         format!(
-            "{} 로그인이 필요합니다. 해당 CLI에서 먼저 로그인하세요",
-            provider.label()
+            "{REAUTHENTICATION_PREFIX}{} 로그인 정보가 만료되었거나 서버에서 거부되었습니다. 터미널에서 {}로 다시 로그인한 뒤, 앱의 CLI 상태를 다시 확인해 주세요",
+            provider.label(),
+            match provider {
+                AssistantProviderKind::ClaudeCode => "claude auth login",
+                AssistantProviderKind::Codex => "codex login",
+                _ => provider.executable_name(),
+            }
         )
     } else if lower.contains("rate limit")
         || lower.contains("rate_limit")
         || lower.contains("quota")
         || lower.contains("overloaded")
         || lower.contains("usage limit")
+        || lower.contains("credit balance")
     {
         format!(
             "{} 사용량 제한 또는 서비스 혼잡으로 응답하지 못했습니다. 잠시 후 다시 시도해 주세요",
@@ -753,98 +825,333 @@ fn provider_failure_message(provider: AssistantProviderKind, stderr: &str) -> St
     }
 }
 
-fn find_provider_program(provider: AssistantProviderKind) -> Option<ExternalProgram> {
-    find_external_program(provider.executable_name())
-}
-
 fn provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
-    let program = find_provider_program(provider);
-    let installed = program.is_some();
-    let mut models = Vec::new();
-    let mut provider_ready = installed;
-    let authentication = match (provider, program.as_ref()) {
-        (_, None) => AssistantAuthentication::Required,
-        (AssistantProviderKind::Codex, Some(program)) => {
-            authentication_command_succeeds(program, &["login", "status"])
-        }
-        (AssistantProviderKind::ClaudeCode, Some(program)) => {
-            authentication_command_succeeds(program, &["auth", "status"])
-        }
-        (AssistantProviderKind::Grok, Some(program)) => {
-            authentication_command_succeeds(program, &["models"])
-        }
-        (AssistantProviderKind::Antigravity, Some(program)) => {
-            authentication_command_succeeds(program, &["models"])
-        }
-        (AssistantProviderKind::Ollama, Some(program)) => {
-            match ollama_models(program) {
-                Ok(installed_models) => models = installed_models,
-                Err(_) => provider_ready = false,
-            }
-            AssistantAuthentication::NotRequired
-        }
-    };
-    let available = installed
-        && provider_ready
-        && authentication != AssistantAuthentication::Required
-        && (provider != AssistantProviderKind::Ollama || !models.is_empty());
-    AssistantProviderStatus {
-        provider,
-        label: provider.label(),
-        installed,
-        authentication,
-        available,
-        busy,
-        detail: match (installed, provider, authentication, models.len()) {
-            (false, _, _, _) => format!("{}를 찾지 못했습니다", provider.label()),
-            (true, AssistantProviderKind::Ollama, _, count) if count > 0 => {
-                format!("Ollama에서 설치된 모델 {count}개를 확인했습니다")
-            }
-            (true, AssistantProviderKind::Ollama, _, _) => {
-                "Ollama 모델 목록을 읽지 못했거나 설치된 모델이 없습니다".to_owned()
-            }
-            (true, _, AssistantAuthentication::Authenticated, _) => {
-                format!("{} 로그인 상태를 확인했습니다", provider.label())
-            }
-            (true, _, AssistantAuthentication::Required, _) => {
-                format!("{}는 있지만 로그인이 필요합니다", provider.label())
-            }
-            (true, _, AssistantAuthentication::NotRequired, _) => {
-                format!("{}가 준비됐습니다", provider.label())
-            }
-        },
-        models,
-    }
+    resolve_provider(provider, busy).0
 }
 
-fn provider_status_failed(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
+fn empty_provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
     AssistantProviderStatus {
         provider,
         label: provider.label(),
         installed: false,
-        authentication: AssistantAuthentication::Required,
+        authentication: AssistantAuthentication::Unknown,
         available: false,
         busy,
-        detail: format!("{} 상태 확인 작업을 완료하지 못했습니다", provider.label()),
+        detail: format!(
+            "{} CLI를 찾지 못했습니다. 공식 CLI를 별도로 설치한 뒤 다시 확인해 주세요. 데스크톱 앱 설치만으로 CLI 설치가 보장되지는 않습니다",
+            provider.label()
+        ),
         models: Vec::new(),
+        state: AssistantCliState::NotInstalled,
+        executable_path: None,
+        version: None,
+        passed_launch_checks: false,
     }
 }
 
-fn authentication_command_succeeds(
-    program: &ExternalProgram,
-    arguments: &[&str],
-) -> AssistantAuthentication {
-    if status_command_output(program, arguments).is_ok() {
-        AssistantAuthentication::Authenticated
-    } else {
-        AssistantAuthentication::Required
+fn provider_status_failed(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
+    let mut status = empty_provider_status(provider, busy);
+    status.state = AssistantCliState::CheckFailed;
+    status.detail = format!(
+        "{} 상태 확인에 실패했습니다. 설치나 로그인 여부는 아직 확인되지 않았습니다. 다시 확인해 주세요",
+        provider.label()
+    );
+    status
+}
+
+fn is_app_bundled_program(program: &ExternalProgram) -> bool {
+    let path = program
+        .path()
+        .canonicalize()
+        .unwrap_or_else(|_| program.path().to_path_buf());
+    let components = path.components().collect::<Vec<_>>();
+    components.windows(2).any(|pair| {
+        pair[0].as_os_str().to_string_lossy().ends_with(".app") && pair[1].as_os_str() == "Contents"
+    })
+}
+
+fn resolve_provider(
+    provider: AssistantProviderKind,
+    busy: bool,
+) -> (AssistantProviderStatus, Option<ExternalProgram>) {
+    resolve_candidates(
+        provider,
+        busy,
+        find_external_programs(provider.executable_name()),
+    )
+}
+
+fn resolve_candidates(
+    provider: AssistantProviderKind,
+    busy: bool,
+    programs: Vec<ExternalProgram>,
+) -> (AssistantProviderStatus, Option<ExternalProgram>) {
+    resolve_candidates_cancellable(provider, busy, programs, None)
+}
+
+fn resolve_candidates_cancellable(
+    provider: AssistantProviderKind,
+    busy: bool,
+    programs: Vec<ExternalProgram>,
+    cancellation: Option<&AtomicBool>,
+) -> (AssistantProviderStatus, Option<ExternalProgram>) {
+    let mut first_failure = None;
+    let mut skipped = 0;
+    // App-private binaries are not a supported standalone CLI installation.
+    // Do not silently borrow them merely because an app injected them into PATH.
+    for program in programs
+        .into_iter()
+        .filter(|program| !is_app_bundled_program(program))
+        .take(8)
+    {
+        let mut status = inspect_candidate(provider, busy, &program, cancellation);
+        if matches!(
+            status.state,
+            AssistantCliState::Broken | AssistantCliState::Incompatible
+        ) || (status.state == AssistantCliState::CheckFailed && !status.passed_launch_checks)
+        {
+            skipped += 1;
+            first_failure.get_or_insert(status);
+            continue;
+        }
+        if skipped > 0 {
+            status.detail.push_str(&format!(" 앞선 CLI 후보 {skipped}개의 실행 또는 호환성 검사 실패로 다른 설치본을 선택했습니다."));
+        }
+        // A healthy but signed-out CLI is not skipped: that could switch accounts.
+        return (status, Some(program));
     }
+    (
+        first_failure.unwrap_or_else(|| empty_provider_status(provider, busy)),
+        None,
+    )
+}
+
+const CLAUDE_CHAT_ARGS: &[&str] = &[
+    "--print",
+    "--no-session-persistence",
+    "--tools",
+    "",
+    "--permission-mode",
+    "dontAsk",
+    "--strict-mcp-config",
+    "--mcp-config",
+    r#"{"mcpServers":{}}"#,
+    "--setting-sources",
+    "",
+    "--settings",
+    r#"{"disableAllHooks":true}"#,
+    "--disable-slash-commands",
+    "--no-chrome",
+    "--output-format",
+    "text",
+];
+
+fn configure_claude_chat(command: &mut std::process::Command) {
+    command
+        .args(CLAUDE_CHAT_ARGS)
+        .env("ENABLE_CLAUDEAI_MCP_SERVERS", "false")
+        .env("DISABLE_AUTOUPDATER", "1");
+}
+
+fn missing_chat_options(provider: AssistantProviderKind, help: &str) -> Vec<&'static str> {
+    let required: Vec<&str> = match provider {
+        AssistantProviderKind::Codex => vec![
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "--sandbox",
+            "--config",
+            "--color",
+            "--cd",
+            "--output-last-message",
+        ],
+        AssistantProviderKind::ClaudeCode => CLAUDE_CHAT_ARGS
+            .iter()
+            .copied()
+            .filter(|arg| arg.starts_with("--"))
+            .collect(),
+        _ => Vec::new(),
+    };
+    let tokens = help
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
+        .collect::<Vec<_>>();
+    let mut missing: Vec<_> = required
+        .into_iter()
+        .filter(|option| !tokens.contains(option))
+        .collect();
+    // Old Claude CLIs may treat unknown subcommands as a prompt. Do not run
+    // `auth status` unless the CLI advertises its authentication command group.
+    if provider == AssistantProviderKind::ClaudeCode
+        && !help.split_once("Commands:").is_some_and(|(_, commands)| {
+            commands
+                .lines()
+                .any(|line| line.split_whitespace().next() == Some("auth"))
+        })
+    {
+        missing.push("auth status");
+    }
+    missing
+}
+
+fn inspect_candidate(
+    provider: AssistantProviderKind,
+    busy: bool,
+    program: &ExternalProgram,
+    cancellation: Option<&AtomicBool>,
+) -> AssistantProviderStatus {
+    let probe = |arguments: &[&str]| {
+        status_probe_cancellable(program, arguments, Duration::from_secs(10), cancellation)
+    };
+    let mut status = empty_provider_status(provider, busy);
+    status.installed = true;
+    status.executable_path = Some(program.path().to_string_lossy().into_owned());
+    let version = match probe(&["--version"]) {
+        Ok(output) if output.success => output,
+        Ok(_) | Err(ProbeError::Launch) => {
+            status.state = AssistantCliState::Broken;
+            status.detail = format!(
+                "{} CLI 실행에 실패했습니다. 설치 파일 누락·손상 또는 실행 권한을 확인하고 필요하면 CLI를 재설치해 주세요. 로그인 문제로 판정한 것은 아닙니다",
+                provider.label()
+            );
+            return status;
+        }
+        Err(_) => {
+            status.state = AssistantCliState::CheckFailed;
+            status.detail = "CLI 버전 확인이 시간 초과되었거나 결과를 읽지 못했습니다. 다시 확인해 주세요. 설치 손상이나 로그아웃으로 단정할 수 없습니다".to_owned();
+            return status;
+        }
+    };
+    status.version = version
+        .stdout
+        .split_whitespace()
+        .chain(version.stderr.split_whitespace())
+        .find(|word| {
+            word.len() <= 60
+                && word
+                    .trim_start_matches('v')
+                    .split('.')
+                    .take(3)
+                    .filter(|part| part.chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+                    .count()
+                    == 3
+        })
+        .map(str::to_owned);
+    if matches!(
+        provider,
+        AssistantProviderKind::Codex | AssistantProviderKind::ClaudeCode
+    ) {
+        let arguments: &[&str] = if provider == AssistantProviderKind::Codex {
+            &["exec", "--help"]
+        } else {
+            &["--help"]
+        };
+        match probe(arguments) {
+            Ok(output) if output.success => {
+                let missing = missing_chat_options(provider, &output.stdout);
+                if !missing.is_empty() {
+                    status.state = AssistantCliState::Incompatible;
+                    status.detail = format!(
+                        "{} CLI에서 필요한 옵션 지원을 확인하지 못했습니다: {}. 구버전 또는 앱과의 호환성 문제일 수 있습니다. CLI 업데이트 후 다시 확인하고, 계속되면 BroomSweepy 연동을 점검해 주세요",
+                        provider.label(),
+                        missing.join(", ")
+                    );
+                    return status;
+                }
+            }
+            _ => {
+                status.state = AssistantCliState::CheckFailed;
+                status.detail = "CLI 실행은 확인했지만 지원 옵션 검사를 완료하지 못했습니다. 다시 확인해 주세요".to_owned();
+                return status;
+            }
+        }
+    }
+    status.passed_launch_checks = true;
+    if provider == AssistantProviderKind::Ollama {
+        status.authentication = AssistantAuthentication::NotRequired;
+        match probe(&["list"]).and_then(|output| {
+            if output.success {
+                Ok(parse_ollama_models(&output.stdout))
+            } else {
+                Err(ProbeError::Read)
+            }
+        }) {
+            Ok(models) => {
+                status.models = models;
+                status.available = !status.models.is_empty();
+                status.state = if status.available {
+                    AssistantCliState::Ready
+                } else {
+                    AssistantCliState::NoModels
+                };
+                status.detail = if status.available {
+                    format!("Ollama 모델 {}개를 확인했습니다", status.models.len())
+                } else {
+                    "Ollama는 실행되지만 대화용 모델이 없습니다. 모델을 설치한 뒤 다시 확인해 주세요".to_owned()
+                };
+            }
+            Err(_) => {
+                status.state = AssistantCliState::ServiceUnavailable;
+                status.detail = "Ollama CLI는 있지만 서비스에 연결하지 못했습니다. Ollama를 실행한 뒤 다시 확인해 주세요".to_owned();
+            }
+        }
+        return status;
+    }
+    let arguments: &[&str] = match provider {
+        AssistantProviderKind::Codex => &["login", "status"],
+        AssistantProviderKind::ClaudeCode => &["auth", "status"],
+        _ => &["models"],
+    };
+    status.authentication = probe(arguments)
+        .map(|output| authentication_from_output(provider, &output))
+        .unwrap_or(AssistantAuthentication::Unknown);
+    (status.state, status.detail) = match status.authentication {
+        AssistantAuthentication::Authenticated => (AssistantCliState::Ready, format!("{} CLI 실행과 저장된 로그인 정보를 확인했습니다. 서버의 인증 유효성은 질문을 보낼 때 확인됩니다", provider.label())),
+        AssistantAuthentication::Required => (AssistantCliState::LoginRequired, format!("{} CLI는 실행되지만 로그인이 필요합니다. 터미널에서 {}로 로그인한 뒤 다시 확인해 주세요", provider.label(), if provider == AssistantProviderKind::ClaudeCode { "claude auth login" } else if provider == AssistantProviderKind::Codex { "codex login" } else { provider.executable_name() })),
+        _ => (AssistantCliState::CheckFailed, "CLI 실행은 확인했지만 인증 상태를 확인하지 못했습니다. 네트워크·CLI 오류일 수 있으므로 다시 확인해 주세요. 로그인 필요로 판정하지 않았습니다".to_owned()),
+    };
+    status.available = status.state == AssistantCliState::Ready;
+    status
+}
+
+fn authentication_from_output(
+    provider: AssistantProviderKind,
+    output: &ProbeOutput,
+) -> AssistantAuthentication {
+    if provider == AssistantProviderKind::ClaudeCode
+        && let Ok(value) = serde_json::from_str::<serde_json::Value>(&output.stdout)
+    {
+        return match value.get("loggedIn").and_then(serde_json::Value::as_bool) {
+            Some(true) if output.success => AssistantAuthentication::Authenticated,
+            Some(false) => AssistantAuthentication::Required,
+            _ => AssistantAuthentication::Unknown,
+        };
+    }
+    let text = format!("{}\n{}", output.stdout, output.stderr).to_ascii_lowercase();
+    if text.contains("not logged in")
+        || text.contains("not authenticated")
+        || text.contains("please log in")
+        || text.contains("please login")
+        || text.contains("authentication required")
+    {
+        return AssistantAuthentication::Required;
+    }
+    if output.success
+        && provider != AssistantProviderKind::ClaudeCode
+        && (provider != AssistantProviderKind::Codex || text.contains("logged in"))
+    {
+        return AssistantAuthentication::Authenticated;
+    }
+    AssistantAuthentication::Unknown
 }
 
 fn ollama_models(program: &ExternalProgram) -> Result<Vec<AssistantProviderModel>, String> {
-    let output = status_command_output(program, &["list"])
+    let output = status_probe(program, &["list"])
         .map_err(|_| "Ollama 모델 목록을 읽지 못했습니다".to_owned())?;
-    Ok(parse_ollama_models(&output))
+    if !output.success {
+        return Err("Ollama 서비스에 연결하지 못했습니다".to_owned());
+    }
+    Ok(parse_ollama_models(&output.stdout))
 }
 
 fn parse_ollama_models(output: &str) -> Vec<AssistantProviderModel> {
@@ -865,50 +1172,409 @@ fn parse_ollama_models(output: &str) -> Vec<AssistantProviderModel> {
         .collect()
 }
 
-fn status_command_output(program: &ExternalProgram, arguments: &[&str]) -> Result<String, ()> {
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeError {
+    Launch,
+    Timeout,
+    OutputLimit,
+    Read,
+    Cancelled,
+}
+
+struct ProbeOutput {
+    success: bool,
+    stdout: String,
+    stderr: String,
+}
+
+fn status_probe(program: &ExternalProgram, arguments: &[&str]) -> Result<ProbeOutput, ProbeError> {
+    status_probe_with_timeout(program, arguments, Duration::from_secs(10))
+}
+
+fn status_probe_with_timeout(
+    program: &ExternalProgram,
+    arguments: &[&str],
+    timeout: Duration,
+) -> Result<ProbeOutput, ProbeError> {
+    status_probe_cancellable(program, arguments, timeout, None)
+}
+
+fn status_probe_cancellable(
+    program: &ExternalProgram,
+    arguments: &[&str],
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<ProbeOutput, ProbeError> {
+    if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return Err(ProbeError::Cancelled);
+    }
+    // Anonymous files avoid pipe-buffer deadlock. Never surface raw auth output
+    // (which can contain account details) in diagnostics or logs.
+    let mut stdout = tempfile::tempfile().map_err(|_| ProbeError::Read)?;
+    let mut stderr = tempfile::tempfile().map_err(|_| ProbeError::Read)?;
     let mut command = program.command();
     let mut child = command
         .args(arguments)
+        .current_dir(std::env::temp_dir())
+        .env("DISABLE_AUTOUPDATER", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(
+            stdout.try_clone().map_err(|_| ProbeError::Read)?,
+        ))
+        .stderr(Stdio::from(
+            stderr.try_clone().map_err(|_| ProbeError::Read)?,
+        ))
         .spawn()
-        .map_err(|_| ())?;
+        .map_err(|_| ProbeError::Launch)?;
     let started = Instant::now();
     loop {
+        if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ProbeError::Cancelled);
+        }
+        let oversized = [&stdout, &stderr].iter().any(|file| {
+            file.metadata()
+                .map_or(true, |metadata| metadata.len() > MAX_STATUS_OUTPUT_BYTES)
+        });
+        if oversized {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(ProbeError::OutputLimit);
+        }
         match child.try_wait() {
             Ok(Some(status)) => {
-                if !status.success() {
-                    return Err(());
-                }
-                let mut bytes = Vec::new();
-                child
-                    .stdout
-                    .take()
-                    .ok_or(())?
-                    .take(MAX_STATUS_OUTPUT_BYTES + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|_| ())?;
-                if bytes.len() as u64 > MAX_STATUS_OUTPUT_BYTES {
-                    return Err(());
-                }
-                return String::from_utf8(bytes).map_err(|_| ());
+                return Ok(ProbeOutput {
+                    success: status.success(),
+                    stdout: read_probe_file(&mut stdout)?,
+                    stderr: read_probe_file(&mut stderr)?,
+                });
             }
-            Ok(None) if started.elapsed() < Duration::from_secs(10) => {
+            Ok(None) if started.elapsed() < timeout => {
                 thread::sleep(Duration::from_millis(50));
             }
             Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(());
+                return Err(ProbeError::Timeout);
             }
         }
     }
 }
 
+fn read_probe_file(file: &mut File) -> Result<String, ProbeError> {
+    file.seek(SeekFrom::Start(0))
+        .map_err(|_| ProbeError::Read)?;
+    let mut bytes = Vec::new();
+    file.take(MAX_STATUS_OUTPUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ProbeError::Read)?;
+    if bytes.len() as u64 > MAX_STATUS_OUTPUT_BYTES {
+        return Err(ProbeError::OutputLimit);
+    }
+    String::from_utf8(bytes).map_err(|_| ProbeError::Read)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_oauth_is_an_actionable_structured_error_without_raw_output() {
+        let error = AssistantChatError::from(provider_failure_message(
+            AssistantProviderKind::ClaudeCode,
+            "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue. PRIVATE_TOKEN",
+        ));
+        assert_eq!(error.kind, "authentication");
+        assert!(error.message.contains("claude auth login"));
+        assert!(!error.message.contains("PRIVATE_TOKEN"));
+        assert!(!error.message.contains(REAUTHENTICATION_PREFIX));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn server_error_on_stdout_is_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_cli(
+            dir.path(),
+            "claude",
+            "printf 'API Error: 401 OAuth access token has expired'; exit 1",
+        );
+        let result = run_provider(
+            AssistantProviderKind::ClaudeCode,
+            program,
+            None,
+            dir.path().join("workspace"),
+            0,
+            "synthetic test".into(),
+            std::sync::Arc::new(AtomicBool::new(false)),
+        );
+        let error = AssistantChatError::from(result.unwrap_err());
+        assert_eq!(error.kind, "authentication");
+        assert!(error.message.contains("다시 로그인"));
+    }
+
+    fn probe_output(success: bool, stdout: &str, stderr: &str) -> ProbeOutput {
+        ProbeOutput {
+            success,
+            stdout: stdout.into(),
+            stderr: stderr.into(),
+        }
+    }
+
+    #[test]
+    fn auth_failures_require_positive_evidence_of_missing_login() {
+        let claude = AssistantProviderKind::ClaudeCode;
+        let codex = AssistantProviderKind::Codex;
+        assert_eq!(
+            authentication_from_output(claude, &probe_output(false, r#"{"loggedIn":false}"#, "")),
+            AssistantAuthentication::Required
+        );
+        assert_eq!(
+            authentication_from_output(claude, &probe_output(true, r#"{"loggedIn":true}"#, "")),
+            AssistantAuthentication::Authenticated
+        );
+        assert_eq!(
+            authentication_from_output(codex, &probe_output(false, "", "Not logged in")),
+            AssistantAuthentication::Required
+        );
+        assert_eq!(
+            authentication_from_output(codex, &probe_output(true, "", "Logged in using ChatGPT")),
+            AssistantAuthentication::Authenticated
+        );
+        for error in [
+            "spawn codex ENOENT",
+            "network timeout",
+            "unknown option",
+            "",
+        ] {
+            assert_eq!(
+                authentication_from_output(codex, &probe_output(false, "", error)),
+                AssistantAuthentication::Unknown
+            );
+        }
+        assert_eq!(
+            authentication_from_output(
+                claude,
+                &probe_output(true, "unrecognized status format", "")
+            ),
+            AssistantAuthentication::Unknown
+        );
+    }
+
+    #[test]
+    fn missing_cli_and_failed_check_do_not_claim_login_required() {
+        let (missing, program) = resolve_candidates(AssistantProviderKind::Codex, false, vec![]);
+        assert!(program.is_none());
+        assert_eq!(missing.state, AssistantCliState::NotInstalled);
+        assert_eq!(missing.authentication, AssistantAuthentication::Unknown);
+        let failed = provider_status_failed(AssistantProviderKind::Codex, false);
+        assert_eq!(failed.state, AssistantCliState::CheckFailed);
+        assert_eq!(failed.authentication, AssistantAuthentication::Unknown);
+    }
+
+    #[test]
+    fn app_bundle_is_not_a_standalone_installation() {
+        let program = ExternalProgram::Direct(PathBuf::from(
+            "/Applications/Example.app/Contents/Resources/codex",
+        ));
+        let (status, selected) =
+            resolve_candidates(AssistantProviderKind::Codex, false, vec![program]);
+        assert_eq!(status.state, AssistantCliState::NotInstalled);
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn claude_supported_arguments_keep_isolation_without_safe_mode() {
+        let mut command = std::process::Command::new("claude");
+        configure_claude_chat(&mut command);
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(!args.contains(&"--safe-mode"));
+        for pair in [
+            ["--tools", ""],
+            ["--permission-mode", "dontAsk"],
+            ["--setting-sources", ""],
+            ["--settings", r#"{"disableAllHooks":true}"#],
+            ["--mcp-config", r#"{"mcpServers":{}}"#],
+        ] {
+            assert!(args.windows(2).any(|candidate| candidate == pair));
+        }
+        for flag in [
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--disable-slash-commands",
+            "--no-chrome",
+        ] {
+            assert!(args.contains(&flag));
+        }
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == "ENABLE_CLAUDEAI_MCP_SERVERS"
+                    && value == Some(std::ffi::OsStr::new("false")))
+        );
+        assert!(
+            missing_chat_options(
+                AssistantProviderKind::ClaudeCode,
+                &format!(
+                    "{}\nCommands:\n  auth Manage authentication",
+                    CLAUDE_CHAT_ARGS.join(" ")
+                )
+            )
+            .is_empty()
+        );
+        assert!(
+            !missing_chat_options(AssistantProviderKind::ClaudeCode, "--tools-extra --print")
+                .is_empty()
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_cli(directory: &Path, name: &str, script: &str) -> ExternalProgram {
+        use std::os::unix::fs::PermissionsExt;
+        let path = directory.join(name);
+        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        ExternalProgram::Direct(path)
+    }
+
+    #[cfg(unix)]
+    fn fake_claude(
+        directory: &Path,
+        name: &str,
+        help: &str,
+        authenticated: bool,
+    ) -> ExternalProgram {
+        fake_cli(
+            directory,
+            name,
+            &format!(
+                "case \"$1\" in\n--version) printf '%s\\n' '2.1.147 (Claude Code)' ;;\n--help) printf '%s\\n' '{help}' ;;\nauth) printf '%s\\n' '{{\"loggedIn\":{authenticated}}}'; {} ;;\n*) exit 2 ;;\nesac",
+                if authenticated { "exit 0" } else { "exit 1" }
+            ),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broken_and_incompatible_candidates_fall_back_but_signed_out_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let broken = fake_cli(dir.path(), "broken", "printf 'spawn ENOENT' >&2; exit 1");
+        let old = fake_claude(dir.path(), "old", "--print", true);
+        let help = CLAUDE_CHAT_ARGS
+            .iter()
+            .copied()
+            .filter(|arg| arg.starts_with("--"))
+            .collect::<Vec<_>>()
+            .join(" ")
+            + "\nCommands:\n  auth Manage authentication";
+        let good = fake_claude(dir.path(), "good", &help, true);
+        let signed_out = fake_claude(dir.path(), "signed-out", &help, false);
+        let (status, selected) = resolve_candidates(
+            AssistantProviderKind::ClaudeCode,
+            false,
+            vec![broken.clone(), old.clone(), good.clone()],
+        );
+        assert_eq!(status.state, AssistantCliState::Ready);
+        assert_eq!(status.version.as_deref(), Some("2.1.147"));
+        assert_eq!(
+            selected.as_ref().map(ExternalProgram::path),
+            Some(good.path())
+        );
+        assert!(status.detail.contains("2개"));
+        let (status, _) =
+            resolve_candidates(AssistantProviderKind::ClaudeCode, false, vec![broken]);
+        assert_eq!(status.state, AssistantCliState::Broken);
+        assert_eq!(status.authentication, AssistantAuthentication::Unknown);
+        let (status, _) = resolve_candidates(AssistantProviderKind::ClaudeCode, false, vec![old]);
+        assert_eq!(status.state, AssistantCliState::Incompatible);
+        let (status, selected) = resolve_candidates(
+            AssistantProviderKind::ClaudeCode,
+            false,
+            vec![signed_out.clone(), good],
+        );
+        assert_eq!(status.state, AssistantCliState::LoginRequired);
+        assert_eq!(
+            selected.as_ref().map(ExternalProgram::path),
+            Some(signed_out.path())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn old_claude_without_auth_subcommand_is_rejected_before_auth_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let help = CLAUDE_CHAT_ARGS
+            .iter()
+            .copied()
+            .filter(|arg| arg.starts_with("--"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let program = fake_claude(dir.path(), "old-claude", &help, false);
+        let (status, selected) =
+            resolve_candidates(AssistantProviderKind::ClaudeCode, false, vec![program]);
+        assert_eq!(status.state, AssistantCliState::Incompatible);
+        assert!(status.detail.contains("auth status"));
+        assert_eq!(status.authentication, AssistantAuthentication::Unknown);
+        assert!(selected.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probes_bound_time_and_both_output_streams_without_pipe_deadlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let timeout = fake_cli(dir.path(), "timeout", "exec /bin/sleep 2");
+        assert!(matches!(
+            status_probe_with_timeout(&timeout, &[], Duration::from_millis(100)),
+            Err(ProbeError::Timeout)
+        ));
+        let noisy = fake_cli(dir.path(), "noisy", "head -c 70000 /dev/zero >&2");
+        assert!(matches!(
+            status_probe(&noisy, &[]),
+            Err(ProbeError::OutputLimit)
+        ));
+        let stderr = fake_cli(dir.path(), "stderr", "printf 'Not logged in' >&2; exit 1");
+        let output = status_probe(&stderr, &[]).unwrap();
+        assert!(!output.success);
+        assert_eq!(output.stderr, "Not logged in");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_interrupts_cli_preflight() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_cli(dir.path(), "slow", "exec /bin/sleep 5");
+        let cancelled = AtomicBool::new(true);
+        assert!(matches!(
+            status_probe_cancellable(&program, &[], Duration::from_secs(10), Some(&cancelled)),
+            Err(ProbeError::Cancelled)
+        ));
+        cancelled.store(false, Ordering::Release);
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                thread::sleep(Duration::from_millis(100));
+                cancelled.store(true, Ordering::Release);
+            });
+            assert!(matches!(
+                status_probe_cancellable(&program, &[], Duration::from_secs(10), Some(&cancelled)),
+                Err(ProbeError::Cancelled)
+            ));
+        });
+    }
+
+    #[test]
+    #[ignore = "Opt-in read-only diagnostics for installed provider CLIs; no prompts or login changes"]
+    fn installed_cli_diagnostics() {
+        for provider in ASSISTANT_PROVIDERS {
+            println!(
+                "{}",
+                serde_json::to_string(&provider_status(provider, false)).unwrap()
+            );
+        }
+    }
 
     fn valid_request() -> AssistantChatRequest {
         AssistantChatRequest {

@@ -7,6 +7,7 @@ export type ViewId =
   | "cleanup"
   | "large-files"
   | "duplicates"
+  | "performance"
   | "assistant"
   | "settings";
 
@@ -21,6 +22,7 @@ export type AssistantScopeKind = "folder" | "docker";
 export type AssistantResponseLanguage = "en" | "ko" | "ja" | "zh-CN";
 
 export type AssistantAuthentication =
+  | "unknown"
   | "authenticated"
   | "required"
   | "notRequired";
@@ -39,6 +41,10 @@ export interface AssistantProviderStatus {
   busy: boolean;
   detail: string;
   models: AssistantProviderModel[];
+  state: "notInstalled" | "broken" | "incompatible" | "loginRequired"
+    | "checkFailed" | "serviceUnavailable" | "noModels" | "ready";
+  executablePath: string | null;
+  version: string | null;
 }
 
 export interface AssistantChatTurn {
@@ -468,6 +474,7 @@ export interface VolumeInfo {
   availableBytes: number;
   removable: boolean;
   readOnly: boolean;
+  isDiskImage: boolean;
   isSystem: boolean;
 }
 
@@ -484,6 +491,115 @@ export interface SystemMemoryStatus {
   totalSwapBytes: number;
   usedSwapBytes: number;
   capturedAtUnixMs: number;
+}
+
+export type PerformanceProcessKind = "guiApp" | "accessoryApp" | "userProcess";
+export type ProcessTerminationEligibility =
+  | "eligible"
+  | "selfApp"
+  | "protectedSystemApp"
+  | "otherUser"
+  | "identityUnavailable"
+  | "notRegularApplication"
+  | "unsupported";
+
+export interface PerformanceMemory {
+  totalBytes: number;
+  availableBytes: number;
+  usedBytes: number;
+  totalSwapBytes: number;
+  usedSwapBytes: number;
+}
+
+export interface PerformanceProcessUsage {
+  targetId: string | null;
+  displayName: string;
+  bundleIdentifier: string | null;
+  pid: number;
+  kind: PerformanceProcessKind;
+  cpuCorePercent: number;
+  cpuMachinePercent: number;
+  residentBytes: number;
+  processCount: number;
+  canRequestTermination: boolean;
+  terminationEligibility: ProcessTerminationEligibility;
+}
+
+export interface PerformanceCapabilities {
+  processMetricsAvailable: boolean;
+  gracefulTerminationAvailable: boolean;
+  appMemoryCleanupAvailable: boolean;
+  processScope: "guiApplications" | "topProcesses";
+}
+
+export interface PerformanceSnapshot {
+  snapshotId: string;
+  capturedAtUnixMs: number;
+  sampleWindowMs: number;
+  refreshAfterMs: number;
+  platform: string;
+  logicalCpuCount: number;
+  cpuUsagePercent: number;
+  memory: PerformanceMemory;
+  processes: PerformanceProcessUsage[];
+  processesTruncated: boolean;
+  capabilities: PerformanceCapabilities;
+}
+
+export type AppMemoryCleanupOutcome = "completed" | "busy" | "unsupported";
+
+export interface AppMemoryCleanupResult {
+  outcome: AppMemoryCleanupOutcome;
+  allocatorReleasedBytes: number;
+  appResidentBeforeBytes: number | null;
+  appResidentAfterBytes: number | null;
+  systemAvailableBeforeBytes: number | null;
+  systemAvailableAfterBytes: number | null;
+  requestedAtUnixMs: number;
+  completedAtUnixMs: number;
+}
+
+export type TerminationPreviewOutcome =
+  | "ready"
+  | "staleSnapshot"
+  | "staleTarget"
+  | "protectedTarget"
+  | "unsupported";
+
+export interface TerminationPreview {
+  previewId: string;
+  displayName: string;
+  pid: number;
+  capturedAtUnixMs: number;
+  expiresAtUnixMs: number;
+}
+
+export interface TerminationPreviewResponse {
+  outcome: TerminationPreviewOutcome;
+  preview: TerminationPreview | null;
+}
+
+export interface ExecuteTerminationRequest {
+  previewId: string;
+  unsavedWorkAcknowledged: boolean;
+}
+
+export type TerminationOutcome =
+  | "terminated"
+  | "requestSent"
+  | "requestRejected"
+  | "alreadyExited"
+  | "staleTarget"
+  | "protectedTarget"
+  | "previewExpired"
+  | "previewAlreadyUsed"
+  | "acknowledgementRequired"
+  | "unsupported";
+
+export interface TerminationResult {
+  outcome: TerminationOutcome;
+  displayName: string | null;
+  requestedAtUnixMs: number;
 }
 
 export type ScanUiState = "idle" | "scanning" | "success" | "cancelled" | "error";
@@ -594,6 +710,7 @@ export interface DirectoryScanProgress {
 }
 
 export interface DirectoryScanReport {
+  generation: number;
   root: string;
   name: string;
   parent: string | null;
@@ -753,7 +870,7 @@ export interface ActionRecoveryReport {
   issues: string[];
 }
 
-export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "unknown";
+export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "directoryFile" | "unknown";
 
 export interface ActionHistoryEntry {
   operationId: string;

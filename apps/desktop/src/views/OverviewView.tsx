@@ -21,6 +21,8 @@ import type {
   ScanReport,
   ScanUiState,
   VolumeInfo,
+  TrashOperationResult,
+  TrashProgress,
 } from "../types";
 import { useLanguage } from "../i18n";
 
@@ -49,6 +51,10 @@ interface OverviewViewProps {
   onCancelDriveScan: () => void;
   onStartDirectoryScan: (path: string, breadcrumbs?: DirectoryBreadcrumb[]) => void;
   onCancelDirectoryScan: () => void;
+  onRevealDirectoryItem: (path: string) => Promise<void>;
+  onTrashDirectoryFile: (path: string, generation: number) => Promise<TrashOperationResult>;
+  onCancelTrash: () => void;
+  trashProgress: TrashProgress | null;
   onOpenLargeFiles: () => void;
   onOpenDuplicates: () => void;
   onOpenCleanup: () => void;
@@ -79,6 +85,10 @@ export function OverviewView({
   onCancelDriveScan,
   onStartDirectoryScan,
   onCancelDirectoryScan,
+  onRevealDirectoryItem,
+  onTrashDirectoryFile,
+  onCancelTrash,
+  trashProgress,
   onOpenLargeFiles,
   onOpenDuplicates,
   onOpenCleanup,
@@ -109,6 +119,10 @@ export function OverviewView({
         onPickFolder={onPickFolder}
         onStart={onStartDirectoryScan}
         onCancel={onCancelDirectoryScan}
+        onReveal={onRevealDirectoryItem}
+        onTrash={onTrashDirectoryFile}
+        onCancelTrash={onCancelTrash}
+        trashProgress={trashProgress}
       />
 
       {mapReady && !detailReady ? (

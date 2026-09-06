@@ -37,6 +37,7 @@ import {
   listAssistantSessions,
 } from "../lib/bridge";
 import { formatAssistantPlainText } from "../lib/assistantText";
+import { assistantFailureMessage, assistantProviderStatusKey, isAssistantAuthenticationFailure } from "../lib/assistantProviderStatus";
 import { isDockerManagementQuestion } from "../lib/dockerIntent";
 import { formatBytes, formatCount, formatDate, formatDockerBytes } from "../lib/format";
 import { findVolumeForPath } from "../lib/volumePath";
@@ -479,7 +480,13 @@ export function AssistantView({
         setDraft(message);
         setSessionError(normalizeAssistantError(reason, t));
       } else {
-        setProviderError(normalizeAssistantError(reason, t));
+        const detail = normalizeAssistantError(reason, t);
+        setProviderError(detail);
+        if (isAssistantAuthenticationFailure(reason)) {
+          setProviders((current) => current.map((candidate) => candidate.provider === selectedProviderKind
+            ? { ...candidate, state: "loginRequired", authentication: "required", available: false, busy: false, detail }
+            : candidate));
+        }
       }
     } finally {
       requestInFlight.current = false;
@@ -671,6 +678,20 @@ export function AssistantView({
           </button>
         </div>
       </section>
+
+      {provider ? (
+        <section className={`assistant-cli-diagnostics ${provider.available ? "is-ready" : ""}`} aria-label={t("CLI 연결 상태")}>
+          <strong>{providerOptionLabel(provider, t)}</strong>
+          <p>{provider.detail}</p>
+          {provider.executablePath ? (
+            <details>
+              <summary>{t("실행 경로와 버전")}</summary>
+              <code>{provider.executablePath}</code>
+              <span>{t("CLI 버전: {{version}}", { version: provider.version ?? t("확인 불가") })}</span>
+            </details>
+          ) : null}
+        </section>
+      ) : null}
 
       <section className="assistant-chat" aria-label={activeScopeKind === "docker" ? t("Docker 용량 대화") : t("폴더 분석 대화")}>
         <div className="assistant-transcript">
@@ -1093,14 +1114,7 @@ function boundedConversationHistory(turns: AssistantDisplayTurn[]): AssistantCha
 }
 
 function providerOptionLabel(provider: AssistantProviderStatus, t: Translate): string {
-  if (!provider.installed) return t("{{provider}} · 설치 안 됨", { provider: provider.label });
-  if (provider.authentication === "required") return t("{{provider}} · 로그인 필요", { provider: provider.label });
-  if (provider.authentication === "notRequired") {
-    return provider.models.length > 0
-      ? t("{{provider}} · 모델 {{count}}개", { provider: provider.label, count: provider.models.length })
-      : t("{{provider}} · 모델 없음", { provider: provider.label });
-  }
-  return t("{{provider}} · 로그인됨", { provider: provider.label });
+  return t(assistantProviderStatusKey(provider), { provider: provider.label, count: provider.models.length });
 }
 
 function providerPermissionDetail(provider: AssistantProviderStatus | null, t: Translate): string {
@@ -1108,7 +1122,7 @@ function providerPermissionDetail(provider: AssistantProviderStatus | null, t: T
     case "codex":
       return t("Codex는 앱 전용 빈 폴더에서 읽기 전용 샌드박스로 실행합니다. Codex 자체 읽기 도구의 실제 범위는 Codex 샌드박스 정책을 따릅니다.");
     case "claudeCode":
-      return t("Claude Code는 세션 저장과 도구 사용을 끄고, 승인 질문 없이 안전 모드로 실행합니다.");
+      return t("Claude Code는 세션 저장·도구·MCP·사용자 설정·훅을 끄고 실행합니다. CLI의 조직 관리 정책은 적용될 수 있습니다.");
     case "grok":
       return t("Grok은 단일 응답 모드에서 내장 도구, 하위 에이전트, 웹 검색을 끕니다. Grok CLI 자체 계정과 세션 정책은 그대로 적용됩니다.");
     case "antigravity":
@@ -1180,13 +1194,12 @@ function providerConversationLabel(
 }
 
 function providerUnavailableMessage(provider: AssistantProviderStatus, t: Translate): string {
-  if (!provider.installed) return t("{{provider}}를 먼저 설치해 주세요…", { provider: provider.label });
-  if (provider.provider === "ollama") return t("Ollama에 대화용 모델을 먼저 설치해 주세요…");
-  return t("{{provider}}에서 먼저 로그인해 주세요…", { provider: provider.label });
+  if (provider.state === "notInstalled") return t("{{provider}}를 먼저 설치해 주세요…", { provider: provider.label });
+  if (provider.state === "noModels") return t("Ollama에 대화용 모델을 먼저 설치해 주세요…");
+  if (provider.state === "loginRequired") return t("{{provider}}에서 먼저 로그인해 주세요…", { provider: provider.label });
+  return providerOptionLabel(provider, t);
 }
 
 function normalizeAssistantError(reason: unknown, t: Translate): string {
-  if (reason instanceof Error) return reason.message;
-  if (typeof reason === "string") return reason;
-  return t("AI CLI 응답을 받지 못했습니다");
+  return assistantFailureMessage(reason) ?? t("AI CLI 응답을 받지 못했습니다");
 }

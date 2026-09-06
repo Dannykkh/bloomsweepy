@@ -4,6 +4,7 @@ import "./App.css";
 import { AppShell } from "./components/AppShell";
 import { SafetyActionDialog } from "./components/SafetyActionDialog";
 import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice";
+import { FileSectionNav } from "./components/FileSectionNav";
 import { StorageSectionNav } from "./components/StorageSectionNav";
 import {
   cancelScan,
@@ -43,6 +44,7 @@ import {
   startScan,
   trashCleanupCandidates,
   trashDuplicateFiles,
+  trashDirectoryFile,
   approveCleanupPlan,
   rejectCleanupPlan,
 } from "./lib/bridge";
@@ -90,6 +92,7 @@ import { AssistantView } from "./views/AssistantView";
 import { findVolumeForPath } from "./lib/volumePath";
 import { DashboardView } from "./views/DashboardView";
 import { DockerManagementView } from "./views/DockerManagementView";
+import { PerformanceView } from "./views/PerformanceView";
 import { useLanguage } from "./i18n";
 
 interface AssistantLaunchRequest {
@@ -103,6 +106,8 @@ const storageViews = new Set<ViewId>([
   "duplicates",
   "cleanup",
 ]);
+
+const fileViews = new Set<ViewId>(["files", "documents"]);
 
 const unavailableControlStatus: ControlStatus = {
   revision: 0,
@@ -161,7 +166,7 @@ function App() {
   const [trashRunning, setTrashRunning] = useState(false);
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
-  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | null>(null);
+  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | "overview" | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
   const [recoveryReport, setRecoveryReport] = useState<ActionRecoveryReport | null>(null);
   const [recoveryChecking, setRecoveryChecking] = useState(true);
@@ -816,8 +821,14 @@ function App() {
     fileCatalogClearing;
 
   function navigate(view: ViewId) {
-    const transition = document.startViewTransition?.(() => setActiveView(view));
-    if (!transition) setActiveView(view);
+    const reducedMotion = window.matchMedia?.(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (reducedMotion || !document.startViewTransition) {
+      setActiveView(view);
+      return;
+    }
+    document.startViewTransition(() => setActiveView(view));
   }
 
   async function refreshDockerStatus() {
@@ -899,9 +910,12 @@ function App() {
     return runDirectoryScan(selected, undefined, options);
   }
 
-  async function openDashboardVolume(nextVolume: VolumeInfo) {
+  async function runDashboardScan(nextVolume: VolumeInfo) {
     if (selectionBlocked || !(await useSelectedRoot(nextVolume.mountPoint))) return;
-    await runDirectoryScan(nextVolume.mountPoint);
+    await runScan({
+      stayOnView: true,
+      rootOverride: nextVolume.mountPoint,
+    });
   }
 
   async function revealDashboardFile(path: string) {
@@ -914,8 +928,10 @@ function App() {
     }
   }
 
-  async function runScan() {
-    const scanRoot = root ?? (await pickFolder());
+  async function runScan(
+    options: { stayOnView?: boolean; rootOverride?: string } = {},
+  ) {
+    const scanRoot = options.rootOverride ?? root ?? (await pickFolder());
     if (
       !scanRoot ||
       scanState === "scanning" ||
@@ -929,7 +945,7 @@ function App() {
     )
       return;
 
-    setActiveView("overview");
+    if (!options.stayOnView) setActiveView("overview");
     setTrashResult(null);
     setTrashResultSource(null);
     setTrashError(null);
@@ -1095,15 +1111,6 @@ function App() {
         path: nextReport.root,
       };
       setDirectoryBreadcrumbs(breadcrumbs);
-      requestAnimationFrame(() => {
-        const reducedMotion = window.matchMedia?.(
-          "(prefers-reduced-motion: reduce)",
-        ).matches;
-        document.getElementById("storage-map")?.scrollIntoView({
-          behavior: reducedMotion ? "auto" : "smooth",
-          block: "start",
-        });
-      });
       return nextReport;
     } catch (reason) {
       const message = normalizeError(reason);
@@ -1136,7 +1143,9 @@ function App() {
     }
   }
 
-  async function runCleanupScan() {
+  async function runCleanupScan(
+    options: { stayOnView?: boolean } = {},
+  ) {
     if (
       cleanupScanState === "scanning" ||
       scanState === "scanning" ||
@@ -1149,7 +1158,7 @@ function App() {
     )
       return;
 
-    setActiveView("cleanup");
+    if (!options.stayOnView) setActiveView("cleanup");
     if (trashResultSource === "cleanup") {
       setTrashResult(null);
       setTrashResultSource(null);
@@ -1397,7 +1406,7 @@ function App() {
   }
 
   async function runTrashAction(
-    source: "duplicates" | "cleanup",
+    source: "duplicates" | "cleanup" | "overview",
     action: () => Promise<TrashOperationResult>,
   ): Promise<TrashOperationResult> {
     if (
@@ -1457,6 +1466,16 @@ function App() {
 
   function moveCleanupCandidates(request: CleanupTrashRequest) {
     return runTrashAction("cleanup", () => trashCleanupCandidates(request));
+  }
+
+  async function moveDirectoryFile(path: string, generation: number) {
+    const scanRoot = directoryReport?.root;
+    const breadcrumbs = directoryBreadcrumbs;
+    const result = await runTrashAction("overview", () => trashDirectoryFile(path, generation));
+    if (result.movedCount > 0 && scanRoot) {
+      await runDirectoryScan(scanRoot, breadcrumbs);
+    }
+    return result;
   }
 
   async function stopTrashAction() {
@@ -1538,6 +1557,14 @@ function App() {
       {activeView === "dashboard" ? (
         <DashboardView
           system={system}
+          report={report}
+          progress={progress}
+          scanState={scanState}
+          scanError={error}
+          cleanupReport={cleanupReport}
+          cleanupProgress={cleanupProgress}
+          cleanupState={cleanupScanState}
+          cleanupError={cleanupError}
           actionHistory={actionHistory}
           recentFiles={recentFiles}
           fileCatalog={fileCatalog}
@@ -1546,8 +1573,15 @@ function App() {
           error={dashboardError}
           blocked={selectionBlocked}
           onRefresh={() => void refreshDashboard()}
-          onOpenVolume={(nextVolume) => void openDashboardVolume(nextVolume)}
+          onStartScan={(nextVolume) => void runDashboardScan(nextVolume)}
+          onCancelScan={() => void stopScan()}
+          onStartCleanupScan={() => void runCleanupScan({ stayOnView: true })}
+          onCancelCleanupScan={() => void stopCleanupScan()}
           onOpenStorage={() => navigate("overview")}
+          onOpenLargeFiles={() => navigate("large-files")}
+          onOpenDuplicates={() => navigate("duplicates")}
+          onOpenCleanup={() => navigate("cleanup")}
+          onOpenPerformance={() => navigate("performance")}
           onRefreshFileCatalog={() =>
             void runFileCatalogBuild({ stayOnView: true })
           }
@@ -1557,6 +1591,9 @@ function App() {
       ) : null}
       {storageViews.has(activeView) ? (
         <StorageSectionNav activeView={activeView} onNavigate={navigate} />
+      ) : null}
+      {fileViews.has(activeView) ? (
+        <FileSectionNav activeView={activeView} onNavigate={navigate} />
       ) : null}
       {activeView === "overview" ? (
         <OverviewView
@@ -1593,6 +1630,10 @@ function App() {
             void runDirectoryScan(path, breadcrumbs)
           }
           onCancelDirectoryScan={() => void stopDirectoryScan()}
+          onRevealDirectoryItem={revealPath}
+          onTrashDirectoryFile={moveDirectoryFile}
+          onCancelTrash={() => void stopTrashAction()}
+          trashProgress={trashResultSource === "overview" ? trashProgress : null}
           onOpenLargeFiles={() => navigate("large-files")}
           onOpenDuplicates={() => navigate("duplicates")}
           onOpenCleanup={() => navigate("cleanup")}
@@ -1692,6 +1733,7 @@ function App() {
           onPickFolder={() => pickStorageFolder({ stayOnView: true })}
         />
       ) : null}
+      {activeView === "performance" ? <PerformanceView /> : null}
       {activeView === "cleanup" ? (
         <CleanupView
           platform={system?.platform ?? null}
@@ -1805,6 +1847,10 @@ function App() {
           fileCatalogState === "scanning") &&
         activeView !== "overview" &&
         activeView !== "cleanup" &&
+        !(
+          activeView === "dashboard" &&
+          (scanState === "scanning" || cleanupScanState === "scanning")
+        ) &&
         !(activeView === "documents" && documentIndexState === "scanning") &&
         !(activeView === "files" && fileCatalogState === "scanning")) ? (
         <div className="scan-status-dock">

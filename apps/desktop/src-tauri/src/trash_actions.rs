@@ -1,7 +1,8 @@
 use super::{ScanCompletionGuard, ScanRuntime, StoredReports};
 use bloomsweepy_core::{
     CleanupConfidence, VerifiedTrashItem, revalidate_verified_trash_item,
-    validate_cleanup_trash_candidate, validate_duplicate_trash_selection,
+    validate_cleanup_trash_candidate, validate_directory_trash_file,
+    validate_duplicate_trash_selection,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -36,6 +37,13 @@ pub(crate) struct DuplicateTrashGroupSelection {
 pub(crate) struct CleanupTrashRequest {
     pub(crate) paths: Vec<String>,
     pub(crate) allow_review_candidates: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DirectoryTrashRequest {
+    generation: u64,
+    path: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -108,6 +116,7 @@ struct Journal {
 enum TrashActionKind {
     DuplicateFiles,
     CleanupCandidates,
+    DirectoryFile,
 }
 
 impl Journal {
@@ -323,6 +332,46 @@ pub(crate) async fn trash_cleanup_candidates_internal(
 
     let clear_result = reports.clear_all();
     clear_result?;
+    worker_result?
+}
+
+#[tauri::command]
+pub(crate) async fn trash_directory_file(
+    app: AppHandle,
+    runtime: State<'_, ScanRuntime>,
+    reports: State<'_, StoredReports>,
+    request: DirectoryTrashRequest,
+) -> Result<TrashOperationResult, String> {
+    let cancellation = runtime.begin()?;
+    let _completion = ScanCompletionGuard::new(app.clone());
+    let report = reports.directory_report(request.generation)?;
+    let journal_path = action_journal_path(&app)?;
+    let worker_result = tauri::async_runtime::spawn_blocking(move || {
+        emit_progress(
+            &app,
+            TrashProgressPhase::Preflight,
+            "검사 당시 파일 신원과 변경 여부를 확인하고 있습니다".to_owned(),
+            0,
+            1,
+        );
+        let item = validate_directory_trash_file(&report, &request.path, || {
+            cancellation.load(Ordering::Acquire)
+        })
+        .map_err(|error| error.to_string())?;
+        execute_verified_items(
+            vec![item],
+            journal_path,
+            TrashActionKind::DirectoryFile,
+            &cancellation,
+            |progress| {
+                let _ = app.emit("trash-progress", progress);
+            },
+            &SystemTrash,
+        )
+    })
+    .await
+    .map_err(|error| format!("휴지통 이동 작업을 실행하지 못했습니다: {error}"));
+    reports.clear_all()?;
     worker_result?
 }
 
