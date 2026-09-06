@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-09-06
+
+### Features
+
+- **desktop**: Make the Rust/Tauri app the primary experience, with glass-inspired navigation, large one-click scan actions, and animated multi-drive cards. ([cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+- **performance**: Add CPU and memory rings, bounded top-app metrics, smooth sample transitions, and reduced-motion support. On macOS, expose current-process allocator relief and separately confirmed normal app-exit requests; unsupported platforms stay read-only. ([cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+- **treemap**: Add individual-file review actions backed by scan-time identity, path and content revalidation, and the existing Trash journal. Empty-folder discovery stays read-only. ([e4f3ad8](https://github.com/Dannykkh/bloomsweepy/commit/e4f3ad8), [cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+
+### Fixed
+
+- **scanning**: Exclude known cloud-sync roots and online-only entries before recursive traversal in storage scans, drive summaries, treemaps, file catalogs, and document indexes. Reject direct cloud-root selection and cloud aliases without misclassifying cloud-only parents as empty. ([e4f3ad8](https://github.com/Dannykkh/bloomsweepy/commit/e4f3ad8))
+- **assistant**: Distinguish missing, broken, incompatible, and signed-out CLI providers; skip unusable launch candidates and preserve actionable provider errors, cancellation, and conversation history. ([cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+- **volumes**: Hide macOS disk-image installer volumes while preserving physical and read-only media, and stabilize selected-drive path matching. ([cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+
+### Documentation
+
+- Refresh all four READMEs with 20 localized captures of the real React views using synthetic data, plus a reproducible documentation-only preview. Keep Swift as a legacy reference and clarify CLI installation, AI data sharing, cloud exclusions, and memory-cleanup limits. ([378ec22](https://github.com/Dannykkh/bloomsweepy/commit/378ec22))
+
+### Verification and limitations
+
+- Local Apple Silicon macOS validation: 193 Rust tests and 35 frontend tests passed; one opt-in live CLI diagnostic remains ignored. Rust formatting, workspace clippy, TypeScript checking, and the frontend production build passed. Both platform CI workflows now run the complete frontend test set. ([e4f3ad8](https://github.com/Dannykkh/bloomsweepy/commit/e4f3ad8), [cb6cf47](https://github.com/Dannykkh/bloomsweepy/commit/cb6cf47))
+- The installed Mac app was checked with synthetic local/cloud scan fixtures and the Codex conversation flow. This is not verification of every provider, real cloud-service configuration, macOS login cycle, or normal app-termination flow. Current Windows runtime verification remains separate.
+- App-memory cleanup affects only unused malloc pages owned by the BroomSweepy host process, not system RAM, other applications, WebView helpers, swap, or leaks. A zero-byte allocator return is a valid result. The Mac distribution build is ad-hoc signed and is not Apple-notarized.
+
 ## [1.5.0] - 2026-09-03
 
 ### Features
