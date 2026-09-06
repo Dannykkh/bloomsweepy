@@ -11,98 +11,98 @@
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-BroomSweepy is a desktop storage explorer and cleanup reviewer for Windows and macOS. It finds large files, byte-verified duplicates, empty folders, cleanup candidates, file names, and text inside supported documents. The Rust scanning core performs the work locally; AI connections are optional.
+BroomSweepy is a desktop storage explorer and cleanup reviewer for Windows and macOS. **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation.
 
-There is one installer, not a separate installer for each language. A new installation starts in English. Choose English, 한국어, 日本語, or 简体中文 under `Settings > Display language`; the app UI, Windows tray menu, and requested AI response language change immediately, and the choice is stored only on this computer.
+Large-file analysis, verified duplicates, and document search run locally in Rust. AI is optional. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
 ## Quick start
 
-1. Open `Storage` and choose a folder.
-2. Select `Build storage map`. Larger rectangles use more space; select a folder rectangle to move deeper.
-3. Run `Find large files and duplicates` only when you need detailed results. BroomSweepy reads file contents only for duplicate candidates.
-4. Review every selected item and confirm once more before BroomSweepy moves it to the operating-system Trash or Recycle Bin.
-
-Use `Find files` for name and path searches, and `Search documents` for text searches. These features work without AI, CLI, or MCP connections.
+1. Select a drive on the dashboard, or choose a local folder in `Space cleanup`. Choosing a folder builds its storage map.
+2. Follow the largest rectangles and click folders to drill down. The item menu can reveal a location or start review of an individual file's Trash move.
+3. Run large-file and duplicate analysis together, then select the items you want to review. Moving files requires final confirmation inside the app.
+4. Use `Performance` for CPU and memory, `File management` for names and document text, and `AI assistant` for natural-language questions.
 
 ## Preview
 
-![BroomSweepy settings in English](docs/assets/screenshots/v1.4.0-settings-en.png)
+These captures render the current Rust app's actual React components with synthetic documentation data. Drives, files, metrics, and conversations are examples, not real AI responses or user files. Browser captures do not reproduce macOS native window materials.
 
-The language selector changes the existing application; it does not install another edition or change operating-system settings.
+### Multi-drive dashboard
 
-## Highlights in v1.5.0
+![Multi-drive dashboard](docs/assets/screenshots/v1.6.0-dashboard-en.png)
 
-- Explicitly enable or disable launch at login on Windows and macOS; Settings rechecks the operating-system state after every change.
-- Login launches start with the main window hidden, while a normal second launch restores the existing window without leaving another process.
-- Inspect total, available, used, and platform-reported swap memory from a read-only Settings panel.
-- Windows swap is labeled as a commit-based estimate rather than current pagefile usage. BroomSweepy does not trim Working Sets, purge other apps, or claim to repair memory leaks.
+### Storage treemap
 
-## Highlights in v1.4.0
+![Storage treemap](docs/assets/screenshots/v1.6.0-overview-en.png)
 
-- One local UI with English as the default and complete English, Korean, Japanese, and Simplified Chinese catalogs.
-- The selected language also updates HTML language metadata, the Windows tray menu, and the response-language request sent to an installed AI CLI.
-- A clearer broom silhouette at 16–32 px for the taskbar, tray, Dock, and installer assets.
-- A bundled `bloomsweepy-mcp` helper in Windows installers, with user-controlled Codex and Claude Code registration from Settings.
-- Pathless, bounded cleanup summaries for external AI; exact paths and final approval remain inside BroomSweepy.
-- The window title includes the package version so the running build is easy to identify.
+### CPU and memory
 
-## Main features
+![CPU and memory](docs/assets/screenshots/v1.6.0-performance-en.png)
 
-- Dashboard with drive usage, free space, recent Trash activity, and recently added files.
-- A proportional `storage treemap` with folder drill-down.
-- Large-file ranking and duplicate verification using size groups, partial BLAKE3, full BLAKE3, and final byte comparison.
-- Local SQLite FTS catalogs for fast file-name/path search and supported document-content search.
-- TXT, Markdown, source code, PDF text layers, DOCX, XLSX, PPTX, and HWPX indexing.
-- Windows installation inventory from read-only registry data and macOS application inventory from `.app/Contents/Info.plist`.
-- Reviewable Temp, cache, AppData, and leftover-uninstaller candidates without automatic registry deletion.
-- Background scanning, bounded memory and result counts, cancellation checkpoints, and stale-file revalidation.
-- Operating-system Trash or Recycle Bin moves with a synchronized JSONL journal and interrupted-operation review.
-- An optional Docker view for images, stopped containers, and old build cache. Docker volumes are never pruned.
-- Opt-in launch at login on Windows and macOS with OS-state rechecks, plus read-only total, available, used, and `sysinfo`-reported swap metrics. Windows swap values are commit-based estimates, not current pagefile usage. The panel does not purge caches or clean memory leaks.
+### AI assistant
 
-## AI, CLI, and MCP boundary
+![AI assistant](docs/assets/screenshots/v1.6.0-assistant-en.png)
 
-BroomSweepy performs scanning, indexing, revalidation, and Trash moves on the local computer. Codex, Claude Code, Grok, Antigravity, or Ollama can summarize bounded results and suggest what to review, but they do not receive an unrestricted filesystem tool from the app.
+### Settings and display language
 
-MCP cleanup tools expose anonymous candidate IDs and bounded summaries only. They do not expose approval, permanent-delete, Trash-execution, registry-write, or Trash-emptying tools. An exact path becomes visible only in the app, and a cleanup runs only after the user confirms it there.
+![Settings and display language](docs/assets/screenshots/v1.6.0-settings-en.png)
 
-## Docker is opt-in
+## What's new in v1.6.0
 
-Docker support is off by default. While it is off, BroomSweepy does not locate or run the Docker CLI. When enabled, the separate Docker view can inspect `docker system df` data and preview only fixed, allowlisted cleanup commands for old build cache, dangling images, and stopped containers. Docker cleanup bypasses the operating-system Trash and therefore requires a separate irreversible-action confirmation.
+- Dark glass-inspired surfaces, prominent action buttons, clear icons, and streamlined navigation.
+- A large selected-drive card beside compact drive cards. Selecting another drive exchanges their positions and sizes with an animated transition.
+- CPU and memory rings, top-app usage, smooth transitions between samples, and reduced-motion support.
+- macOS app-memory cleanup returns only unused allocator pages from the BroomSweepy host process. Zero bytes returned is a valid completion.
+- Treemap navigation and individual-file actions with identity/path revalidation and a Trash-operation journal.
+- Distinct missing, broken, incompatible, and sign-in-required AI CLI states, plus improved conversation, cancellation, and saved-history handling.
 
-## Platforms and source layout
+## Safety and cloud exclusions
 
-| Path | Role |
-|---|---|
-| `BroomSweepy/` | Existing native macOS SwiftUI application |
-| `crates/bloomsweepy-core/` | Cross-platform Rust scanning core |
-| `crates/bloomsweepy-control/` | Local app/CLI control protocol |
-| `apps/desktop/` | Tauri 2, React, and TypeScript desktop application |
-| `apps/bloomsweepy-mcp/` | Thin CLI and MCP bridge for a running app |
+Scans do not modify files. Large-file/duplicate scans, drive summaries, treemaps, file catalogs, and document indexes exclude known cloud-sync roots and online-only entries. The policy prunes macOS `~/Library/CloudStorage`, `~/Library/Mobile Documents`, and recognized Google Drive, iCloud, OneDrive, and Dropbox paths before traversal; selecting a recognized cloud root directly is also rejected. Even downloaded files inside recognized cloud roots are excluded. Arbitrarily relocated sync folders and every possible provider cannot be identified reliably.
 
-Windows installers are built on Windows. A signed and notarized `.dmg` must be built on macOS.
+Duplicates pass size grouping, partial/full BLAKE3, and final byte comparison. File moves require selection, revalidation, final confirmation, and journaling before using the OS Trash or Recycle Bin. Empty-folder discovery is read-only. There is no general permanent-delete, Trash-emptying, or automatic registry-deletion action. Trashed logical bytes do not equal newly available disk space.
 
-## Development
+Memory cleanup does not purge system RAM, other apps, WebView helper processes, swap, or memory leaks. There is no CPU-cleanup action. On macOS, requesting a normal app exit is a separate confirmation flow with no force-kill fallback. Windows performance is read-only; swap is a commit-based estimate, not current pagefile usage.
 
-Requirements: Rust stable, Node.js 22 or later, npm, WebView2 and MSVC Build Tools on Windows.
+Docker management is off by default. When enabled, cleanup uses fixed commands, excludes volumes, and requires a separate irreversible-action confirmation.
 
-```powershell
+## AI, CLI, and MCP
+
+Installing the Codex desktop app does not establish that the Codex CLI is installed. Check your provider's CLI installation, compatible version, and sign-in state in BroomSweepy. This Mac conversation flow was verified with Codex. Adapters also exist for Claude Code, Grok, Antigravity, and Ollama, but not all were live-tested for this Mac release.
+
+In-app chat sends a bounded folder summary containing item names and sizes, plus your question and conversation history, to the selected provider. A local CLI does not mean offline model processing. MCP cleanup tools expose anonymous candidate IDs and bounded summaries, with no approval or deletion-execution tools. Separately enabling file or document search can expose paths and matching excerpts to external clients. Final file actions stay behind confirmation in the app.
+
+## Platforms and development
+
+Requirements: Rust stable, Node.js 22+, and npm; WebView2 and MSVC Build Tools on Windows; Xcode Command Line Tools on macOS.
+
+- `apps/desktop/`: primary Tauri/React app
+- `crates/bloomsweepy-core/`: shared Rust analysis engine
+- `crates/bloomsweepy-control/`, `apps/bloomsweepy-mcp/`: local control protocol and CLI/MCP bridge
+- `BroomSweepy/`: legacy SwiftUI reference
+
+This update was built and installed on Apple Silicon macOS, with local-file scans and the Codex conversation flow checked. Current Windows runtime verification is separate; Windows installers are built by Windows CI. The Mac validation build is ad-hoc signed, not Apple-notarized. See [Releases](https://github.com/Dannykkh/bloomsweepy/releases) for downloads and platform-specific caveats.
+
+```sh
 cd apps/desktop
-npm install
+npm ci
 npm run tauri dev
 ```
 
-Core validation:
-
-```powershell
+```sh
+# Repository root
 cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cd apps/desktop
 npm run check
+npm run test:all
 npm run build
+npm run tauri build
 ```
 
-For detailed architecture and safety notes, see the [Korean reference README](README.md), [CLI control](docs/cli-control.md), [cross-platform architecture](docs/architecture/cross-platform-desktop.md), [startup and system-memory status](docs/architecture/startup-memory-status.md), and [safe Trash actions](docs/architecture/safe-trash-actions.md).
+## Documentation
+
+[Changelog](CHANGELOG.md) · [CLI connection and control](docs/cli-control.md) · [Performance and memory boundaries](docs/architecture/startup-memory-status.md) · [Safe Trash actions](docs/architecture/safe-trash-actions.md) · [Document search](docs/architecture/document-search.md) · [File search](docs/architecture/fast-file-search.md) · [Design](DESIGN.md) · [Reproduce screenshots](docs/assets/screenshots/README.md)
 
 ## Important: data loss and recovery responsibility
 

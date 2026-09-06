@@ -11,78 +11,98 @@
   <strong>简体中文</strong>
 </p>
 
-BroomSweepy 是一款适用于 Windows 和 macOS 的存储分析与清理审核工具。它可以查找大文件、经过内容验证的重复文件、空文件夹、清理候选项、文件名，以及受支持文档中的文字。实际扫描由本地 Rust 引擎执行，AI 连接是可选功能。
+BroomSweepy 是一款适用于 Windows 和 macOS 的存储分析与清理审核工具。**Rust + Tauri 2 + React 是主项目**，延续了原 SwiftUI 应用宽敞的卡片、清晰的图标和玻璃质感界面。`BroomSweepy/` 中的 Swift 源码作为旧版参考实现保留。
 
-无需为不同语言安装不同版本。首次启动默认显示英语。在 `Settings > Display language` 中选择 English、한국어、日本語 或简体中文后，应用界面、Windows 托盘菜单和向 AI 请求的回复语言会立即切换，并且仅保存在此电脑上。
+大文件分析、经过验证的重复文件和文档搜索由本地 Rust 引擎处理，AI 连接是可选功能。一个安装版本支持英语、韩语、日语和简体中文，首次启动默认英语，可在 `Settings > Display language` 中更改。
 
 ## 快速开始
 
-1. 打开`存储空间`并选择要检查的文件夹。
-2. 选择`创建存储空间地图`。矩形越大，所占空间越多；选择文件夹矩形可以继续进入下一层。
-3. 仅在需要详细结果时运行`查找大文件和重复文件`。BroomSweepy 只会读取重复候选文件的内容。
-4. 逐项检查所选内容，并在最终确认后将其移动到操作系统回收站。
-
-按名称和位置查找时使用`查找文件`，按正文查找时使用`搜索文档`。这些基本功能无需连接 AI、CLI 或 MCP。
+1. 在仪表板选择驱动器，或在`空间清理`中选择本地文件夹。选择文件夹后会生成空间地图。
+2. 从最大的矩形开始检查，点击文件夹可进入下一层。项目菜单可以显示位置，或开始审核单个文件的回收站移动操作。
+3. 一次执行大文件与重复文件检查，再自行选择需要审核的项目。实际移动前必须在应用中最终确认。
+4. 使用`性能`查看 CPU 和内存，使用`文件管理`搜索名称和正文，使用`AI 助手`进行自然语言提问。
 
 ## 界面预览
 
-![BroomSweepy 简体中文设置界面](docs/assets/screenshots/v1.4.0-settings-zh-CN.png)
+这些截图使用当前 Rust 应用的实际 React 组件和公开演示数据。驱动器、文件、数值和对话均为示例，并非真实 AI 回复或用户文件。浏览器截图不包含 macOS 原生窗口材质效果。
 
-语言选择只会更改现有应用的显示内容，不会安装另一个版本，也不会更改操作系统设置。
+### 多驱动器仪表板
 
-## v1.5.0 主要更新
+![多驱动器仪表板](docs/assets/screenshots/v1.6.0-dashboard-zh-CN.png)
 
-- 可在设置中明确启用或关闭 Windows、macOS 登录时启动，并在每次更改后重新读取操作系统的实际状态。
-- 登录启动时主窗口从创建阶段起保持隐藏；正常的再次启动不会留下新进程，而是恢复现有窗口。
-- 在只读设置面板中查看内存总量、可用量、已用量以及平台报告的交换空间指标。
-- Windows 交换空间显示为基于提交量的估算值，而不是页面文件当前用量。BroomSweepy 不会清理 Working Set、其他应用或内存泄漏。
+### 存储空间树状图
 
-## v1.4.0 主要更新
+![存储空间树状图](docs/assets/screenshots/v1.6.0-overview-zh-CN.png)
 
-- 一个应用内完整提供英语、韩语、日语和简体中文，并以英语作为默认显示语言。
-- 所选语言同时应用于 HTML 语言信息、Windows 托盘菜单，以及发送给已安装 AI CLI 的回复语言要求。
-- 加粗扫帚轮廓，使任务栏、托盘、Dock 和安装程序中的 16～32px 小图标更容易辨认。
-- Windows 安装程序内置 `bloomsweepy-mcp`，用户可在设置界面自行注册或移除 Codex 与 Claude Code 连接。
-- 外部 AI 只接收不含路径且有数量限制的摘要；准确路径与最终确认始终留在 BroomSweepy 内。
-- 窗口标题显示软件包版本，便于确认当前运行的构建。
+### CPU 与内存
 
-## 主要功能
+![CPU 与内存](docs/assets/screenshots/v1.6.0-performance-zh-CN.png)
 
-- 在仪表板中查看各驱动器用量、可用空间、最近的回收站操作和最近新增文件。
-- 可逐层进入文件夹的比例矩形`存储空间树状图`。
-- 依次使用大小分组、部分 BLAKE3、完整 BLAKE3 和最终字节比较来确认重复文件。
-- 使用本地 SQLite FTS 快速搜索文件名、路径和受支持文档的正文。
-- 支持索引 TXT、Markdown、源代码、PDF 文本层、DOCX、XLSX、PPTX 和 HWPX。
-- 通过只读注册表信息列出 Windows 安装应用，通过 `.app/Contents/Info.plist` 列出 macOS 应用。
-- 审核 Temp、缓存、AppData 和卸载残留候选项，不自动删除注册表内容。
-- 后台扫描、内存与结果数量上限、取消检查点，以及执行前重新验证。
-- 使用同步 JSONL 日志记录操作，移动到操作系统回收站，并审核中断的操作。
-- 可选的 Docker 专用界面；Docker 卷永远不会被清理。
-- 由用户明确开关的 Windows/macOS 登录时启动，以及只读的内存总量、可用量、已用量和 `sysinfo` 所报告的交换空间指标。Windows 交换空间数值是基于提交量的估算值，并非页面文件的当前使用量；该面板不会清理缓存或内存泄漏。
+### AI 助手
 
-## AI、CLI 与 MCP 的边界
+![AI 助手](docs/assets/screenshots/v1.6.0-assistant-zh-CN.png)
 
-扫描、索引、重新验证和移动到回收站都由本机上的 BroomSweepy 执行。Codex、Claude Code、Grok、Antigravity 或 Ollama 可以概括受限结果并建议审核顺序，但应用不会向它们提供不受限制的文件系统工具。
+### 设置与显示语言
 
-MCP 清理工具只公开匿名候选编号和有上限的摘要，不提供批准、永久删除、执行回收站移动、写入注册表或清空回收站的工具。准确路径只在应用内显示，并且只有用户在应用中确认后才会执行清理。
+![设置与显示语言](docs/assets/screenshots/v1.6.0-settings-zh-CN.png)
 
-## Docker 是可选功能
+## v1.6.0 主要更新
 
-Docker 功能默认关闭。关闭时，BroomSweepy 不会查找或运行 Docker CLI。启用后，独立的 Docker 界面可以读取 `docker system df`，并且只预览针对旧构建缓存、悬空镜像和已停止容器的固定白名单命令。Docker 清理不会经过操作系统回收站，因此需要单独确认该操作无法恢复。
+- 深色玻璃质感界面、大尺寸操作按钮、清晰图标和简化的导航。
+- 当前驱动器显示为大卡片，其他驱动器显示为小卡片；点击后以动画交换位置并缩放。
+- CPU 与内存环形图、主要应用用量、采样间平滑过渡，以及减少动态效果支持。
+- macOS 应用内存清理仅将 BroomSweepy 主进程中未使用的 allocator 页面归还给系统，归还 0 字节也是正常完成。
+- 树状图导航与单文件操作、文件身份及路径重新验证、回收站操作日志。
+- 区分 AI CLI 未安装、无法执行、版本不兼容和需要登录的状态，改进对话、取消和历史记录处理。
+
+## 安全与云端排除
+
+扫描不会修改文件。大文件及重复检查、驱动器汇总、树状图、文件目录和文档索引会排除已知云同步根目录与仅在线项目。macOS 的 `~/Library/CloudStorage`、`~/Library/Mobile Documents` 以及可识别的 Google Drive、iCloud、OneDrive、Dropbox 路径在遍历前就会被排除，直接选择也不会扫描。已下载但位于识别出的云目录内的文件同样排除。无法保证识别任意迁移位置的同步文件夹或所有提供商。
+
+重复文件依次通过大小、部分及完整 BLAKE3、最终字节比较验证。文件移动须经选择、重新验证、最终确认和日志记录后进入系统回收站。空文件夹查找为只读，不提供一般永久删除、清空回收站或自动删除注册表的操作。移入回收站的逻辑大小不等于新增可用空间。
+
+内存清理不会清理系统整体 RAM、其他应用、WebView 辅助进程、交换空间或内存泄漏，也没有 CPU 清理功能。macOS 正常退出应用的请求是独立确认操作，不会回退到强制结束。Windows 性能功能为只读，交换空间为基于提交量的估算值，而非页面文件当前用量。
+
+Docker 管理默认关闭。启用后也仅使用固定命令，排除卷，并单独确认操作不可恢复。
+
+## AI、CLI 与 MCP
+
+安装 Codex 桌面应用并不代表已经安装 Codex CLI。请在应用中检查所用提供商 CLI 的安装、兼容版本和登录状态。本次 Mac 对话流程使用 Codex 验证。虽然也有 Claude Code、Grok、Antigravity、Ollama 适配器，但并未为本次 Mac 发布逐一完成实际运行验证。
+
+应用聊天会向所选提供商发送包含项目名称和大小的有限文件夹摘要、问题与对话历史。本地 CLI 不意味着模型处理离线进行。MCP 清理工具仅提供匿名候选 ID 和有限摘要，不提供批准或执行删除的工具。另行允许文件或文档搜索后，路径和匹配上下文可能传给外部客户端。最终文件操作仍须在应用内确认。
 
 ## 平台与开发
 
-Windows 安装程序必须在 Windows 上构建。经过签名和公证的 `.dmg` 必须在 macOS 上构建。
+需要 Rust stable、Node.js 22+ 和 npm。Windows 还需 WebView2 与 MSVC Build Tools，macOS 还需 Xcode Command Line Tools。
 
-开发环境需要 Rust stable、Node.js 22 或更高版本、npm；Windows 还需要 WebView2 和 MSVC Build Tools。
+- `apps/desktop/`：主 Tauri/React 应用
+- `crates/bloomsweepy-core/`：共享 Rust 分析引擎
+- `crates/bloomsweepy-control/`、`apps/bloomsweepy-mcp/`：本地控制协议与 CLI/MCP 桥接
+- `BroomSweepy/`：旧版 SwiftUI 参考实现
 
-```powershell
+本次更新已在 Apple Silicon Mac 上构建、安装，并检查本地文件扫描与 Codex 对话流程。最新 Windows 运行验证需单独完成，安装程序由 Windows CI 构建。Mac 验证构建采用 ad-hoc 签名，并非已经 Apple 公证。下载与平台注意事项请查看[发布页](https://github.com/Dannykkh/bloomsweepy/releases)。
+
+```sh
 cd apps/desktop
-npm install
+npm ci
 npm run tauri dev
 ```
 
-有关详细实现和安全边界，请参阅[韩语详细 README](README.md)、[CLI 控制](docs/cli-control.md)、[跨平台架构](docs/architecture/cross-platform-desktop.md)、[自动启动与系统内存状态](docs/architecture/startup-memory-status.md)和[安全回收站操作](docs/architecture/safe-trash-actions.md)。
+```sh
+# Repository root
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cd apps/desktop
+npm run check
+npm run test:all
+npm run build
+npm run tauri build
+```
+
+## 文档
+
+[更新日志](CHANGELOG.md) · [CLI 连接与控制](docs/cli-control.md) · [性能与内存边界](docs/architecture/startup-memory-status.md) · [安全回收站操作](docs/architecture/safe-trash-actions.md) · [文档搜索](docs/architecture/document-search.md) · [文件搜索](docs/architecture/fast-file-search.md) · [设计](DESIGN.md) · [复现截图](docs/assets/screenshots/README.md)
 
 ## 重要提示：数据丢失与恢复责任
 

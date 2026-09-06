@@ -19,12 +19,20 @@ build/
 .claude/
 
 # Local agent state
+/.orchestrator/
+/.playwright-mcp/
 /.termsnap/
 /MEMORY.md
 /memory/
 /conversations/
 /docs/ui-audit/screenshots/
 /codemap/LINT_REPORT.md
+
+# Local video publishing credentials and generated output (never release these)
+/demo-video/client_secret.json
+/demo-video/token.json
+/demo-video/node_modules/
+/demo-video/out/
 
 # Windows
 Thumbs.db

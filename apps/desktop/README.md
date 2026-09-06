@@ -7,6 +7,7 @@ Tauri 2, React 19, TypeScript, Rust로 만든 BroomSweepy 공용 데스크톱 �
 ```powershell
 npm install
 npm run check
+npm run test:all
 npm run build
 npm run tauri dev
 npm run tauri build
@@ -26,7 +27,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 - 문서 색인은 공유 읽기 핸들·크기 상한·취소 가능한 트랜잭션을 사용하고 마지막 완료 색인을 보존합니다.
 - 빠른 파일 찾기는 본문을 열지 않고 이름·경로·크기·수정 시각만 앱 캐시에 색인합니다.
 - 파일 카탈로그도 취소 가능한 트랜잭션과 공용 단일 작업 잠금을 사용하며, 앱의 휴지통 이동 뒤에는 업데이트 전까지 검색을 잠급니다.
-- 트리맵 드릴다운과 빈 폴더 탐색도 읽기 전용이며 파일시스템을 변경하지 않습니다.
+- 트리맵 분석·드릴다운과 빈 폴더 탐색은 읽기 전용입니다. 별도 더보기 메뉴의 개별 파일 휴지통 이동에는 파일 신원·경로 재검증과 최종 확인을 적용합니다.
+- 알려진 클라우드 동기화 경로와 온라인 전용 항목은 순회 전에 제외하며, 인식된 클라우드 루트의 직접 검사도 거부합니다.
+- macOS 앱 메모리 정리는 BroomSweepy 호스트 프로세스의 미사용 allocator 페이지만 반환하며 시스템 전체·다른 앱·WebView 보조 프로세스의 메모리는 건드리지 않습니다.
 - 부분 해시는 후보 축소에만 사용합니다.
 - 중복 결과는 전체 BLAKE3 해시와 바이트 비교까지 통과해야 합니다.
 - 하드링크는 동일한 디스크 할당으로 계산해 회수 가능 용량에서 제외합니다.
@@ -36,3 +39,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 - 제거 프로그램 레지스트리는 서로 다른 경로 증거가 둘 이상 끊긴 항목만 검토 대상으로 표시하고 변경하지 않습니다.
 - 휴지통 이동은 서버 보고서 재검증, 그룹별 보관본, 작업 저널, 부분 실패 중단을 강제합니다.
 - 앱 내부 자동 복원과 휴지통 비우기는 제공하지 않으며 운영체제 휴지통에서 복원합니다.
+
+## 문서용 화면 재현
+
+`npm run dev` 후 `http://127.0.0.1:1420/release-preview.html?view=dashboard&language=ko`를 엽니다.
+`view`는 `dashboard`, `overview`, `performance`, `assistant`, `settings`를 지원하며 `language`는 `en`, `ko`, `ja`, `zh-CN`입니다.
+실제 React 화면에 예시 데이터를 공급하는 개발 전용 진입점으로, 패키징된 앱에 포함되지 않으며 실제 파일·AI·OS 작업은 실행하지 않습니다.
+캡처 규격은 [스크린샷 안내](../../docs/assets/screenshots/README.md)를 참고하세요.
