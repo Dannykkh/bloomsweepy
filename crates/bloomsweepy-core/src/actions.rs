@@ -208,6 +208,67 @@ where
     Ok(())
 }
 
+/// Validate a single regular file against a server-owned directory scan.
+/// A matching path alone is not sufficient: preserve scan-time identity and mtime.
+pub fn validate_directory_trash_file<C>(
+    report: &crate::DirectoryScanReport,
+    selected_path: &str,
+    should_cancel: C,
+) -> Result<VerifiedTrashItem, ActionValidationError>
+where
+    C: Fn() -> bool,
+{
+    check_cancelled(&should_cancel)?;
+    let node = report
+        .children
+        .iter()
+        .find(|node| node.path == selected_path)
+        .ok_or_else(|| {
+            ActionValidationError::InvalidSelection(
+                "현재 폴더 지도에 없는 파일입니다. 다시 검사하세요".to_owned(),
+            )
+        })?;
+    let path = PathBuf::from(selected_path);
+    if node.is_directory {
+        return Err(unsafe_path(
+            &path,
+            "폴더 지도에서는 파일만 휴지통으로 이동할 수 있습니다",
+        ));
+    }
+    validate_cleanup_path_boundary(&path)?;
+    let metadata = safe_file_metadata(&path)?;
+    let identity = required_identity(&path, &metadata)?;
+    let canonical = fs::canonicalize(&path).map_err(|error| access_error(&path, error))?;
+    if !canonical
+        .parent()
+        .is_some_and(|parent| paths_equal(parent, Path::new(&report.root)))
+    {
+        return Err(unsafe_path(&path, "검사한 폴더의 직계 파일이 아닙니다"));
+    }
+    if node.scan_identity != Some(identity)
+        || node.scan_modified_at.is_none()
+        || node.scan_modified_at != metadata.modified().ok()
+        || node.logical_bytes != metadata.len()
+    {
+        return Err(ActionValidationError::Changed(selected_path.to_owned()));
+    }
+    // Reuse the content-fingerprinted, identity-checked trash pipeline.
+    let snapshot = capture_cleanup_snapshot(&path, 1, &should_cancel)?;
+    if snapshot.identity != identity
+        || snapshot.logical_bytes != node.logical_bytes
+        || snapshot.latest_modified_at_unix_ms != node.modified_at_unix_ms
+        || !paths_equal(&snapshot.canonical_path, &canonical)
+    {
+        return Err(ActionValidationError::Changed(selected_path.to_owned()));
+    }
+    Ok(VerifiedTrashItem {
+        path,
+        logical_bytes: snapshot.logical_bytes,
+        snapshot: VerifiedSnapshot::Cleanup(snapshot),
+        required_keeper: None,
+    })
+}
+
 fn validate_file_snapshot<C>(
     entry: &FileEntry,
     canonical_root: &Path,
@@ -626,6 +687,78 @@ mod tests {
         scan_cleanup_candidates, scan_path,
     };
     use std::time::Duration;
+
+    fn directory_report(root: &Path) -> crate::DirectoryScanReport {
+        crate::scan_directory_level(root, Default::default(), |_| {}, || false).unwrap()
+    }
+
+    #[test]
+    fn directory_trash_validates_file_and_rejects_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("item.txt");
+        fs::write(&file, b"original").unwrap();
+        let report = directory_report(temp.path());
+        let path = &report.children[0].path;
+        let verified = validate_directory_trash_file(&report, path, || false).unwrap();
+        revalidate_verified_trash_item(&verified, || false).unwrap();
+        assert!(validate_directory_trash_file(&report, path, || true).is_err());
+        fs::write(&file, b"modified file").unwrap();
+        assert!(validate_directory_trash_file(&report, path, || false).is_err());
+        assert!(revalidate_verified_trash_item(&verified, || false).is_err());
+    }
+
+    #[test]
+    fn directory_trash_rejects_folders_unknown_paths_and_replaced_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("item.txt");
+        fs::write(&file, b"original").unwrap();
+        fs::create_dir(temp.path().join("folder")).unwrap();
+        let report = directory_report(temp.path());
+        let node = report
+            .children
+            .iter()
+            .find(|node| !node.is_directory)
+            .unwrap();
+        let folder = report
+            .children
+            .iter()
+            .find(|node| node.is_directory)
+            .unwrap();
+        assert!(validate_directory_trash_file(&report, &folder.path, || false).is_err());
+        assert!(validate_directory_trash_file(&report, "/not-in-report", || false).is_err());
+        // Preserve size and modification time; only file identity changes.
+        fs::rename(&file, temp.path().join("original.txt")).unwrap();
+        fs::write(&file, b"original").unwrap();
+        let replacement = fs::OpenOptions::new().write(true).open(&file).unwrap();
+        replacement
+            .set_times(fs::FileTimes::new().set_modified(node.scan_modified_at.unwrap()))
+            .unwrap();
+        assert!(validate_directory_trash_file(&report, &node.path, || false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_trash_rejects_links_and_redirected_parent() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("root");
+        fs::create_dir(&root).unwrap();
+        let file = root.join("item.txt");
+        fs::write(&file, b"original").unwrap();
+        let report = directory_report(&root);
+        let node = &report.children[0];
+        fs::hard_link(&file, root.join("hardlink.txt")).unwrap();
+        assert!(validate_directory_trash_file(&report, &node.path, || false).is_err());
+        fs::remove_file(root.join("hardlink.txt")).unwrap();
+        fs::rename(&file, root.join("saved.txt")).unwrap();
+        symlink(root.join("saved.txt"), &file).unwrap();
+        assert!(validate_directory_trash_file(&report, &node.path, || false).is_err());
+        fs::remove_file(&file).unwrap();
+        fs::rename(root.join("saved.txt"), &file).unwrap();
+        fs::rename(&root, temp.path().join("moved-root")).unwrap();
+        symlink(temp.path().join("moved-root"), &root).unwrap();
+        assert!(validate_directory_trash_file(&report, &node.path, || false).is_err());
+    }
 
     fn duplicate_report(root: &Path) -> crate::ScanReport {
         scan_path(

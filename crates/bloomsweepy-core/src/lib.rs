@@ -13,10 +13,12 @@ mod directory;
 mod document_search;
 mod drive;
 mod file_catalog;
+mod scan_policy;
 
 pub use actions::{
     ActionValidationError, VerifiedTrashItem, revalidate_verified_trash_item,
-    validate_cleanup_trash_candidate, validate_duplicate_trash_selection,
+    validate_cleanup_trash_candidate, validate_directory_trash_file,
+    validate_duplicate_trash_selection,
 };
 
 pub use cleanup::{
@@ -201,6 +203,7 @@ where
     let started = Instant::now();
     let config = config.bounded();
     let requested_root = root.as_ref();
+    scan_policy::ensure_local_path(requested_root).map_err(ScanError::Access)?;
 
     if !requested_root.exists() {
         return Err(ScanError::MissingPath(
@@ -216,6 +219,7 @@ where
     let root = requested_root
         .canonicalize()
         .map_err(|error| ScanError::Access(error.to_string()))?;
+    scan_policy::ensure_local_path(&root).map_err(ScanError::Access)?;
 
     on_progress(ScanProgress {
         phase: ScanPhase::Discovering,
@@ -241,6 +245,7 @@ where
         .follow_links(false)
         .skip_hidden(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
+        .process_read_dir(|_, _, _, entries| scan_policy::prune_cloud_entries(entries))
     {
         if should_cancel() {
             return Err(ScanError::Cancelled);
@@ -273,6 +278,10 @@ where
                 continue;
             }
         };
+
+        if scan_policy::is_online_only(&metadata) {
+            continue;
+        }
 
         let mut duplicate_safe = true;
         if let Some(identity) = file_identity(&path, &metadata) {
@@ -724,6 +733,10 @@ where
 }
 
 fn open_read_shared(path: &Path) -> io::Result<File> {
+    // A file may have been evicted to the cloud since discovery. Recheck before
+    // hashing, comparing or extracting content, without opening its data stream.
+    scan_policy::ensure_local_path(path)
+        .map_err(|message| io::Error::new(io::ErrorKind::PermissionDenied, message))?;
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]

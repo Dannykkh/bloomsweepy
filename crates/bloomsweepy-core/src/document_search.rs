@@ -276,6 +276,7 @@ where
     let started = Instant::now();
     let config = config.bounded();
     let requested_root = root.as_ref();
+    crate::scan_policy::ensure_local_path(requested_root).map_err(DocumentSearchError::Index)?;
     if !requested_root.exists() {
         return Err(DocumentSearchError::MissingPath(
             requested_root.to_string_lossy().into_owned(),
@@ -290,6 +291,7 @@ where
     let root = requested_root
         .canonicalize()
         .map_err(|error| DocumentSearchError::Index(error.to_string()))?;
+    crate::scan_policy::ensure_local_path(&root).map_err(DocumentSearchError::Index)?;
     let root_string = display_path(&root);
     let mut connection = open_index(database_path.as_ref())?;
     initialize_schema(&connection)?;
@@ -339,6 +341,7 @@ where
         .follow_links(false)
         .skip_hidden(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
+        .process_read_dir(|_, _, _, entries| crate::scan_policy::prune_cloud_entries(entries))
     {
         if should_cancel() {
             return Err(DocumentSearchError::Cancelled);
@@ -430,6 +433,10 @@ where
                 continue;
             }
         };
+        if crate::scan_policy::is_online_only(&metadata) {
+            skipped_documents = skipped_documents.saturating_add(1);
+            continue;
+        }
         let logical_bytes = metadata.len();
         processed_bytes = processed_bytes.saturating_add(logical_bytes);
         let modified_at_unix_ms = system_time_ms(metadata.modified().ok());

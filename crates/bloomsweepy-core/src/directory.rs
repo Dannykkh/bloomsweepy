@@ -42,6 +42,11 @@ pub struct DirectoryNode {
     pub directory_count: u64,
     pub is_directory: bool,
     pub modified_at_unix_ms: Option<u128>,
+    // Kept only in the trusted in-process report, never supplied by the UI.
+    #[serde(skip)]
+    pub(crate) scan_identity: Option<super::FileObjectIdentity>,
+    #[serde(skip)]
+    pub(crate) scan_modified_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -94,6 +99,7 @@ struct NodeAccumulator {
     directory_count: u64,
     is_directory: bool,
     modified_at: Option<SystemTime>,
+    scan_identity: Option<super::FileObjectIdentity>,
 }
 
 pub fn scan_directory_level<F, C>(
@@ -117,6 +123,7 @@ where
         .min(MAX_EMPTY_DIRECTORY_RESULTS);
     let max_issues = config.max_issues.min(MAX_DIRECTORY_ISSUES);
     let requested_root = root.as_ref();
+    crate::scan_policy::ensure_local_path(requested_root).map_err(ScanError::Access)?;
 
     if !requested_root.exists() {
         return Err(ScanError::MissingPath(
@@ -132,6 +139,7 @@ where
     let root = requested_root
         .canonicalize()
         .map_err(|error| ScanError::Access(error.to_string()))?;
+    crate::scan_policy::ensure_local_path(&root).map_err(ScanError::Access)?;
 
     on_progress(DirectoryScanProgress {
         message: "현재 폴더의 용량 지도를 만들고 있습니다".to_owned(),
@@ -160,6 +168,8 @@ where
         .skip_hidden(false)
         .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
         .process_read_dir(move |depth, path, _, entries| {
+            // Test emptiness before filtering: a cloud-only parent is not empty
+            // and must never be offered as an empty-directory cleanup candidate.
             if depth.is_some_and(|depth| depth > 0) && entries.is_empty() {
                 empty_count_for_walker.fetch_add(1, Ordering::Relaxed);
                 if let Ok(mut paths) = empty_paths_for_walker.lock()
@@ -168,6 +178,7 @@ where
                     paths.push(path.to_path_buf());
                 }
             }
+            crate::scan_policy::prune_cloud_entries(entries);
         });
 
     for item in walker {
@@ -256,6 +267,12 @@ where
                     continue;
                 }
             };
+            if crate::scan_policy::is_online_only(&metadata) {
+                if is_direct_child {
+                    direct_child_count = direct_child_count.saturating_sub(1);
+                }
+                continue;
+            }
             let logical_bytes = metadata.len();
             let modified_at = metadata.modified().ok();
             if let Some(child) = tracked_child(
@@ -267,6 +284,9 @@ where
                 child.is_directory = !is_direct_child;
                 child.logical_bytes = child.logical_bytes.saturating_add(logical_bytes);
                 child.file_count = child.file_count.saturating_add(1);
+                if is_direct_child {
+                    child.scan_identity = super::file_object_identity(&path, &metadata);
+                }
                 update_latest(&mut child.modified_at, modified_at);
             }
 
@@ -322,6 +342,8 @@ where
             directory_count: child.directory_count,
             is_directory: child.is_directory,
             modified_at_unix_ms: system_time_ms(child.modified_at),
+            scan_identity: child.scan_identity,
+            scan_modified_at: child.modified_at,
         })
         .collect();
     children.sort_unstable_by(|left, right| {

@@ -155,6 +155,7 @@ where
         .min(MAX_TRACKED_LOCATIONS);
     let max_issues = config.max_issues.min(MAX_DRIVE_ISSUES);
     let requested_root = root.as_ref();
+    crate::scan_policy::ensure_local_path(requested_root).map_err(ScanError::Access)?;
 
     if !requested_root.exists() {
         return Err(ScanError::MissingPath(
@@ -170,6 +171,7 @@ where
     let root = requested_root
         .canonicalize()
         .map_err(|error| ScanError::Access(error.to_string()))?;
+    crate::scan_policy::ensure_local_path(&root).map_err(ScanError::Access)?;
     let classifier = StorageClassifier::new(&root);
     let location_depth = config.location_depth.clamp(1, 8);
     let mut categories: HashMap<StorageCategoryKind, CategoryAccumulator> = HashMap::new();
@@ -198,6 +200,7 @@ where
         .parallelism(jwalk::Parallelism::RayonNewPool(
             super::bounded_worker_threads(),
         ))
+        .process_read_dir(|_, _, _, entries| crate::scan_policy::prune_cloud_entries(entries))
     {
         if should_cancel() {
             return Err(ScanError::Cancelled);
@@ -231,6 +234,9 @@ where
             }
         };
 
+        if crate::scan_policy::is_online_only(&metadata) {
+            continue;
+        }
         match check_hard_link(&path, &metadata, &mut seen_files) {
             HardLinkCheck::Repeated => {
                 hard_links_skipped = hard_links_skipped.saturating_add(1);

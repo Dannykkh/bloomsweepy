@@ -531,6 +531,9 @@ fn is_within_key(path: &str, root: &str) -> bool {
 }
 
 fn is_excluded(path: &Path, excluded_paths: &[PathBuf]) -> bool {
+    if crate::scan_policy::is_cloud_path(path) {
+        return true;
+    }
     let key = path_key(path);
     excluded_paths
         .iter()
