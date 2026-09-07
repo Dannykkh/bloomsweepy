@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0] - 2026-09-07
+
+### Features
+
+- **desktop**: Connect conversational empty-folder scans, bounded candidate pages, selection review and explicit final confirmation to the app-owned Trash executor. AI cannot approve or directly delete items. General conversational file moves and renames remain unsupported. ([7408b19](https://github.com/Dannykkh/bloomsweepy/commit/7408b19))
+- **management**: Add reviewed folder Trash actions, safe file/folder opening and location reveal, installed-app search and platform-specific removal entry points. macOS app-bundle removal and identifier-matched related-data review are separate; Windows opens official uninstall settings. ([7408b19](https://github.com/Dannykkh/bloomsweepy/commit/7408b19))
+- **macos**: Add a native AppKit menu-bar popover with bounded CPU/RAM/disk sampling, persisted RAM-title visibility, window restore and quit controls, without an additional WebView. ([7408b19](https://github.com/Dannykkh/bloomsweepy/commit/7408b19))
+- **trash**: Add separately confirmed operating-system Trash emptying. This is irreversible, includes other apps' trashed items, and is not exposed to AI/CLI/MCP. ([7408b19](https://github.com/Dannykkh/bloomsweepy/commit/7408b19))
+
+### Performance and safety
+
+- **core**: Bound streaming traversal, metadata retention and index storage; add cooperative host-memory, available-memory and free-disk guards. Isolate document parsing behind a 128 MiB Rust allocation budget and a 15-second deadline, preserving the previous completed index after failed rebuilds. These are not a whole-process-tree OS memory quota or proof of leak elimination. ([be47f5d](https://github.com/Dannykkh/bloomsweepy/commit/be47f5d))
+- **core**: Revalidate folder identity, protected/cloud/link boundaries and short-lived one-shot plans before OS Trash operations. Path-based OS calls retain a residual TOCTOU boundary. ([be47f5d](https://github.com/Dannykkh/bloomsweepy/commit/be47f5d))
+
+### Documentation
+
+- Align four README languages around conversational file management, local processing and AI data-sharing limits, token-efficiency caveats, new navigation and platform-specific behavior. Existing screenshots are explicitly labeled v1.6.0 references, not captures of the new menus. ([ac9e747](https://github.com/Dannykkh/bloomsweepy/commit/ac9e747))
+
+### Verification and limitations
+
+- Local Apple Silicon regression: 273 Rust tests and 43 frontend tests passed; one opt-in live CLI diagnostic was ignored. Formatting, workspace Clippy, TypeScript checking and the production frontend build passed. Release-commit CI results are linked from the GitHub release.
+- Real Codex end-to-end operation of the new conversational tools, long-running app/WebView/CLI memory behavior, destructive operations on actual user apps/Trash and every native menu-bar interaction remain unverified. Windows CI is not interactive Windows runtime verification.
+- App total size, installation date and selectable name/date/size sorting are not implemented; substring search is available. macOS ARM64 builds are ad-hoc signed and not Apple-notarized; Windows installers are unsigned.
+- See [v1.7.0 scope and verification boundaries](docs/releases/v1.7.0.md).
+
 ## [1.6.1] - 2026-09-06
 
 ### Fixed
