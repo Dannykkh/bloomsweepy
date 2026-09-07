@@ -1,0 +1,112 @@
+.file-open-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.file-open-actions > button {
+  display: inline-flex;
+  min-width: 44px;
+  min-height: 44px;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: max(0.875rem, var(--font-size-ui-min));
+  cursor: pointer;
+}
+
+.file-open-actions > button:hover:not(:disabled) {
+  color: var(--text);
+  background: rgb(255 255 255 / 7%);
+}
+
+.file-open-actions > button:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.file-open-actions > button:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.file-open-status {
+  margin: 8px 0;
+  padding: 10px 14px;
+  font-size: max(0.875rem, var(--font-size-ui-min));
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.file-open-status.is-error {
+  color: #ffb7b4;
+}
+
+/* Keep the original file, date and size columns; actions sit beneath the name. */
+.file-table__inspection-heading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.file-table__inspection-cell {
+  grid-column: 1 / -1;
+  padding-left: 37px;
+}
+
+.file-table.has-selection .file-table__inspection-cell {
+  padding-left: 81px;
+}
+
+.file-table__inspection-cell .file-open-actions {
+  padding-bottom: 4px;
+}
+
+.cleanup-candidate__inspection {
+  grid-column: 3 / -1;
+}
+
+.empty-directory-list__rows > .empty-directory-list__open-row {
+  flex-wrap: wrap;
+}
+
+.empty-directory-list__open-row > span {
+  flex: 1 1 180px;
+}
+
+.empty-directory-list__open-row .file-open-actions {
+  flex: 0 0 auto;
+}
+
+@container (max-width: 620px) {
+  .cleanup-candidate__inspection {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 920px) {
+  .file-table__inspection-cell,
+  .file-table.has-selection .file-table__inspection-cell {
+    padding-left: 0;
+  }
+
+  .empty-directory-list__open-row > span {
+    flex: initial;
+  }
+
+  .empty-directory-list__open-row .file-open-actions {
+    margin-top: 4px;
+  }
+}

@@ -20,6 +20,8 @@ interface SafetyActionDialogProps {
     detail?: string;
   }>;
   confirmLabel?: string;
+  confirmDisabled?: boolean;
+  reviewAcknowledgementLabel?: string;
   onConfirm: (reviewAcknowledged: boolean) => void;
   onCancel: () => void;
   onClose: () => void;
@@ -37,6 +39,8 @@ export function SafetyActionDialog({
   intro,
   items = [],
   confirmLabel,
+  confirmDisabled = false,
+  reviewAcknowledgementLabel,
   onConfirm,
   onCancel,
   onClose,
@@ -132,7 +136,7 @@ export function SafetyActionDialog({
             {items.map((item) => (
               <div className="safety-dialog__item" key={item.path}>
                 <span>
-                  <strong title={item.path}>{item.path}</strong>
+                  <strong title={item.path} style={{ whiteSpace: "normal", overflowWrap: "anywhere", overflow: "visible" }}>{item.path}</strong>
                   {item.detail ? <small>{item.detail}</small> : null}
                 </span>
                 <b>{formatBytes(item.logicalBytes)}</b>
@@ -157,7 +161,7 @@ export function SafetyActionDialog({
               onChange={(event) => setReviewAcknowledged(event.currentTarget.checked)}
             />
             <span>
-              {t("한 번 더 확인할 프로그램 설정 {{count}}개에는 계정이나 설정 데이터가 포함될 수 있음을 확인했습니다.", {
+              {reviewAcknowledgementLabel ?? t("한 번 더 확인할 프로그램 설정 {{count}}개에는 계정이나 설정 데이터가 포함될 수 있음을 확인했습니다.", {
                 count: formatCount(reviewCount),
               })}
             </span>
@@ -185,7 +189,7 @@ export function SafetyActionDialog({
           <button
             className="trash-confirm-button"
             type="button"
-            disabled={busy || (reviewCount > 0 && !reviewAcknowledged)}
+            disabled={busy || confirmDisabled || (reviewCount > 0 && !reviewAcknowledged)}
             onClick={() => onConfirm(reviewAcknowledged)}
           >
             <Trash2 size={16} aria-hidden="true" />

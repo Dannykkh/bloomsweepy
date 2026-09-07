@@ -57,9 +57,13 @@ pub(crate) struct ActionHistoryEntry {
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum ActionHistoryKind {
+    EmptyDirectories,
     DuplicateFiles,
     CleanupCandidates,
     DirectoryFile,
+    DirectoryFolder,
+    ApplicationBundle,
+    ApplicationData,
     #[default]
     Unknown,
 }

@@ -41,7 +41,7 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      - name: Prepare native MCP sidecar
+      - name: Prepare native MCP and bounded document helpers
         working-directory: apps/desktop
         env:
           TAURI_ENV_TARGET_TRIPLE: x86_64-pc-windows-msvc
@@ -65,7 +65,7 @@ jobs:
         working-directory: apps/desktop
         run: npx tauri build --bundles msi,nsis
 
-      - name: Validate Windows installers and MCP sidecar
+      - name: Validate Windows installers and bundled helpers
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -77,6 +77,18 @@ jobs:
           $helperVersion = & $helper --version
           if ($LASTEXITCODE -ne 0 -or $helperVersion -ne "bloomsweepy-mcp $version") {
             throw "The MCP sidecar version does not match the app."
+          }
+          $documentHelper = "apps/desktop/src-tauri/binaries/bloomsweepy-document-worker-x86_64-pc-windows-msvc.exe"
+          if (-not (Test-Path -LiteralPath $documentHelper -PathType Leaf)) {
+            throw "The packaged document helper is missing."
+          }
+          $documentVersion = & $documentHelper --version
+          if ($LASTEXITCODE -ne 0 -or $documentVersion -ne "bloomsweepy-document-worker $version") {
+            throw "The document helper version does not match the app."
+          }
+          $heapCheck = & $documentHelper --check-heap-budget
+          if ($LASTEXITCODE -ne 0 -or $heapCheck -ne "heap-budget-rejection-ok") {
+            throw "The document helper allocation boundary failed."
           }
 
           $msi = Get-ChildItem -Path "target/release/bundle/msi" -Filter "*.msi" -File -Recurse |
@@ -94,9 +106,12 @@ jobs:
             if ($LASTEXITCODE -ne 0 -or $listingText -notmatch "bloomsweepy[-_]mcp\.exe") {
               throw "The installer does not contain bloomsweepy-mcp.exe: $($installer.Name)"
             }
+            if ($listingText -notmatch "bloomsweepy[-_]document[-_]worker\.exe") {
+              throw "The installer does not contain the document helper: $($installer.Name)"
+            }
           }
 
-          Get-FileHash -Algorithm SHA256 $helper, $msi.FullName, $nsis.FullName
+          Get-FileHash -Algorithm SHA256 $helper, $documentHelper, $msi.FullName, $nsis.FullName
 
       - name: Upload Windows installers
         uses: actions/upload-artifact@v6

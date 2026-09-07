@@ -23,6 +23,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { ControlStatusPanel } from "../components/ControlStatusPanel";
+import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../components/AssistantEmptyFolderCard";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
 import { useLanguage, type Translate } from "../i18n";
 import {
@@ -35,6 +36,10 @@ import {
   getAssistantProviderStatus,
   getAssistantSession,
   listAssistantSessions,
+  getAssistantEmptyWorkspace,
+  selectAssistantEmptyCandidates,
+  prepareAssistantEmptyPlan,
+  cancelScan,
 } from "../lib/bridge";
 import { formatAssistantPlainText } from "../lib/assistantText";
 import { assistantFailureMessage, assistantProviderStatusKey, isAssistantAuthenticationFailure } from "../lib/assistantProviderStatus";
@@ -43,6 +48,8 @@ import { formatBytes, formatCount, formatDate, formatDockerBytes } from "../lib/
 import { findVolumeForPath } from "../lib/volumePath";
 import type {
   AssistantChatTurn,
+  AssistantEmptyWorkspace,
+  TrashOperationResult,
   AssistantDockerContext,
   AssistantFolderSummary,
   AssistantProviderKind,
@@ -93,6 +100,7 @@ interface AssistantViewProps {
   launchRequest: { id: number; target: "docker" } | null;
   onLaunchRequestHandled: () => void;
   onPickFolder: () => Promise<DirectoryScanReport | null>;
+  onConfirmEmptyPlan: (sessionId: string, revision: string, planId: string) => Promise<TrashOperationResult>;
 }
 
 export function AssistantView({
@@ -120,6 +128,7 @@ export function AssistantView({
   launchRequest,
   onLaunchRequestHandled,
   onPickFolder,
+  onConfirmEmptyPlan,
 }: AssistantViewProps) {
   const { language, t } = useLanguage();
   const initialProviderPreference = useRef(readProviderPreference());
@@ -141,6 +150,10 @@ export function AssistantView({
   const [turns, setTurns] = useState<AssistantDisplayTurn[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [emptyWorkspace, setEmptyWorkspace] = useState<AssistantEmptyWorkspace | null>(null);
+  const [emptyActionBusy, setEmptyActionBusy] = useState(false);
+  const [emptyMoving, setEmptyMoving] = useState(false);
+  const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [dockerContext, setDockerContext] = useState<AssistantDockerContext | null>(null);
   const [dockerPreview, setDockerPreview] = useState<DockerCleanupPreview | null>(null);
@@ -149,6 +162,7 @@ export function AssistantView({
   const transcriptEnd = useRef<HTMLDivElement>(null);
   const requestInFlight = useRef(false);
   const sessionLoadRevision = useRef(0);
+  const emptyStateRevision = useRef(0);
   const activeScope = activeSession?.session.scopeRoot ?? null;
   const activeScopeKind = activeSession?.session.scopeKind ?? "folder";
   const summary = activeSession?.folderSummary ?? null;
@@ -167,8 +181,60 @@ export function AssistantView({
       && provider?.available
       && providerModelReady
       && !sending
+      && !cleanupAccessLocked
       && !sessionBusy,
   );
+
+  useEffect(() => {
+    let disposed = false;
+    const revision = ++emptyStateRevision.current;
+    setEmptyWorkspace(null);
+    setTrashResult(null);
+    const sessionId = activeSession?.session.id;
+    if (sessionId && activeSession.session.scopeKind === "folder") {
+      void getAssistantEmptyWorkspace(sessionId).then((workspace) => {
+        if (!disposed && revision === emptyStateRevision.current) setEmptyWorkspace(workspace);
+      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); });
+    }
+    return () => { disposed = true; };
+  }, [activeSession?.session.id]);
+
+  async function manageEmptyFolders(action: "select" | "prepare" | "confirm", ids?: string[]) {
+    const sessionId = activeSession?.session.id;
+    if (!sessionId || !emptyWorkspace || requestInFlight.current || sessionBusy || sending || cleanupAccessLocked) return;
+    requestInFlight.current = true;
+    ++emptyStateRevision.current;
+    setSessionBusy(true);
+    setEmptyActionBusy(true);
+    setEmptyMoving(action === "confirm");
+    setSessionError(null);
+    try {
+      if (action === "select") {
+        setEmptyWorkspace(await selectAssistantEmptyCandidates(sessionId, emptyWorkspace.revision, ids ?? []));
+      } else if (action === "prepare") {
+        setEmptyWorkspace(await prepareAssistantEmptyPlan(sessionId, emptyWorkspace.revision));
+      } else if (emptyWorkspace.plan) {
+        const result = await onConfirmEmptyPlan(sessionId, emptyWorkspace.revision, emptyWorkspace.plan.id);
+        setEmptyWorkspace(null);
+        setTrashResult(result);
+        const content = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })
+          + " " + t("추가 정리 전 빈 폴더를 다시 검사하세요.");
+        setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+        // Count-only execution evidence is retained for the next AI turn; local paths stay in the result card/journal.
+        const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
+        updateSessionSummary(mutation.session);
+      }
+    } catch (reason) {
+      setSessionError(normalizeAssistantError(reason, t));
+      // A consumed plan stays consumed even if I/O or persistence failed.
+      try { setEmptyWorkspace(await getAssistantEmptyWorkspace(sessionId)); } catch { setEmptyWorkspace(null); }
+    } finally {
+      requestInFlight.current = false;
+      setSessionBusy(false);
+      setEmptyActionBusy(false);
+      setEmptyMoving(false);
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -416,6 +482,7 @@ export function AssistantView({
     const includeDockerStatus = activeScopeKind === "docker" || isDockerManagementQuestion(message);
 
     requestInFlight.current = true;
+    ++emptyStateRevision.current;
     const previousTurns = boundedConversationHistory(turns);
     setTurns((current) => [...current, { role: "user", content: message }]);
     setDraft("");
@@ -438,6 +505,7 @@ export function AssistantView({
       userMessageSaved = true;
       updateSessionSummary(userMutation.session);
       const response = await askAssistant({
+        sessionId,
         provider: selectedProviderKind,
         model: selectedProviderKind === "ollama" ? selectedOllamaModel : null,
         message,
@@ -447,13 +515,26 @@ export function AssistantView({
         includeDockerStatus,
         responseLanguage: language,
       });
-      const assistantMessage = formatAssistantPlainText(response.message);
+      const assistantMessage = response.toolAction && response.emptyWorkspace
+        ? (response.toolAction === "scan"
+            ? t("앱 검사를 완료했습니다. 빈 폴더 {{count}}개를 검토할 수 있습니다.", { count: response.emptyWorkspace.candidates.length })
+            : response.toolAction === "selection"
+              ? t("후보 선택을 변경했습니다. 현재 {{count}}개가 선택되어 있습니다.", { count: response.emptyWorkspace.selectedIds.length })
+              : t("후보 페이지를 갱신했습니다. 아래 카드에서 전체 검토 가능 목록을 확인하세요."))
+          + " " + t("아직 휴지통으로 이동한 항목은 없습니다.")
+        : formatAssistantPlainText(response.message);
+      if (response.emptyWorkspace) {
+        setEmptyWorkspace(response.emptyWorkspace);
+        setTrashResult(null);
+        setActiveSession((current) => current?.session.id === sessionId
+          ? { ...current, folderSummary: response.emptyWorkspace!.summary } : current);
+      }
       setTurns((current) => [
         ...current,
         {
           role: "assistant",
           content: assistantMessage,
-          providerLabel: response.model ? `${response.label} · ${response.model}` : response.label,
+          providerLabel: response.toolAction ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
         },
       ]);
       setDockerContext(response.dockerContext);
@@ -462,8 +543,8 @@ export function AssistantView({
           sessionId,
           role: "assistant",
           content: assistantMessage,
-          provider: response.provider,
-          model: response.model,
+          provider: response.toolAction ? null : response.provider,
+          model: response.toolAction ? null : response.model,
         });
         updateSessionSummary(assistantMutation.session);
       } catch (reason) {
@@ -481,6 +562,7 @@ export function AssistantView({
         setSessionError(normalizeAssistantError(reason, t));
       } else {
         const detail = normalizeAssistantError(reason, t);
+        try { setEmptyWorkspace(await getAssistantEmptyWorkspace(sessionId)); } catch { setEmptyWorkspace(null); }
         setProviderError(detail);
         if (isAssistantAuthenticationFailure(reason)) {
           setProviders((current) => current.map((candidate) => candidate.provider === selectedProviderKind
@@ -735,6 +817,17 @@ export function AssistantView({
                   })}
             </div>
           ) : null}
+          {emptyWorkspace ? <AssistantEmptyFolderCard
+            workspace={emptyWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
+            onSelect={(ids) => void manageEmptyFolders("select", ids)}
+            onPrepare={() => void manageEmptyFolders("prepare")}
+            onConfirm={() => void manageEmptyFolders("confirm")}
+          /> : null}
+          {emptyActionBusy ? <div className="assistant-thinking" role="status">
+            <LoaderCircle size={17} aria-hidden="true" />{t("앱에서 후보 확인 또는 휴지통 이동을 처리하고 있습니다.")}
+            {emptyMoving ? <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button> : null}
+          </div> : null}
+          {trashResult ? <AssistantTrashResultCard result={trashResult} /> : null}
           {dockerContext?.enabled ? (
             <aside
               className={`assistant-docker-action ${dockerContext.available ? "is-ready" : "is-unavailable"}`}
@@ -809,7 +902,7 @@ export function AssistantView({
         <p className="assistant-composer-note">
           {activeScopeKind === "docker"
             ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
-            : t("파일 내용이나 전체 경로가 아니라, BroomSweepy가 만든 폴더 이름·크기 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}
+            : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}
         </p>
       </section>
 

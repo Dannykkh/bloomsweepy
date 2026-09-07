@@ -1,5 +1,40 @@
 use serde::Serialize;
 
+#[cfg(any(target_os = "macos", windows))]
+const MAX_INVENTORY_APPLICATIONS: usize = 2_000;
+#[cfg(any(target_os = "macos", windows))]
+const MAX_INVENTORY_TEXT_BYTES: usize = 4 * 1024 * 1024;
+
+#[cfg(any(target_os = "macos", windows))]
+fn bounded_application_text(application: &InstalledApplication) -> Option<usize> {
+    let fields = [
+        Some(application.display_name.as_str()),
+        application.display_version.as_deref(),
+        application.publisher.as_deref(),
+        application.install_location.as_deref(),
+    ];
+    if fields.iter().flatten().any(|value| value.len() > 4096)
+        || application
+            .cleanup_identity_tokens
+            .iter()
+            .any(|value| value.len() > 256)
+    {
+        return None;
+    }
+    Some(
+        fields
+            .iter()
+            .flatten()
+            .map(|value| value.len())
+            .sum::<usize>()
+            + application
+                .cleanup_identity_tokens
+                .iter()
+                .map(String::len)
+                .sum::<usize>(),
+    )
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledAppInventory {
@@ -80,6 +115,7 @@ where
     let mut issues = Vec::new();
     let mut opened_sources = 0_usize;
     let mut inspected_subkeys = 0_usize;
+    let mut text_bytes = 0_usize;
 
     cancel_if_requested(&should_cancel)?;
     'sources: for (hive, scope, view) in sources {
@@ -103,18 +139,14 @@ where
             let Ok(subkey) = uninstall.open_subkey_with_flags(&subkey_name, KEY_READ | view) else {
                 continue;
             };
-            if subkey
-                .get_value::<u32, _>("SystemComponent")
-                .is_ok_and(|value| value == 1)
-                || subkey.get_raw_value("ParentKeyName").is_ok()
-                || subkey
-                    .get_value::<String, _>("ReleaseType")
-                    .is_ok_and(|value| !value.trim().is_empty())
+            if bounded_registry_integer(&subkey, "SystemComponent") == Some(1)
+                || registry_value_exists(&subkey, "ParentKeyName")
+                || optional_string(&subkey, "ReleaseType").is_some()
             {
                 continue;
             }
 
-            let Ok(display_name) = subkey.get_value::<String, _>("DisplayName") else {
+            let Some(display_name) = optional_string(&subkey, "DisplayName") else {
                 continue;
             };
             let display_name = display_name.trim().to_owned();
@@ -132,6 +164,19 @@ where
                 cleanup_identity_tokens: Vec::new(),
             };
             let identity = application_identity(&application);
+            let Some(application_bytes) = bounded_application_text(&application) else {
+                if issues.len() < 100 {
+                    issues.push("앱 정보 문자열이 안전한 크기 한도를 넘어 생략했습니다".to_owned());
+                }
+                continue;
+            };
+            if applications.len() >= MAX_INVENTORY_APPLICATIONS
+                || text_bytes.saturating_add(application_bytes) > MAX_INVENTORY_TEXT_BYTES
+            {
+                issues.push("앱 목록의 메모리 보호 한도에 도달해 나머지는 생략했습니다".to_owned());
+                break 'sources;
+            }
+            text_bytes = text_bytes.saturating_add(application_bytes);
             match applications.entry(identity) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(application);
@@ -228,17 +273,13 @@ where
             let Ok(subkey) = uninstall.open_subkey_with_flags(&subkey_name, KEY_READ | view) else {
                 continue;
             };
-            if subkey
-                .get_value::<u32, _>("SystemComponent")
-                .is_ok_and(|value| value == 1)
-                || subkey.get_raw_value("ParentKeyName").is_ok()
-                || subkey
-                    .get_value::<String, _>("ReleaseType")
-                    .is_ok_and(|value| !value.trim().is_empty())
+            if bounded_registry_integer(&subkey, "SystemComponent") == Some(1)
+                || registry_value_exists(&subkey, "ParentKeyName")
+                || optional_string(&subkey, "ReleaseType").is_some()
             {
                 continue;
             }
-            let Ok(display_name) = subkey.get_value::<String, _>("DisplayName") else {
+            let Some(display_name) = optional_string(&subkey, "DisplayName") else {
                 continue;
             };
             let display_name = display_name.trim().to_owned();
@@ -303,22 +344,89 @@ where
 
 #[cfg(windows)]
 fn optional_string(key: &winreg::RegKey, name: &str) -> Option<String> {
-    key.get_value::<String, _>(name)
+    use windows_sys::Win32::System::Registry::{REG_EXPAND_SZ, REG_SZ};
+    // Fixed allocation before reading an untrusted registry value. Do not retry
+    // ERROR_MORE_DATA with a registry-controlled allocation size.
+    let mut bytes = [0_u8; 8192];
+    let (kind, length) = bounded_registry_value(key, name, &mut bytes)?;
+    if !matches!(kind, REG_SZ | REG_EXPAND_SZ) || length % 2 != 0 {
+        return None;
+    }
+    let units: Vec<u16> = bytes[..length]
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let end = units
+        .iter()
+        .rposition(|unit| *unit != 0)
+        .map_or(0, |index| index + 1);
+    if units[..end].contains(&0) {
+        return None;
+    }
+    String::from_utf16(&units[..end])
         .ok()
         .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty() && value.len() <= 4096)
 }
 
 #[cfg(windows)]
 fn estimated_size_bytes(key: &winreg::RegKey) -> Option<u64> {
-    key.get_value::<u32, _>("EstimatedSize")
-        .ok()
-        .map(|value| u64::from(value).saturating_mul(1_024))
-        .or_else(|| {
-            key.get_value::<u64, _>("EstimatedSize")
-                .ok()
-                .map(|value| value.saturating_mul(1_024))
-        })
+    bounded_registry_integer(key, "EstimatedSize").map(|value| value.saturating_mul(1_024))
+}
+
+#[cfg(windows)]
+fn bounded_registry_value(
+    key: &winreg::RegKey,
+    name: &str,
+    bytes: &mut [u8],
+) -> Option<(u32, usize)> {
+    use windows_sys::Win32::System::Registry::RegQueryValueExW;
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let mut kind = 0_u32;
+    let mut length = u32::try_from(bytes.len()).ok()?;
+    let status = unsafe {
+        RegQueryValueExW(
+            key.raw_handle() as _,
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            &mut kind,
+            bytes.as_mut_ptr(),
+            &mut length,
+        )
+    };
+    if status != 0 || length as usize > bytes.len() {
+        return None;
+    }
+    Some((kind, length as usize))
+}
+
+#[cfg(windows)]
+fn bounded_registry_integer(key: &winreg::RegKey, name: &str) -> Option<u64> {
+    use windows_sys::Win32::System::Registry::{REG_DWORD, REG_QWORD};
+    let mut bytes = [0_u8; 8];
+    match bounded_registry_value(key, name, &mut bytes)? {
+        (REG_DWORD, 4) => Some(u64::from(u32::from_le_bytes(bytes[..4].try_into().ok()?))),
+        (REG_QWORD, 8) => Some(u64::from_le_bytes(bytes)),
+        _ => None,
+    }
+}
+
+#[cfg(windows)]
+fn registry_value_exists(key: &winreg::RegKey, name: &str) -> bool {
+    use windows_sys::Win32::System::Registry::RegQueryValueExW;
+    let name: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+    let mut length = 0_u32;
+    // Query only metadata; never allocate the value for an existence check.
+    unsafe {
+        RegQueryValueExW(
+            key.raw_handle() as _,
+            name.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut length,
+        ) == 0
+    }
 }
 
 #[cfg(windows)]
@@ -410,6 +518,30 @@ pub fn installed_app_inventory_with_cancellation<C>(
 where
     C: Fn() -> bool,
 {
+    scan_macos_application_roots(
+        macos_application_roots(),
+        MAX_MACOS_APP_ENTRIES,
+        &should_cancel,
+    )
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn installed_app_ownership_inventory_with_cancellation<C>(
+    should_cancel: C,
+) -> Result<InstalledAppInventory, InventoryCancelled>
+where
+    C: Fn() -> bool,
+{
+    scan_macos_roots(
+        macos_application_roots(),
+        MAX_MACOS_APP_ENTRIES,
+        true,
+        &should_cancel,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn macos_application_roots() -> Vec<(std::path::PathBuf, &'static str)> {
     use std::path::PathBuf;
 
     let mut roots = vec![
@@ -419,13 +551,26 @@ where
     if let Some(home) = dirs::home_dir() {
         roots.push((home.join("Applications"), "user"));
     }
-    scan_macos_application_roots(roots, MAX_MACOS_APP_ENTRIES, &should_cancel)
+    roots
 }
 
 #[cfg(target_os = "macos")]
 fn scan_macos_application_roots<C>(
     roots: Vec<(std::path::PathBuf, &'static str)>,
     max_entries: usize,
+    should_cancel: &C,
+) -> Result<InstalledAppInventory, InventoryCancelled>
+where
+    C: Fn() -> bool,
+{
+    scan_macos_roots(roots, max_entries, false, should_cancel)
+}
+
+#[cfg(target_os = "macos")]
+fn scan_macos_roots<C>(
+    roots: Vec<(std::path::PathBuf, &'static str)>,
+    max_entries: usize,
+    ownership_walk: bool,
     should_cancel: &C,
 ) -> Result<InstalledAppInventory, InventoryCancelled>
 where
@@ -438,11 +583,46 @@ where
     let mut issues = Vec::new();
     let mut opened_roots = 0_usize;
     let mut inspected_entries = 0_usize;
+    let mut text_bytes = 0_usize;
 
     cancel_if_requested(should_cancel)?;
-    'roots: for (root, scope) in roots {
+    let mut pending: Vec<_> = roots
+        .into_iter()
+        .map(|(root, scope)| (root, scope, 0_usize))
+        .collect();
+    let mut pending_path_bytes: usize = pending
+        .iter()
+        .map(|(path, _, _)| path.as_os_str().len())
+        .sum();
+    pending.reverse();
+    'roots: while let Some((root, scope, depth)) = pending.pop() {
+        pending_path_bytes = pending_path_bytes.saturating_sub(root.as_os_str().len());
         cancel_if_requested(should_cancel)?;
-        if !root.exists() {
+        let root_metadata = match fs::symlink_metadata(&root) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && depth == 0 => continue,
+            Err(error) => {
+                push_macos_issue(
+                    &mut issues,
+                    MAX_MACOS_ISSUES,
+                    format!("{} 앱 루트를 확인하지 못했습니다: {error}", root.display()),
+                );
+                continue;
+            }
+        };
+        if root_metadata.file_type().is_symlink()
+            || !root_metadata.is_dir()
+            || bloomsweepy_core::is_cloud_storage_path(&root)
+            || bloomsweepy_core::is_online_only_metadata(&root_metadata)
+        {
+            push_macos_issue(
+                &mut issues,
+                MAX_MACOS_ISSUES,
+                format!(
+                    "{} 앱 루트는 일반 폴더가 아니어서 건너뜁니다",
+                    root.display()
+                ),
+            );
             continue;
         }
         let mut entries = match fs::read_dir(&root) {
@@ -492,6 +672,39 @@ where
             };
             let path = entry.path();
             if !has_app_extension(&path) {
+                if ownership_walk {
+                    match entry.file_type() {
+                        Ok(kind) if kind.is_symlink() => push_macos_issue(
+                            &mut issues,
+                            MAX_MACOS_ISSUES,
+                            "앱 폴더의 링크는 소유 관계 검증에서 제외했습니다".to_owned(),
+                        ),
+                        Ok(kind) if kind.is_dir() => {
+                            if depth >= 4
+                                || pending.len() >= max_entries
+                                || path.as_os_str().len() > 4096
+                                || pending_path_bytes.saturating_add(path.as_os_str().len())
+                                    > MAX_INVENTORY_TEXT_BYTES
+                            {
+                                push_macos_issue(
+                                    &mut issues,
+                                    MAX_MACOS_ISSUES,
+                                    "중첩 앱 폴더의 소유 관계 검증 한도를 넘었습니다".to_owned(),
+                                );
+                            } else {
+                                pending_path_bytes =
+                                    pending_path_bytes.saturating_add(path.as_os_str().len());
+                                pending.push((path, scope, depth + 1));
+                            }
+                        }
+                        Err(error) => push_macos_issue(
+                            &mut issues,
+                            MAX_MACOS_ISSUES,
+                            format!("앱 폴더 종류를 확인하지 못했습니다: {error}"),
+                        ),
+                        _ => {}
+                    }
+                }
                 continue;
             }
             let file_type = match entry.file_type() {
@@ -527,6 +740,25 @@ where
 
             match read_macos_application(&path, scope, should_cancel) {
                 Ok((identity, application)) => {
+                    let Some(application_bytes) = bounded_application_text(&application) else {
+                        push_macos_issue(
+                            &mut issues,
+                            MAX_MACOS_ISSUES,
+                            "앱 정보 문자열이 안전한 크기 한도를 넘어 생략했습니다".to_owned(),
+                        );
+                        continue;
+                    };
+                    if applications.len() >= MAX_INVENTORY_APPLICATIONS
+                        || text_bytes.saturating_add(application_bytes) > MAX_INVENTORY_TEXT_BYTES
+                    {
+                        push_macos_issue(
+                            &mut issues,
+                            MAX_MACOS_ISSUES,
+                            "앱 목록의 메모리 보호 한도에 도달해 나머지는 생략했습니다".to_owned(),
+                        );
+                        break 'roots;
+                    }
+                    text_bytes = text_bytes.saturating_add(application_bytes);
                     applications.entry(identity).or_insert(application);
                 }
                 Err(MacApplicationReadError::Cancelled) => return Err(InventoryCancelled),
@@ -577,8 +809,9 @@ fn read_macos_application<C>(
 where
     C: Fn() -> bool,
 {
-    use std::fs::{self, File};
+    use std::fs::{self, OpenOptions};
     use std::io::{Cursor, Read};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
     let check_cancel =
         || cancel_if_requested(should_cancel).map_err(|_| MacApplicationReadError::Cancelled);
@@ -604,12 +837,29 @@ where
     check_cancel()?;
 
     let plist_path = application_path.join("Contents").join("Info.plist");
-    let file = File::open(&plist_path).map_err(|error| {
-        MacApplicationReadError::Issue(format!(
-            "{} 앱 정보를 읽지 못했습니다: {error}",
-            application_path.display()
-        ))
-    })?;
+    for path in [application_path.join("Contents"), plist_path.clone()] {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| MacApplicationReadError::Issue(error.to_string()))?;
+        if metadata.file_type().is_symlink()
+            || (path == plist_path && !metadata.is_file())
+            || (path != plist_path && !metadata.is_dir())
+        {
+            return Err(MacApplicationReadError::Issue(
+                "앱 정보 경로에 링크 또는 특수 파일이 있어 제외했습니다".to_owned(),
+            ));
+        }
+    }
+    // Darwin O_NOFOLLOW | O_NONBLOCK: a raced link/FIFO must not be opened.
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(0x100 | 0x4)
+        .open(&plist_path)
+        .map_err(|error| {
+            MacApplicationReadError::Issue(format!(
+                "{} 앱 정보를 읽지 못했습니다: {error}",
+                application_path.display()
+            ))
+        })?;
     check_cancel()?;
     let metadata = file.metadata().map_err(|error| {
         MacApplicationReadError::Issue(format!(
@@ -617,6 +867,16 @@ where
             application_path.display()
         ))
     })?;
+    let path_metadata = fs::symlink_metadata(&plist_path)
+        .map_err(|error| MacApplicationReadError::Issue(error.to_string()))?;
+    if path_metadata.file_type().is_symlink()
+        || path_metadata.dev() != metadata.dev()
+        || path_metadata.ino() != metadata.ino()
+    {
+        return Err(MacApplicationReadError::Issue(
+            "앱 정보가 확인 중 변경됐습니다".to_owned(),
+        ));
+    }
     if !metadata.is_file() {
         return Err(MacApplicationReadError::Issue(format!(
             "{} 앱 정보가 일반 파일이 아니어서 건너뜁니다",
@@ -909,6 +1169,69 @@ mod tests {
 mod macos_tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn ownership_inventory_checks_nested_copies_without_traversing_app_bundles() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "First.app",
+            "Vendor/Second.app",
+            "First.app/Contents/Internal.app",
+        ] {
+            let contents = temp.path().join(name).join("Contents");
+            fs::create_dir_all(&contents).unwrap();
+            let mut dictionary = plist::Dictionary::new();
+            dictionary.insert(
+                "CFBundleIdentifier".to_owned(),
+                plist::Value::String("org.example.shared".to_owned()),
+            );
+            plist::Value::Dictionary(dictionary)
+                .to_file_binary(contents.join("Info.plist"))
+                .unwrap();
+        }
+        let roots = vec![(temp.path().to_owned(), "user")];
+        let direct =
+            scan_macos_application_roots(roots.clone(), MAX_MACOS_APP_ENTRIES, &|| false).unwrap();
+        assert_eq!(direct.applications.len(), 1);
+        let owners = scan_macos_roots(roots, MAX_MACOS_APP_ENTRIES, true, &|| false).unwrap();
+        assert_eq!(owners.applications.len(), 2);
+        assert!(owners.issues.is_empty());
+    }
+
+    #[test]
+    fn oversized_duplicate_application_marks_inventory_incomplete_for_data_ownership() {
+        let temp = tempfile::tempdir().unwrap();
+        for (name, display) in [
+            ("First.app", "First".to_owned()),
+            ("Second.app", "x".repeat(4097)),
+        ] {
+            let contents = temp.path().join(name).join("Contents");
+            fs::create_dir_all(&contents).unwrap();
+            let mut dictionary = plist::Dictionary::new();
+            dictionary.insert(
+                "CFBundleDisplayName".to_owned(),
+                plist::Value::String(display),
+            );
+            dictionary.insert(
+                "CFBundleIdentifier".to_owned(),
+                plist::Value::String("org.example.shared".to_owned()),
+            );
+            plist::Value::Dictionary(dictionary)
+                .to_file_binary(contents.join("Info.plist"))
+                .unwrap();
+        }
+        let inventory = scan_macos_application_roots(
+            vec![(temp.path().to_owned(), "user")],
+            MAX_MACOS_APP_ENTRIES,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(inventory.applications.len(), 1);
+        assert!(
+            !inventory.issues.is_empty(),
+            "a hidden duplicate must not permit an ownership proof"
+        );
+    }
 
     #[test]
     fn reads_binary_application_plist_and_keeps_bundle_id_internal() {

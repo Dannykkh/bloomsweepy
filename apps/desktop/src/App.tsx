@@ -6,8 +6,11 @@ import { SafetyActionDialog } from "./components/SafetyActionDialog";
 import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice";
 import { FileSectionNav } from "./components/FileSectionNav";
 import { StorageSectionNav } from "./components/StorageSectionNav";
+import { EmptyTrashControl } from "./components/EmptyTrashControl";
+import { ApplicationsView } from "./views/ApplicationsView";
 import {
   cancelScan,
+  confirmAssistantEmptyPlan,
   clearFileCatalog,
   configureControlScanAccess,
   configureControlSearchAccess,
@@ -45,6 +48,9 @@ import {
   trashCleanupCandidates,
   trashDuplicateFiles,
   trashDirectoryFile,
+  prepareDirectoryFolderPlan,
+  confirmDirectoryFolderPlan,
+  dismissDirectoryFolderPlan,
   approveCleanupPlan,
   rejectCleanupPlan,
 } from "./lib/bridge";
@@ -164,9 +170,13 @@ function App() {
   const [dashboardLoading, setDashboardLoading] = useState(true);
   const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [trashRunning, setTrashRunning] = useState(false);
+  const [emptyTrashRunning, setEmptyTrashRunning] = useState(false);
+  const [applicationRunning, setApplicationRunning] = useState(false);
+  const [applicationStatus, setApplicationStatus] = useState("");
+  const [applicationsVisited, setApplicationsVisited] = useState(false);
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
-  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | "overview" | null>(null);
+  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | "overview" | "assistant" | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
   const [recoveryReport, setRecoveryReport] = useState<ActionRecoveryReport | null>(null);
   const [recoveryChecking, setRecoveryChecking] = useState(true);
@@ -811,6 +821,8 @@ function App() {
   );
   const selectionBlocked =
     recoveryChecking ||
+    applicationRunning ||
+    emptyTrashRunning ||
     trashRunning ||
     scanState === "scanning" ||
     driveScanState === "scanning" ||
@@ -821,6 +833,7 @@ function App() {
     fileCatalogClearing;
 
   function navigate(view: ViewId) {
+    if (view === "applications") setApplicationsVisited(true);
     const reducedMotion = window.matchMedia?.(
       "(prefers-reduced-motion: reduce)",
     ).matches;
@@ -1406,7 +1419,7 @@ function App() {
   }
 
   async function runTrashAction(
-    source: "duplicates" | "cleanup" | "overview",
+    source: "duplicates" | "cleanup" | "overview" | "assistant",
     action: () => Promise<TrashOperationResult>,
   ): Promise<TrashOperationResult> {
     if (
@@ -1442,6 +1455,8 @@ function App() {
     } catch (reason) {
       const message = normalizeError(reason);
       setTrashError(message);
+      // An IPC/journal failure may happen after a move. Require a refresh conservatively.
+      if (fileCatalog) setFileCatalogStale(true);
       throw new Error(message);
     } finally {
       setTrashRunning(false);
@@ -1475,6 +1490,27 @@ function App() {
     if (result.movedCount > 0 && scanRoot) {
       await runDirectoryScan(scanRoot, breadcrumbs);
     }
+    return result;
+  }
+
+  async function prepareDirectoryFolder(path: string, generation: number) {
+    if (selectionBlocked) throw new Error(t("다른 스캔 또는 정리 작업이 진행 중입니다"));
+    setTrashRunning(true);
+    setTrashResultSource("overview");
+    setTrashProgress({ phase: "preflight", message: t("포함 항목과 변경 여부를 확인하고 있습니다. 검토가 끝나기 전에는 이동할 수 없습니다."), processedItems: 0, totalItems: 1 });
+    try {
+      return await prepareDirectoryFolderPlan(path, generation);
+    } finally {
+      setTrashRunning(false);
+      setTrashProgress(null);
+    }
+  }
+
+  async function moveDirectoryFolder(planId: string, generation: number, acknowledged: boolean) {
+    const scanRoot = directoryReport?.root;
+    const breadcrumbs = directoryBreadcrumbs;
+    const result = await runTrashAction("overview", () => confirmDirectoryFolderPlan(planId, generation, acknowledged));
+    if (result.movedCount > 0 && scanRoot) await runDirectoryScan(scanRoot, breadcrumbs);
     return result;
   }
 
@@ -1592,9 +1628,45 @@ function App() {
       {storageViews.has(activeView) ? (
         <StorageSectionNav activeView={activeView} onNavigate={navigate} />
       ) : null}
+      <EmptyTrashControl visible={storageViews.has(activeView) || activeView === "applications"} platform={system?.platform ?? null}
+        blocked={selectionBlocked || !!recoveryCheckError || !!recoveryReport?.issues.length || !!recoveryReport?.incompleteOperations.some((operation) => !operation.resolved || operation.attentionCount > 0)}
+        onBusyChange={setEmptyTrashRunning}
+        onSettled={() => {
+          invalidateAnalysisReports();
+          setTrashResult(null);
+          setFileCatalogStale(true);
+          void getSystemOverview().then(setSystem).catch(() => {});
+        }} />
       {fileViews.has(activeView) ? (
         <FileSectionNav activeView={activeView} onNavigate={navigate} />
       ) : null}
+      {applicationsVisited || activeView === "applications" ? (
+        <div hidden={activeView !== "applications"}>
+        <ApplicationsView
+          active={activeView === "applications"}
+          busy={selectionBlocked || !!recoveryCheckError || !!recoveryReport?.issues.length || !!recoveryReport?.incompleteOperations.some((operation) => !operation.resolved || operation.attentionCount > 0)}
+          onStatus={setApplicationStatus}
+          onBusyChange={setApplicationRunning}
+          onMutated={() => {
+            invalidateAnalysisReports();
+            setTrashResult(null);
+            setFileCatalogStale(true);
+            void getSystemOverview().then(setSystem).catch(() => {});
+            void getActionHistory().then(setActionHistory).catch(() => {});
+            setRecoveryChecking(true);
+            void getActionRecoveryStatus().then((status) => {
+              setRecoveryReport(status);
+              setRecoveryDismissed(false);
+              setRecoveryCheckError(null);
+            }).catch((reason: unknown) => {
+              setRecoveryCheckError(normalizeError(reason));
+              setRecoveryErrorDismissed(false);
+            }).finally(() => setRecoveryChecking(false));
+          }}
+        />
+        </div>
+      ) : null}
+      <span className="sr-only" role="status" aria-live="polite">{applicationStatus}</span>
       {activeView === "overview" ? (
         <OverviewView
           platform={system?.platform ?? null}
@@ -1632,6 +1704,9 @@ function App() {
           onCancelDirectoryScan={() => void stopDirectoryScan()}
           onRevealDirectoryItem={revealPath}
           onTrashDirectoryFile={moveDirectoryFile}
+          onPrepareDirectoryFolder={prepareDirectoryFolder}
+          onConfirmDirectoryFolder={moveDirectoryFolder}
+          onDismissDirectoryFolder={dismissDirectoryFolderPlan}
           onCancelTrash={() => void stopTrashAction()}
           trashProgress={trashResultSource === "overview" ? trashProgress : null}
           onOpenLargeFiles={() => navigate("large-files")}
@@ -1731,6 +1806,7 @@ function App() {
           launchRequest={assistantLaunchRequest}
           onLaunchRequestHandled={() => setAssistantLaunchRequest(null)}
           onPickFolder={() => pickStorageFolder({ stayOnView: true })}
+          onConfirmEmptyPlan={(sessionId, revision, planId) => runTrashAction("assistant", () => confirmAssistantEmptyPlan(sessionId, revision, planId))}
         />
       ) : null}
       {activeView === "performance" ? <PerformanceView /> : null}

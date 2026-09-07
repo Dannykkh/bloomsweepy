@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject, type
 import { createPortal } from "react-dom";
 import { SafetyActionDialog } from "./SafetyActionDialog";
 import { TreemapItemMenu, type TreemapMenuTarget } from "./TreemapItemMenu";
+import { FileInspectionStatus, FileOpenActions, useFileInspectionActions } from "./FileOpenActions";
 import { revealPath } from "../lib/bridge";
 import { formatBytes, formatCount, formatDate, formatDuration } from "../lib/format";
 import type {
@@ -22,6 +23,7 @@ import type {
   DirectoryNode,
   DirectoryScanProgress,
   DirectoryScanReport,
+  FolderReviewPlan,
   ScanUiState,
   TrashOperationResult,
   TrashProgress,
@@ -42,6 +44,9 @@ interface StorageTreemapPanelProps {
   onCancel: () => void;
   onReveal?: (path: string) => Promise<void>;
   onTrash?: (path: string, generation: number) => Promise<TrashOperationResult>;
+  onPrepareFolder?: (path: string, generation: number) => Promise<FolderReviewPlan>;
+  onConfirmFolder?: (planId: string, generation: number, acknowledged: boolean) => Promise<TrashOperationResult>;
+  onDismissFolder?: (planId: string) => Promise<void>;
   onCancelTrash?: () => void;
   trashProgress?: TrashProgress | null;
 }
@@ -79,22 +84,34 @@ export function StorageTreemapPanel({
   onCancel,
   onReveal = revealPath,
   onTrash,
+  onPrepareFolder,
+  onConfirmFolder,
+  onDismissFolder,
   onCancelTrash,
   trashProgress = null,
 }: StorageTreemapPanelProps) {
   const { t } = useLanguage();
   const scanning = state === "scanning";
+  const inspection = useFileInspectionActions({ reveal: onReveal, scopeKey: report ?? root });
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<TreemapMenuTarget | null>(null);
-  const [pendingTrash, setPendingTrash] = useState<{ node: DirectoryNode; generation: number } | null>(null);
+  const [pendingTrash, setPendingTrash] = useState<{ node: DirectoryNode; generation: number; plan?: FolderReviewPlan } | null>(null);
+  const [planUsed, setPlanUsed] = useState(false);
+  const [now, setNow] = useState(Date.now);
   const [actionBusy, setActionBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const busyRef = useRef(false);
+  const requestRevision = useRef(0);
+  const currentPlan = useRef<FolderReviewPlan | undefined>(undefined);
+  const dismissRef = useRef(onDismissFolder);
+  dismissRef.current = onDismissFolder;
+  currentPlan.current = pendingTrash?.plan;
+  const folderExpired = Boolean(pendingTrash?.plan && now >= pendingTrash.plan.expiresAtUnixMs);
   const activePath = menu?.node.path ?? hoveredPath ?? focusedPath;
-  const itemBlocked = blocked || scanning || actionBusy;
+  const itemBlocked = blocked || scanning || actionBusy || inspection.busy;
   const mapItems = useMemo(
     () => prepareDisplayItems(report, (count) => t("기타 {{count}}개", { count })),
     [report, t],
@@ -116,6 +133,26 @@ export function StorageTreemapPanel({
     setFocusedPath(null);
   }, [report, itemBlocked]);
 
+  useEffect(() => {
+    if (!pendingTrash?.plan) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [pendingTrash?.plan]);
+
+  useEffect(() => () => {
+    requestRevision.current += 1;
+    if (currentPlan.current) void dismissRef.current?.(currentPlan.current.id).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setPendingTrash((pending) => {
+      if (!pending || pending.generation === report?.generation || busyRef.current) return pending;
+      if (pending.plan) void dismissRef.current?.(pending.plan.id).catch(() => {});
+      return null;
+    });
+  }, [report?.generation]);
+
   function showMenu(node: DirectoryNode, trigger: HTMLElement, x: number, y: number) {
     if (itemBlocked) return;
     returnFocusRef.current = trigger;
@@ -133,12 +170,14 @@ export function StorageTreemapPanel({
     if (itemBlocked) return;
     setActionError(null);
     setActionNotice(null);
-    try {
-      await onReveal(node.path);
-      setActionNotice(t("{{name}} 위치를 열었습니다", { name: node.name }));
-    } catch (reason) {
-      setActionError(String(reason));
-    }
+    await inspection.run(node.path, node.name, "reveal");
+  }
+
+  async function inspectNode(node: DirectoryNode) {
+    if (itemBlocked) return;
+    setActionError(null);
+    setActionNotice(null);
+    await inspection.run(node.path, node.name);
   }
 
   function openNode(node: DirectoryNode) {
@@ -154,6 +193,8 @@ export function StorageTreemapPanel({
 
   function closeTrash() {
     if (busyRef.current) return;
+    requestRevision.current += 1;
+    if (pendingTrash?.plan) void onDismissFolder?.(pendingTrash.plan.id).catch(() => {});
     setPendingTrash(null);
     setActionError(null);
     requestAnimationFrame(() => {
@@ -162,17 +203,54 @@ export function StorageTreemapPanel({
     });
   }
 
-  async function confirmTrash() {
-    if (!pendingTrash || !onTrash || busyRef.current || itemBlocked) return;
+  async function prepareTrash(node: DirectoryNode) {
+    if (!report || itemBlocked) return;
+    const generation = report.generation;
+    setActionError(null);
+    setActionNotice(null);
+    setPlanUsed(false);
+    setPendingTrash({ node, generation });
+    setMenu(null);
+    if (!node.isDirectory || !onPrepareFolder) return;
+    const revision = ++requestRevision.current;
+    busyRef.current = true;
+    setActionBusy(true);
+    try {
+      const plan = await onPrepareFolder(node.path, generation);
+      if (revision !== requestRevision.current) {
+        void dismissRef.current?.(plan.id).catch(() => {});
+        return;
+      }
+      setPendingTrash({ node, generation, plan });
+    } catch (reason) {
+      if (revision === requestRevision.current) setActionError(String(reason));
+    } finally {
+      if (revision === requestRevision.current) {
+        busyRef.current = false;
+        setActionBusy(false);
+      }
+    }
+  }
+
+  async function confirmTrash(acknowledged: boolean) {
+    if (!pendingTrash || busyRef.current || itemBlocked) return;
+    if (pendingTrash.node.isDirectory) {
+      if (!onConfirmFolder || !pendingTrash.plan || folderExpired || planUsed || !acknowledged) return;
+      setPlanUsed(true);
+    } else if (!onTrash) return;
     busyRef.current = true;
     setActionBusy(true);
     setActionError(null);
     try {
-      const result = await onTrash(pendingTrash.node.path, pendingTrash.generation);
+      const result = pendingTrash.node.isDirectory
+        ? await onConfirmFolder!(pendingTrash.plan!.id, pendingTrash.generation, acknowledged)
+        : await onTrash!(pendingTrash.node.path, pendingTrash.generation);
       if (result.movedCount === 0) {
         setActionError(result.items.find((item) => item.message)?.message ?? t("이동하지 않았습니다. 창을 닫고 다시 검사하세요."));
       } else {
-        setActionNotice(t("{{name}}을 휴지통으로 이동했습니다", { name: pendingTrash.node.name }));
+        setActionNotice(result.journalComplete
+          ? t("{{name}}을 휴지통으로 이동했습니다", { name: pendingTrash.node.name })
+          : t("작업 기록 저장이 완전하지 않습니다. 실제 휴지통과 작업 기록을 확인하세요."));
         busyRef.current = false;
         closeTrash();
       }
@@ -411,7 +489,7 @@ export function StorageTreemapPanel({
             {report.emptyDirectories.length ? (
               <div className="empty-directory-list__rows">
                 {report.emptyDirectories.slice(0, 8).map((directory) => (
-                  <div key={directory.path}>
+                  <div key={directory.path} className="empty-directory-list__open-row">
                     <span>
                       <strong>{directory.name}</strong>
                       <small title={directory.path}>{directory.path}</small>
@@ -419,6 +497,9 @@ export function StorageTreemapPanel({
                     <time dateTime={directory.modifiedAtUnixMs ? new Date(directory.modifiedAtUnixMs).toISOString() : undefined}>
                       {formatDate(directory.modifiedAtUnixMs)}
                     </time>
+                    <FileOpenActions name={directory.name} directory disabled={itemBlocked}
+                      onOpen={() => void inspection.run(directory.path, directory.name)}
+                      onReveal={() => void inspection.run(directory.path, directory.name, "reveal")} />
                   </div>
                 ))}
               </div>
@@ -483,25 +564,32 @@ export function StorageTreemapPanel({
         </div>
       )}
       {actionNotice ? <p className="storage-map__action-notice" role="status">{actionNotice}</p> : null}
+      <FileInspectionStatus message={inspection.message} error={inspection.error} />
       {actionError && !pendingTrash ? <p className="storage-map__error" role="alert">{actionError}</p> : null}
     </section>
-    {menu ? <TreemapItemMenu target={menu} canTrash={Boolean(onTrash && report?.generation)}
+    {menu ? <TreemapItemMenu target={menu} canTrash={Boolean((menu.node.isDirectory ? onPrepareFolder && onConfirmFolder : onTrash) && report?.generation)}
       onClose={closeMenu}
       onOpen={() => { closeMenu(); openNode(menu.node); }}
+      onInspect={() => { closeMenu(); void inspectNode(menu.node); }}
       onReveal={() => { closeMenu(); void revealNode(menu.node); }}
       onTrash={() => {
-        if (!report || menu.node.isDirectory || !onTrash || itemBlocked) return;
-        setActionError(null);
-        setActionNotice(null);
-        setPendingTrash({ node: menu.node, generation: report.generation });
-        setMenu(null);
+        void prepareTrash(menu.node);
       }} /> : null}
-    {pendingTrash ? createPortal(<SafetyActionDialog open title={t("파일 휴지통 이동")}
-      itemCount={1} logicalBytes={pendingTrash.node.logicalBytes} busy={actionBusy}
-      progress={trashProgress} error={actionError}
-      intro={t("이 파일이 필요 없는지 확인하세요. 폴더는 이동하지 않습니다.")}
-      items={[{ path: pendingTrash.node.path, logicalBytes: pendingTrash.node.logicalBytes }]}
-      onConfirm={() => void confirmTrash()} onCancel={() => onCancelTrash?.()} onClose={closeTrash}
+    {pendingTrash ? createPortal(<SafetyActionDialog open title={t(pendingTrash.node.isDirectory ? "폴더 휴지통 이동" : "파일 휴지통 이동")}
+      itemCount={1} logicalBytes={pendingTrash.plan?.logicalBytes ?? pendingTrash.node.logicalBytes} busy={actionBusy}
+      progress={trashProgress} error={actionError ?? (folderExpired ? t("확인 시간이 만료됐습니다. 창을 닫고 다시 검토하세요.") : null)}
+      intro={pendingTrash.node.isDirectory
+        ? t("폴더와 하위 항목 전체를 이동합니다. 숨김 파일·앱·프로젝트도 포함되며, 일부 항목만 남길 수 없습니다. 이 확인은 5분 동안 한 번만 사용할 수 있습니다.")
+        : t("이 파일이 필요 없는지 확인하세요. 폴더는 이동하지 않습니다.")}
+      items={[{ path: pendingTrash.plan?.path ?? pendingTrash.node.path,
+        logicalBytes: pendingTrash.plan?.logicalBytes ?? pendingTrash.node.logicalBytes,
+        detail: pendingTrash.node.isDirectory ? pendingTrash.plan
+          ? t("파일 {{files}}개 · 폴더 {{folders}}개(선택 폴더 포함) · 내용은 전송하지 않고 메타데이터로 변경을 확인합니다.", { files: formatCount(pendingTrash.plan.fileCount), folders: formatCount(pendingTrash.plan.directoryCount) })
+          : t("포함 항목과 변경 여부를 확인하고 있습니다. 검토가 끝나기 전에는 이동할 수 없습니다.") : undefined }]}
+      reviewCount={pendingTrash.node.isDirectory ? 1 : 0}
+      reviewAcknowledgementLabel={pendingTrash.node.isDirectory ? t("숨김 파일·앱·프로젝트를 포함한 하위 항목 전체가 함께 이동함을 확인했습니다.") : undefined}
+      confirmDisabled={itemBlocked || Boolean(pendingTrash.node.isDirectory && (!pendingTrash.plan || folderExpired || planUsed))}
+      onConfirm={(acknowledged) => void confirmTrash(acknowledged)} onCancel={() => onCancelTrash?.()} onClose={closeTrash}
     />, document.body) : null}
     </>
   );

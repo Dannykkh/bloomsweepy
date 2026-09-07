@@ -15,6 +15,7 @@ import type {
   DirectoryBreadcrumb,
   DirectoryScanProgress,
   DirectoryScanReport,
+  FolderReviewPlan,
   DriveScanProgress,
   DriveScanReport,
   ScanProgress,
@@ -53,6 +54,9 @@ interface OverviewViewProps {
   onCancelDirectoryScan: () => void;
   onRevealDirectoryItem: (path: string) => Promise<void>;
   onTrashDirectoryFile: (path: string, generation: number) => Promise<TrashOperationResult>;
+  onPrepareDirectoryFolder: (path: string, generation: number) => Promise<FolderReviewPlan>;
+  onConfirmDirectoryFolder: (planId: string, generation: number, acknowledged: boolean) => Promise<TrashOperationResult>;
+  onDismissDirectoryFolder: (planId: string) => Promise<void>;
   onCancelTrash: () => void;
   trashProgress: TrashProgress | null;
   onOpenLargeFiles: () => void;
@@ -87,6 +91,9 @@ export function OverviewView({
   onCancelDirectoryScan,
   onRevealDirectoryItem,
   onTrashDirectoryFile,
+  onPrepareDirectoryFolder,
+  onConfirmDirectoryFolder,
+  onDismissDirectoryFolder,
   onCancelTrash,
   trashProgress,
   onOpenLargeFiles,
@@ -121,6 +128,9 @@ export function OverviewView({
         onCancel={onCancelDirectoryScan}
         onReveal={onRevealDirectoryItem}
         onTrash={onTrashDirectoryFile}
+        onPrepareFolder={onPrepareDirectoryFolder}
+        onConfirmFolder={onConfirmDirectoryFolder}
+        onDismissFolder={onDismissDirectoryFolder}
         onCancelTrash={onCancelTrash}
         trashProgress={trashProgress}
       />

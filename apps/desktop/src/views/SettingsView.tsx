@@ -2,6 +2,7 @@ import { Database, HardDrive, Languages, ShieldCheck } from "lucide-react";
 import { DockerManagementPanel } from "../components/DockerManagementPanel";
 import { McpConnectionPanel } from "../components/McpConnectionPanel";
 import { StartupSettingsPanel } from "../components/StartupSettingsPanel";
+import { MenuBarSettingsPanel } from "../components/MenuBarSettingsPanel";
 import { useLanguage, type LanguagePreference } from "../i18n";
 import type { DockerManagementStatus, ScanConfig } from "../types";
 
@@ -168,6 +169,7 @@ export function SettingsView({
       </section>
 
       <StartupSettingsPanel />
+      <MenuBarSettingsPanel />
 
       <DockerManagementPanel
         status={dockerStatus}
@@ -191,6 +193,7 @@ export function SettingsView({
             <li>{t("선택 항목은 실행 직전 재검증하고 운영체제 휴지통으로만 이동합니다.")}</li>
             <li>{t("일반 파일은 영구 삭제하지 않으며 Windows 설치 정보도 변경하지 않습니다.")}</li>
             <li>{t("Docker 정리는 예외적으로 휴지통을 거치지 않아 별도 확인 뒤에만 실행합니다.")}</li>
+            <li>{t("휴지통 비우기는 예외적으로 휴지통 전체를 영구 삭제하며 별도 확인 뒤에만 실행합니다.")}</li>
           </ul>
         </div>
       </section>

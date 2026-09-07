@@ -1,6 +1,5 @@
 import { File, ShieldCheck } from "lucide-react";
-import { useState } from "react";
-import { inspectFile } from "../lib/bridge";
+import { FileInspectionStatus, FileOpenActions, useFileInspectionActions } from "./FileOpenActions";
 import {
   fileParent,
   formatBytes,
@@ -30,32 +29,16 @@ export function FileTable({
   selectionDisabled = false,
 }: FileTableProps) {
   const { t } = useLanguage();
-  const [inspectionMessage, setInspectionMessage] = useState<string | null>(null);
+  const inspection = useFileInspectionActions({ scopeKey: files });
   const selectable = Boolean(selectedPaths && onSelectionChange);
 
   if (files.length === 0) {
     return <div className="table-empty">{emptyMessage}</div>;
   }
 
-  async function openForInspection(file: FileEntry) {
-    try {
-      const outcome = await inspectFile(file.path);
-      setInspectionMessage(
-        outcome === "opened"
-          ? t("{{name}} 파일을 기본 앱으로 열었습니다.", { name: file.name })
-          : t("{{name}}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.", { name: file.name }),
-      );
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setInspectionMessage(t("{{name}} 파일을 열지 못했습니다: {{detail}}", {
-        name: file.name,
-        detail: message,
-      }));
-    }
-  }
-
   return (
     <div className="file-table-shell">
+      <FileInspectionStatus message={inspection.message} error={inspection.error} />
       <div
         className={`file-table ${selectable ? "has-selection" : ""}`}
         role="table"
@@ -66,6 +49,7 @@ export function FileTable({
           <span role="columnheader">{t("파일")}</span>
           <span role="columnheader">{t("수정")}</span>
           <span role="columnheader">{t("크기")}</span>
+          <span role="columnheader" className="file-table__inspection-heading">{t("작업")}</span>
         </div>
         {files.map((file) => {
           const selected = selectedPaths?.has(file.path) ?? false;
@@ -80,10 +64,11 @@ export function FileTable({
             aria-label={t("{{name}}, 더블클릭하거나 Enter 키를 눌러 확인", { name: file.name })}
             title={t("더블클릭하여 기본 앱으로 열기")}
             key={file.path}
-            onDoubleClick={() => void openForInspection(file)}
+            onDoubleClick={() => void inspection.run(file.path, file.name)}
             onKeyDown={(event) => {
-              if (event.target === event.currentTarget && event.key === "Enter") {
-                void openForInspection(file);
+              if (event.target === event.currentTarget && event.key === "Enter" && !event.repeat) {
+                event.preventDefault();
+                void inspection.run(file.path, file.name);
               }
             }}
           >
@@ -122,6 +107,11 @@ export function FileTable({
             <strong className="file-size" role="cell">
               {formatBytes(file.logicalBytes)}
             </strong>
+            <div role="cell" className="file-table__inspection-cell">
+              <FileOpenActions name={file.name} disabled={inspection.busy}
+                onOpen={() => void inspection.run(file.path, file.name)}
+                onReveal={() => void inspection.run(file.path, file.name, "reveal")} />
+            </div>
           </div>
           );
         })}
@@ -129,11 +119,6 @@ export function FileTable({
       <p className="file-table__hint">
         {t("더블클릭하면 기본 앱으로 엽니다. 실행 파일과 스크립트는 안전을 위해 폴더에서만 표시합니다.")}
       </p>
-      {inspectionMessage ? (
-        <p className="file-table__status" role="status" aria-live="polite">
-          {inspectionMessage}
-        </p>
-      ) : null}
     </div>
   );
 }

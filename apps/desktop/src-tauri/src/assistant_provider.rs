@@ -173,6 +173,8 @@ pub(crate) struct AssistantProviderModel {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AssistantChatRequest {
+    #[serde(default)]
+    session_id: Option<String>,
     provider: AssistantProviderKind,
     model: Option<String>,
     message: String,
@@ -236,6 +238,8 @@ pub(crate) struct AssistantChatResponse {
     model: Option<String>,
     message: String,
     docker_context: Option<super::docker_tools::DockerAssistantContext>,
+    empty_workspace: Option<super::assistant_tools::EmptyWorkspaceView>,
+    tool_action: Option<&'static str>,
 }
 
 #[tauri::command]
@@ -317,8 +321,17 @@ impl From<String> for AssistantChatError {
 async fn ask_assistant_inner(
     app: AppHandle,
     state: State<'_, AssistantProviderState>,
-    request: AssistantChatRequest,
+    mut request: AssistantChatRequest,
 ) -> Result<AssistantChatResponse, String> {
+    if let Some(session_id) = &request.session_id {
+        let session =
+            super::assistant_sessions::get_assistant_session(app.clone(), session_id.clone())
+                .await?;
+        if session.session.scope_kind != request.scope_kind {
+            return Err("대화 범위가 변경되었습니다".to_owned());
+        }
+        request.summary = session.folder_summary;
+    }
     validate_request(&request)?;
     state
         .running
@@ -364,12 +377,24 @@ async fn ask_assistant_inner(
         .map(serde_json::to_string_pretty)
         .transpose()
         .map_err(|error| format!("Docker 사용량 요약을 준비하지 못했습니다: {error}"))?;
-    let prompt = build_prompt(&request, docker_context_json.as_deref())?;
+    let mut prompt = build_prompt(&request, docker_context_json.as_deref())?;
+    let tool_session = request
+        .session_id
+        .clone()
+        .filter(|_| request.scope_kind == AssistantScopeKind::Folder);
+    if let Some(session_id) = &tool_session {
+        let context = app
+            .state::<super::assistant_tools::AssistantToolsState>()
+            .prompt_context(session_id)?;
+        prompt.push_str(super::assistant_tools::TOOL_CONTRACT);
+        prompt.push_str("\n[Current app tool state]\n");
+        prompt.push_str(&context);
+    }
     let cancellation = std::sync::Arc::clone(&state.cancellation);
     let response_model = request.model.clone();
     let run_model = response_model.clone();
 
-    tauri::async_runtime::spawn_blocking(move || {
+    let raw_message = tauri::async_runtime::spawn_blocking(move || {
         run_provider(
             provider,
             program,
@@ -381,13 +406,45 @@ async fn ask_assistant_inner(
         )
     })
     .await
-    .map_err(|error| format!("{} 실행 작업이 중단됐습니다: {error}", provider.label()))?
-    .map(|message| AssistantChatResponse {
+    .map_err(|error| format!("{} 실행 작업이 중단됐습니다: {error}", provider.label()))??;
+    let mut message = raw_message;
+    let mut empty_workspace = None;
+    let mut tool_action = None;
+    if let Some(session_id) = tool_session {
+        let envelope = super::assistant_tools::parse_envelope(&message)?;
+        message = envelope.message;
+        if let Some(action) = envelope.action {
+            if state.cancellation.load(Ordering::Acquire) {
+                return Err("대화 작업이 취소되었습니다".to_owned());
+            }
+            tool_action = Some(match &action {
+                super::assistant_tools::AssistantAction::ScanEmptyDirectories {} => "scan",
+                super::assistant_tools::AssistantAction::ListEmptyDirectories { .. } => "list",
+                super::assistant_tools::AssistantAction::UpdateEmptySelection { .. } => "selection",
+            });
+            empty_workspace = Some(
+                super::assistant_tools::dispatch(
+                    app.clone(),
+                    session_id,
+                    action,
+                    std::sync::Arc::clone(&state.cancellation),
+                )
+                .await?,
+            );
+            // The UI renders a localized factual app result, never an unverified model success claim.
+            message =
+                "앱에서 후보 검토 상태를 갱신했습니다. 아직 휴지통으로 이동한 항목은 없습니다."
+                    .to_owned();
+        }
+    }
+    Ok(AssistantChatResponse {
         provider,
         label: provider.label(),
         model: response_model,
         message,
         docker_context,
+        empty_workspace,
+        tool_action,
     })
 }
 
@@ -487,7 +544,7 @@ fn build_prompt(
     let scope_context = match request.scope_kind {
         AssistantScopeKind::Folder => format!(
             "The JSON below is a limited summary produced by BroomSweepy after a read-only scan of the folder selected by the user.\n\
-             Full paths and file contents were not shared.\n\n\
+             This app-generated summary omits full paths and file contents; the user may still type these in questions or history.\n\n\
              [Folder summary]\n{summary}"
         ),
         AssistantScopeKind::Docker => {
@@ -1578,6 +1635,7 @@ mod tests {
 
     fn valid_request() -> AssistantChatRequest {
         AssistantChatRequest {
+            session_id: None,
             provider: AssistantProviderKind::Codex,
             model: None,
             message: "이 폴더에서 용량이 큰 부분을 알려줘".to_owned(),

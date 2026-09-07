@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import {
+  AppWindow,
   Boxes,
   Folder,
   FolderOpen,
@@ -36,6 +37,7 @@ type NavigationTone =
   | "space"
   | "files"
   | "performance"
+  | "applications"
   | "assistant"
   | "docker"
   | "settings";
@@ -58,6 +60,7 @@ const storageViews = new Set<ViewId>([
 ]);
 const fileViews = new Set<ViewId>(["files", "documents"]);
 const performanceViews = new Set<ViewId>(["performance"]);
+const applicationViews = new Set<ViewId>(["applications"]);
 const assistantViews = new Set<ViewId>(["assistant"]);
 const dockerViews = new Set<ViewId>(["docker"]);
 const settingsViews = new Set<ViewId>(["settings"]);
@@ -70,6 +73,22 @@ const navigationBeforeDocker: NavigationItem[] = [
     icon: LayoutDashboard,
     tone: "dashboard",
     activeViews: dashboardViews,
+  },
+  {
+    id: "performance",
+    label: "성능",
+    description: "CPU·메모리 상태",
+    icon: Gauge,
+    tone: "performance",
+    activeViews: performanceViews,
+  },
+  {
+    id: "applications",
+    label: "앱 관리",
+    description: "설치된 앱",
+    icon: AppWindow,
+    tone: "applications",
+    activeViews: applicationViews,
   },
   {
     id: "overview",
@@ -86,14 +105,6 @@ const navigationBeforeDocker: NavigationItem[] = [
     icon: Folder,
     tone: "files",
     activeViews: fileViews,
-  },
-  {
-    id: "performance",
-    label: "성능",
-    description: "CPU·메모리 상태",
-    icon: Gauge,
-    tone: "performance",
-    activeViews: performanceViews,
   },
   {
     id: "assistant",
@@ -171,6 +182,11 @@ const titles: Record<
     eyebrow: "용량 관리",
     title: "정리 후보",
     description: "오래된 임시 파일과 삭제 후 남은 흔적을 근거별로 검토합니다.",
+  },
+  applications: {
+    eyebrow: "앱 관리",
+    title: "설치된 앱",
+    description: "앱 제거와 관련 데이터 정리를 나누어 검토합니다.",
   },
   duplicates: {
     eyebrow: "용량 관리",

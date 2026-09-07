@@ -5,6 +5,7 @@ export type ViewId =
   | "files"
   | "documents"
   | "cleanup"
+  | "applications"
   | "large-files"
   | "duplicates"
   | "performance"
@@ -73,6 +74,7 @@ export interface AssistantFolderSummary {
 }
 
 export interface AssistantChatRequest {
+  sessionId?: string;
   provider: AssistantProviderKind;
   model: string | null;
   message: string;
@@ -89,6 +91,18 @@ export interface AssistantChatResponse {
   model: string | null;
   message: string;
   dockerContext: AssistantDockerContext | null;
+  emptyWorkspace: AssistantEmptyWorkspace | null;
+  toolAction: "scan" | "list" | "selection" | null;
+}
+
+export interface AssistantEmptyWorkspace {
+  revision: string;
+  summary: AssistantFolderSummary;
+  totalFound: number;
+  omittedCount: number;
+  candidates: { id: string; number: number; name: string; path: string }[];
+  selectedIds: string[];
+  plan: { id: string; candidateIds: string[]; expiresAtUnixMs: number } | null;
 }
 
 export interface AssistantSessionSummary {
@@ -870,7 +884,17 @@ export interface ActionRecoveryReport {
   issues: string[];
 }
 
-export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "directoryFile" | "unknown";
+export interface FolderReviewPlan {
+  id: string;
+  generation: number;
+  path: string;
+  logicalBytes: number;
+  fileCount: number;
+  directoryCount: number;
+  expiresAtUnixMs: number;
+}
+
+export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "directoryFile" | "directoryFolder" | "emptyDirectories" | "applicationBundle" | "applicationData" | "unknown";
 
 export interface ActionHistoryEntry {
   operationId: string;
@@ -1066,3 +1090,9 @@ export interface FileCatalogRecentReport {
   resultsTruncated: boolean;
   results: FileCatalogRecentEntry[];
 }
+export interface EmptyTrashPlan {
+  id: string;
+  expiresAtUnixMs: number;
+}
+
+export type EmptyTrashOutcome = "requested" | "cancelled" | "permissionDenied" | "launchFailed" | "unconfirmed";

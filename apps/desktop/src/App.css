@@ -343,6 +343,11 @@ option {
   --nav-tone-rgb: 114 223 178;
 }
 
+.nav-item--applications {
+  --nav-tone: #f4bf66;
+  --nav-tone-rgb: 244 191 102;
+}
+
 .nav-item--assistant {
   --nav-tone: #b47cff;
   --nav-tone-rgb: 180 124 255;
@@ -577,7 +582,7 @@ option {
 .storage-section-nav,
 .file-section-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   width: 100%;
   max-width: 1460px;
   margin: 0 auto 18px;
@@ -4701,6 +4706,41 @@ option {
   box-shadow: 0 28px 90px rgb(0 0 0 / 48%);
 }
 
+.empty-trash-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  width: 100%;
+  max-width: 1460px;
+  margin: -4px auto 18px;
+  font-size: var(--font-size-ui-min);
+  color: var(--text-muted);
+}
+
+.empty-trash-tools[hidden] { display: none; }
+.empty-trash-tools > span { flex: 1 1 240px; }
+.empty-trash-tools > p { flex-basis: 100%; }
+.empty-trash-tools .empty-trash-trigger { color: #ffb2b2; }
+
+dialog.empty-trash-dialog {
+  color: var(--text);
+  padding: 0;
+  margin: auto;
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+
+.empty-trash-dialog::backdrop {
+  background: rgb(3 5 10 / 78%);
+  backdrop-filter: blur(8px);
+}
+
+.empty-trash-dialog .safety-dialog__warning p + p { margin-top: 10px; }
+.empty-trash-dialog > header small { color: #ffb2b2; }
+
 .safety-dialog > header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -5686,6 +5726,16 @@ option {
   }
 }
 
+@media (max-height: 720px) {
+  .primary-navigation {
+    gap: 5px;
+  }
+
+  .nav-item {
+    min-height: 50px;
+  }
+}
+
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 72px minmax(0, 1fr);
@@ -5891,6 +5941,11 @@ option {
 
   .sidebar .nav-item::after {
     content: none;
+  }
+
+  .sidebar .primary-navigation {
+    min-height: 0;
+    overflow-y: auto;
   }
 
   .sidebar .sidebar-volume__line {
@@ -9143,6 +9198,16 @@ option {
   background: rgb(78 31 35 / 28%);
 }
 
+.menu-bar-settings-actions {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.menu-bar-settings-actions p {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
 .docker-settings-link-row {
   display: flex;
   gap: 18px;
@@ -9691,3 +9756,27 @@ option {
 .assistant-cli-diagnostics p { margin: 4px 0; opacity: 0.8; }
 .assistant-cli-diagnostics summary { cursor: pointer; margin-top: 6px; }
 .assistant-cli-diagnostics code { display: block; overflow-wrap: anywhere; margin: 6px 0; }
+/* Conversation-owned review: long paths scroll locally and never widen the chat. */
+.assistant-empty-review {
+  margin: 14px 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  min-width: 0;
+}
+.assistant-empty-review > header { display: flex; gap: 12px; align-items: center; }
+.assistant-empty-review p { font-size: 14px; line-height: 1.65; margin: 8px 0; }
+.assistant-empty-review small { display: block; font-size: 14px; color: var(--text-muted); overflow-wrap: anywhere; }
+.assistant-empty-review__selection { display: flex; gap: 14px; padding: 8px 0; }
+.assistant-empty-review__list { max-height: 280px; overflow: auto; padding: 0; margin: 12px 0; list-style: none; }
+.assistant-empty-review__list li { padding: 10px 4px; border-bottom: 1px solid rgba(125, 143, 180, .16); }
+.assistant-empty-review__list label { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.assistant-empty-review__list label > span { min-width: 0; }
+.assistant-empty-review__list strong { font-size: 14px; overflow-wrap: anywhere; }
+.assistant-empty-review__list input { flex-shrink: 0; width: 17px; height: 17px; }
+.assistant-empty-review footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.assistant-empty-review footer > small { flex: 1 1 240px; }
+.assistant-empty-review button { white-space: normal; }
+.assistant-empty-review .text-button { min-height: 44px; background: none; border: 0; color: inherit; padding: 6px 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.assistant-empty-review button:disabled { opacity: .45; cursor: not-allowed; }

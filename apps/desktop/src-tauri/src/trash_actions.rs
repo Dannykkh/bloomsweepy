@@ -111,12 +111,127 @@ struct Journal {
     writer: BufWriter<File>,
 }
 
+trait ActionJournal {
+    fn path(&self) -> &Path;
+    fn record(&mut self, value: serde_json::Value) -> Result<(), String>;
+}
+
+impl ActionJournal for Journal {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+    fn record(&mut self, value: serde_json::Value) -> Result<(), String> {
+        Journal::record(self, value)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "camelCase")]
-enum TrashActionKind {
+pub(crate) enum TrashActionKind {
     DuplicateFiles,
     CleanupCandidates,
     DirectoryFile,
+    EmptyDirectories,
+    DirectoryFolder,
+    #[cfg(any(target_os = "macos", test))]
+    ApplicationBundle,
+    #[cfg(any(target_os = "macos", test))]
+    ApplicationData,
+}
+
+/// Only backend-validated snapshots implement this; IPC never accepts these items.
+/// Application packages need their own policy without weakening folder protection.
+pub(crate) trait JournalTrashItem {
+    fn path(&self) -> &Path;
+    fn recovery_path(&self) -> &Path;
+    fn logical_bytes(&self) -> u64;
+    fn revalidate(&self, cancellation: &AtomicBool) -> Result<(), String>;
+}
+
+impl JournalTrashItem for VerifiedTrashItem {
+    fn path(&self) -> &Path {
+        self.path()
+    }
+    fn recovery_path(&self) -> &Path {
+        self.recovery_path()
+    }
+    fn logical_bytes(&self) -> u64 {
+        self.logical_bytes()
+    }
+    fn revalidate(&self, cancellation: &AtomicBool) -> Result<(), String> {
+        revalidate_verified_trash_item(self, || cancellation.load(Ordering::Acquire))
+            .map_err(|error| error.to_string())
+    }
+}
+
+/// Synchronous by design: the caller's blocking worker owns the runtime lease.
+#[cfg(target_os = "macos")]
+pub(crate) fn trash_application_items<I: JournalTrashItem>(
+    app: &AppHandle,
+    items: Vec<I>,
+    data_only: bool,
+    cancellation: &AtomicBool,
+) -> Result<TrashOperationResult, String> {
+    validate_requested_count(items.len())?;
+    execute_verified_items(
+        items,
+        action_journal_path(app)?,
+        if data_only {
+            TrashActionKind::ApplicationData
+        } else {
+            TrashActionKind::ApplicationBundle
+        },
+        cancellation,
+        |progress| {
+            let _ = app.emit("trash-progress", progress);
+        },
+        &SystemTrash,
+    )
+}
+
+pub(crate) async fn trash_verified_directory(
+    app: AppHandle,
+    item: VerifiedTrashItem,
+    cancellation: Arc<AtomicBool>,
+) -> Result<TrashOperationResult, String> {
+    let journal_path = action_journal_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_verified_items(
+            vec![item],
+            journal_path,
+            TrashActionKind::DirectoryFolder,
+            &cancellation,
+            |progress| {
+                let _ = app.emit("trash-progress", progress);
+            },
+            &SystemTrash,
+        )
+    })
+    .await
+    .map_err(|error| format!("폴더 휴지통 이동 작업이 중단됐습니다: {error}"))?
+}
+
+pub(crate) async fn trash_verified_empty_directories(
+    app: AppHandle,
+    items: Vec<VerifiedTrashItem>,
+    cancellation: Arc<AtomicBool>,
+) -> Result<TrashOperationResult, String> {
+    let journal_path = action_journal_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        validate_requested_count(items.len())?;
+        execute_verified_items(
+            items,
+            journal_path,
+            TrashActionKind::EmptyDirectories,
+            &cancellation,
+            |progress| {
+                let _ = app.emit("trash-progress", progress);
+            },
+            &SystemTrash,
+        )
+    })
+    .await
+    .map_err(|error| format!("빈 폴더 휴지통 이동 작업이 중단됐습니다: {error}"))?
 }
 
 impl Journal {
@@ -375,9 +490,32 @@ pub(crate) async fn trash_directory_file(
     worker_result?
 }
 
-fn execute_verified_items<B, F>(
-    items: Vec<VerifiedTrashItem>,
+fn execute_verified_items<B, F, I>(
+    items: Vec<I>,
     journal_path: PathBuf,
+    action_kind: TrashActionKind,
+    cancellation: &AtomicBool,
+    on_progress: F,
+    backend: &B,
+) -> Result<TrashOperationResult, String>
+where
+    B: TrashBackend,
+    F: FnMut(TrashProgress),
+    I: JournalTrashItem,
+{
+    execute_with_journal(
+        items,
+        Journal::open(journal_path)?,
+        action_kind,
+        cancellation,
+        on_progress,
+        backend,
+    )
+}
+
+fn execute_with_journal<B, F, I, J>(
+    items: Vec<I>,
+    mut journal: J,
     action_kind: TrashActionKind,
     cancellation: &AtomicBool,
     mut on_progress: F,
@@ -386,6 +524,8 @@ fn execute_verified_items<B, F>(
 where
     B: TrashBackend,
     F: FnMut(TrashProgress),
+    I: JournalTrashItem,
+    J: ActionJournal,
 {
     let operation_id = operation_id();
     let requested_count = items.len();
@@ -398,7 +538,6 @@ where
             })
         })
         .collect();
-    let mut journal = Journal::open(journal_path)?;
     journal.record(json!({
         "schemaVersion": 1,
         "timestampUnixMs": unix_time_ms(),
@@ -437,10 +576,8 @@ where
             processed_items: index,
             total_items: requested_count,
         });
-        if let Err(error) =
-            revalidate_verified_trash_item(item, || cancellation.load(Ordering::Acquire))
-        {
-            if matches!(error, bloomsweepy_core::ActionValidationError::Cancelled) {
+        if let Err(error) = item.revalidate(cancellation) {
+            if cancellation.load(Ordering::Acquire) {
                 cancelled = true;
                 push_skipped(
                     &mut results,
@@ -481,6 +618,17 @@ where
             break;
         }
 
+        if cancellation.load(Ordering::Acquire) {
+            cancelled = true;
+            stopped_early = true;
+            push_skipped(
+                &mut results,
+                &items[index..],
+                "사용자가 작업 중단을 요청했습니다",
+            );
+            break;
+        }
+
         match backend.move_to_trash(item.path()) {
             Ok(()) => {
                 moved_count = moved_count.saturating_add(1);
@@ -507,24 +655,25 @@ where
                 }
             }
             Err(error) => {
-                let message = format!("운영체제 휴지통으로 이동하지 못했습니다: {error}");
+                let message = format!(
+                    "운영체제 휴지통 이동 결과를 확정하지 못했습니다. 작업 기록에서 원본과 휴지통을 확인하세요: {error}"
+                );
                 results.push(item_result(
                     item,
                     TrashItemStatus::Failed,
                     Some(message.clone()),
                 ));
-                if journal
-                    .record(json!({
-                        "timestampUnixMs": unix_time_ms(),
-                        "operationId": operation_id,
-                        "event": "failed",
-                        "path": recovery_path_string(item),
-                        "message": message,
-                    }))
-                    .is_err()
-                {
-                    journal_complete = false;
-                }
+                let _ = journal.record(json!({
+                    "timestampUnixMs": unix_time_ms(),
+                    "operationId": operation_id,
+                    "event": "failed",
+                    "path": recovery_path_string(item),
+                    "message": message,
+                }));
+                // An OS error can arrive after a partial or completed move.
+                // Keep this operation incomplete so recovery audits both paths;
+                // a durable error record is not proof that nothing changed.
+                journal_complete = false;
                 push_skipped(
                     &mut results,
                     &items[index + 1..],
@@ -568,7 +717,7 @@ where
         cancelled,
         stopped_early,
         journal_complete,
-        journal_path: journal.path.to_string_lossy().into_owned(),
+        journal_path: journal.path().to_string_lossy().into_owned(),
         items: results,
     })
 }
@@ -637,8 +786,8 @@ fn unix_time_ms() -> u128 {
         .as_millis()
 }
 
-fn item_result(
-    item: &VerifiedTrashItem,
+fn item_result<I: JournalTrashItem>(
+    item: &I,
     status: TrashItemStatus,
     message: Option<String>,
 ) -> TrashItemResult {
@@ -651,7 +800,7 @@ fn item_result(
 }
 
 #[cfg(windows)]
-fn recovery_path_string(item: &VerifiedTrashItem) -> String {
+fn recovery_path_string<I: JournalTrashItem>(item: &I) -> String {
     let path = item.recovery_path().to_string_lossy().replace('/', "\\");
     path.strip_prefix(r"\\?\UNC\")
         .map(|path| format!(r"\\{path}"))
@@ -660,11 +809,15 @@ fn recovery_path_string(item: &VerifiedTrashItem) -> String {
 }
 
 #[cfg(not(windows))]
-fn recovery_path_string(item: &VerifiedTrashItem) -> String {
+fn recovery_path_string<I: JournalTrashItem>(item: &I) -> String {
     item.recovery_path().to_string_lossy().into_owned()
 }
 
-fn push_skipped(results: &mut Vec<TrashItemResult>, items: &[VerifiedTrashItem], message: &str) {
+fn push_skipped<I: JournalTrashItem>(
+    results: &mut Vec<TrashItemResult>,
+    items: &[I],
+    message: &str,
+) {
     results.extend(
         items
             .iter()
@@ -680,6 +833,337 @@ mod tests {
 
     struct FailSecondMove {
         calls: AtomicUsize,
+    }
+
+    struct FixtureApplicationItem {
+        path: PathBuf,
+        expected_bytes: Vec<u8>,
+    }
+
+    impl JournalTrashItem for FixtureApplicationItem {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+        fn recovery_path(&self) -> &Path {
+            &self.path
+        }
+        fn logical_bytes(&self) -> u64 {
+            self.expected_bytes.len() as u64
+        }
+        fn revalidate(&self, cancellation: &AtomicBool) -> Result<(), String> {
+            if cancellation.load(Ordering::Acquire) {
+                return Err("cancelled".to_owned());
+            }
+            if fs::read(&self.path).map_err(|error| error.to_string())? != self.expected_bytes {
+                return Err("changed candidate snapshot".to_owned());
+            }
+            Ok(())
+        }
+    }
+
+    struct FailingJournal {
+        path: PathBuf,
+        fail_event: &'static str,
+    }
+    impl ActionJournal for FailingJournal {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+        fn record(&mut self, value: serde_json::Value) -> Result<(), String> {
+            if value["event"].as_str() == Some(self.fail_event) {
+                Err("synthetic journal failure".to_owned())
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    struct MoveThenReportError(PathBuf);
+    impl TrashBackend for MoveThenReportError {
+        fn move_to_trash(&self, path: &Path) -> Result<(), String> {
+            fs::rename(path, self.0.join(path.file_name().unwrap()))
+                .map_err(|error| error.to_string())?;
+            Err("synthetic OS reply lost after move".to_owned())
+        }
+    }
+
+    #[test]
+    fn uncertain_native_error_preserves_incomplete_recovery_after_mock_move() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("candidate");
+        fs::write(&source, b"fixture").unwrap();
+        let mock_trash = temp.path().join("mock-trash");
+        fs::create_dir(&mock_trash).unwrap();
+        let journal = temp.path().join("journal.jsonl");
+        let result = execute_verified_items(
+            vec![FixtureApplicationItem {
+                path: source.clone(),
+                expected_bytes: b"fixture".to_vec(),
+            }],
+            journal.clone(),
+            TrashActionKind::ApplicationBundle,
+            &AtomicBool::new(false),
+            |_| {},
+            &MoveThenReportError(mock_trash.clone()),
+        )
+        .unwrap();
+        assert!(!source.exists());
+        assert!(mock_trash.join("candidate").exists());
+        assert_eq!(
+            result.moved_count, 0,
+            "an uncertain result must not claim confirmed movement"
+        );
+        assert!(!result.journal_complete && result.stopped_early);
+        let records = fs::read_to_string(journal).unwrap();
+        assert!(
+            records.contains("\"event\":\"moving\"") && records.contains("\"event\":\"failed\"")
+        );
+        assert!(!records.contains("\"event\":\"completed\""));
+    }
+
+    #[test]
+    fn application_pipeline_journal_failures_before_and_after_move_are_fail_closed() {
+        for event in ["planned", "moving", "moved"] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("candidate");
+            fs::write(&source, b"fixture").unwrap();
+            let mock_trash = temp.path().join("mock-trash");
+            fs::create_dir(&mock_trash).unwrap();
+            let result = execute_with_journal(
+                vec![FixtureApplicationItem {
+                    path: source.clone(),
+                    expected_bytes: b"fixture".to_vec(),
+                }],
+                FailingJournal {
+                    path: temp.path().join("journal.jsonl"),
+                    fail_event: event,
+                },
+                TrashActionKind::ApplicationData,
+                &AtomicBool::new(false),
+                |_| {},
+                &FixtureTrash(mock_trash.clone()),
+            );
+            if event == "planned" {
+                assert!(result.is_err());
+                assert!(source.exists());
+            } else {
+                let result = result.unwrap();
+                assert!(!result.journal_complete);
+                assert!(result.stopped_early);
+                assert_eq!(result.moved_count, usize::from(event == "moved"));
+                assert_eq!(source.exists(), event != "moved");
+                assert_eq!(mock_trash.join("candidate").exists(), event == "moved");
+            }
+        }
+    }
+
+    #[test]
+    fn application_pipeline_rejects_changed_candidate_and_records_application_kind() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("candidate");
+        fs::write(&source, b"changed").unwrap();
+        let mock_trash = temp.path().join("mock-trash");
+        fs::create_dir(&mock_trash).unwrap();
+        let result = execute_verified_items(
+            vec![FixtureApplicationItem {
+                path: source.clone(),
+                expected_bytes: b"original".to_vec(),
+            }],
+            temp.path().join("journal.jsonl"),
+            TrashActionKind::ApplicationBundle,
+            &AtomicBool::new(false),
+            |_| {},
+            &FixtureTrash(mock_trash),
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 0);
+        assert!(result.stopped_early && result.journal_complete);
+        assert!(source.exists());
+        assert!(
+            fs::read_to_string(result.journal_path)
+                .unwrap()
+                .contains("applicationBundle")
+        );
+    }
+
+    struct FixtureTrash(PathBuf);
+    impl TrashBackend for FixtureTrash {
+        fn move_to_trash(&self, path: &Path) -> Result<(), String> {
+            fs::rename(path, self.0.join(path.file_name().unwrap()))
+                .map_err(|error| error.to_string())
+        }
+    }
+
+    #[test]
+    fn directory_folder_pipeline_preserves_nested_contents_in_mock_trash_and_journals() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("scope");
+        let folder = root.join("download");
+        fs::create_dir_all(folder.join("nested")).unwrap();
+        fs::write(folder.join("nested/.keep"), b"fixture").unwrap();
+        let report =
+            bloomsweepy_core::scan_directory_level(&root, Default::default(), |_| {}, || false)
+                .unwrap();
+        let item = bloomsweepy_core::validate_directory_trash_folder(
+            &report,
+            &report.children[0].path,
+            || false,
+        )
+        .unwrap();
+        let mock_trash = temp.path().join("mock-trash");
+        fs::create_dir(&mock_trash).unwrap();
+        let result = execute_verified_items(
+            vec![item],
+            temp.path().join("journal.jsonl"),
+            TrashActionKind::DirectoryFolder,
+            &AtomicBool::new(false),
+            |_| {},
+            &FixtureTrash(mock_trash.clone()),
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 1);
+        assert_eq!(result.moved_bytes, 7);
+        assert!(result.journal_complete);
+        assert_eq!(
+            fs::read(mock_trash.join("download/nested/.keep")).unwrap(),
+            b"fixture"
+        );
+        assert!(!folder.exists());
+        assert!(
+            fs::read_to_string(&result.journal_path)
+                .unwrap()
+                .contains("directoryFolder")
+        );
+    }
+
+    #[test]
+    fn directory_folder_pipeline_stops_changed_and_cancelled_folders_before_backend() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let report = bloomsweepy_core::scan_directory_level(
+            temp.path(),
+            Default::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let item = bloomsweepy_core::validate_directory_trash_folder(
+            &report,
+            &report.children[0].path,
+            || false,
+        )
+        .unwrap();
+        let backend = FailSecondMove {
+            calls: AtomicUsize::new(0),
+        };
+        let cancellation = AtomicBool::new(false);
+        let cancelled = execute_verified_items(
+            vec![item.clone()],
+            temp.path().join("cancelled.jsonl"),
+            TrashActionKind::DirectoryFolder,
+            &cancellation,
+            |_| cancellation.store(true, Ordering::Release),
+            &backend,
+        )
+        .unwrap();
+        assert!(cancelled.cancelled);
+        assert_eq!(cancelled.moved_count, 0);
+        fs::write(folder.join(".new-file"), b"must stay").unwrap();
+        let changed = execute_verified_items(
+            vec![item],
+            temp.path().join("changed.jsonl"),
+            TrashActionKind::DirectoryFolder,
+            &AtomicBool::new(false),
+            |_| {},
+            &backend,
+        )
+        .unwrap();
+        assert_eq!(changed.moved_count, 0);
+        assert!(changed.stopped_early);
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        assert!(folder.join(".new-file").exists());
+    }
+
+    #[test]
+    fn empty_directory_pipeline_moves_only_verified_fixture_items_and_journals_results() {
+        let temp = tempfile::tempdir().unwrap();
+        let scope = temp.path().join("scope");
+        let mock_trash = temp.path().join("mock-trash");
+        fs::create_dir_all(scope.join("one")).unwrap();
+        fs::create_dir(scope.join("two")).unwrap();
+        fs::create_dir(scope.join("keep")).unwrap();
+        fs::create_dir(&mock_trash).unwrap();
+        let report = bloomsweepy_core::scan_directory_level(
+            &scope,
+            bloomsweepy_core::DirectoryScanConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let items = report
+            .empty_directories
+            .iter()
+            .filter(|entry| entry.name != "keep")
+            .map(|entry| {
+                bloomsweepy_core::validate_empty_directory_trash(&report, &entry.path, || false)
+                    .unwrap()
+            })
+            .collect();
+        let journal_path = temp.path().join("journal.jsonl");
+        let result = execute_verified_items(
+            items,
+            journal_path.clone(),
+            TrashActionKind::EmptyDirectories,
+            &AtomicBool::new(false),
+            |_| {},
+            &FixtureTrash(mock_trash.clone()),
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 2);
+        assert_eq!(result.moved_bytes, 0);
+        assert!(result.journal_complete);
+        assert!(scope.join("keep").exists());
+        assert!(mock_trash.join("one").exists() && mock_trash.join("two").exists());
+        let records = fs::read_to_string(journal_path).unwrap();
+        assert!(records.contains("emptyDirectories"));
+        assert_eq!(records.matches("\"event\":\"moved\"").count(), 2);
+    }
+
+    #[test]
+    fn changed_empty_folder_stops_pipeline_without_touching_fixture_content() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("empty")).unwrap();
+        let report = bloomsweepy_core::scan_directory_level(
+            temp.path(),
+            bloomsweepy_core::DirectoryScanConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let item = bloomsweepy_core::validate_empty_directory_trash(
+            &report,
+            &report.empty_directories[0].path,
+            || false,
+        )
+        .unwrap();
+        fs::write(temp.path().join("empty/.keep"), b"needed").unwrap();
+        let backend = FailSecondMove {
+            calls: AtomicUsize::new(0),
+        };
+        let result = execute_verified_items(
+            vec![item],
+            temp.path().join("journal.jsonl"),
+            TrashActionKind::EmptyDirectories,
+            &AtomicBool::new(false),
+            |_| {},
+            &backend,
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 0);
+        assert!(result.stopped_early);
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+        assert!(temp.path().join("empty/.keep").exists());
     }
 
     impl TrashBackend for FailSecondMove {

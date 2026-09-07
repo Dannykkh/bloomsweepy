@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { decideFileInspection } from "./fileInspectionPolicy";
+import { revealFile } from "./fileInspectionBridge";
+export { inspectFile, type FileInspectionOutcome } from "./fileInspectionBridge";
 import type {
+  EmptyTrashPlan,
+  EmptyTrashOutcome,
   AssistantChatRequest,
+  AssistantEmptyWorkspace,
   AssistantChatResponse,
   AssistantSessionSummary,
   AssistantSessionDetail,
@@ -14,6 +17,7 @@ import type {
   AssistantProviderStatus,
   DirectoryScanProgress,
   DirectoryScanReport,
+  FolderReviewPlan,
   CleanupScanProgress,
   CleanupScanReport,
   DriveScanProgress,
@@ -45,7 +49,6 @@ import type {
   FileCatalogSearchRequest,
   FileCatalogStatus,
   FileCatalogRecentReport,
-  FileCatalogEntryKind,
   ControlStatus,
   ControlSearchAccessRequest,
   ControlScanAccessRequest,
@@ -69,6 +72,18 @@ export function setApplicationLanguage(language: LanguagePreference): Promise<vo
   return invoke<void>("set_application_language", { language });
 }
 
+export function prepareEmptySystemTrash(): Promise<EmptyTrashPlan> {
+  return invoke("prepare_empty_system_trash");
+}
+
+export function dismissEmptySystemTrash(planId: string): Promise<void> {
+  return invoke("dismiss_empty_system_trash", { planId });
+}
+
+export function confirmEmptySystemTrash(planId: string, irreversibleAcknowledged: boolean): Promise<EmptyTrashOutcome> {
+  return invoke("confirm_empty_system_trash", { request: { planId, irreversibleAcknowledged } });
+}
+
 export function getAssistantProviderStatus(): Promise<AssistantProviderStatus[]> {
   return invoke<AssistantProviderStatus[]>("get_assistant_provider_status");
 }
@@ -81,6 +96,23 @@ export function askAssistant(
 
 export function cancelAssistant(): Promise<boolean> {
   return invoke<boolean>("cancel_assistant");
+}
+
+export function getAssistantEmptyWorkspace(sessionId: string): Promise<AssistantEmptyWorkspace | null> {
+  return invoke("get_assistant_empty_workspace", { sessionId });
+}
+
+export function selectAssistantEmptyCandidates(sessionId: string, revision: string, candidateIds: string[]): Promise<AssistantEmptyWorkspace> {
+  return invoke("select_assistant_empty_candidates", { sessionId, revision, candidateIds });
+}
+
+export function prepareAssistantEmptyPlan(sessionId: string, revision: string): Promise<AssistantEmptyWorkspace> {
+  return invoke("prepare_assistant_empty_plan", { sessionId, revision });
+}
+
+// Deliberately absent from the model's allowlisted action protocol.
+export function confirmAssistantEmptyPlan(sessionId: string, revision: string, planId: string): Promise<TrashOperationResult> {
+  return invoke("confirm_assistant_empty_plan", { sessionId, revision, planId });
 }
 
 export function listAssistantSessions(): Promise<AssistantSessionSummary[]> {
@@ -235,6 +267,18 @@ export function startDirectoryScan(root: string): Promise<DirectoryScanReport> {
 
 export function trashDirectoryFile(path: string, generation: number): Promise<TrashOperationResult> {
   return invoke<TrashOperationResult>("trash_directory_file", { request: { path, generation } });
+}
+
+export function prepareDirectoryFolderPlan(path: string, generation: number): Promise<FolderReviewPlan> {
+  return invoke("prepare_directory_folder_plan", { request: { path, generation } });
+}
+
+export function confirmDirectoryFolderPlan(planId: string, generation: number, nestedContentsAcknowledged: boolean): Promise<TrashOperationResult> {
+  return invoke("confirm_directory_folder_plan", { request: { planId, generation, nestedContentsAcknowledged } });
+}
+
+export function dismissDirectoryFolderPlan(planId: string): Promise<void> {
+  return invoke("dismiss_directory_folder_plan", { planId });
 }
 
 export function startCleanupScan(): Promise<CleanupScanReport> {
@@ -399,21 +443,6 @@ export async function selectDirectory(title = "Choose a folder to scan"): Promis
   return typeof selection === "string" ? selection : null;
 }
 
-export type FileInspectionOutcome = "opened" | "revealed";
-
-export async function inspectFile(
-  path: string,
-  kind: FileCatalogEntryKind = "file",
-): Promise<FileInspectionOutcome> {
-  if (decideFileInspection(path, kind) === "reveal") {
-    await revealItemInDir(path);
-    return "revealed";
-  }
-
-  await openPath(path);
-  return "opened";
-}
-
 export function revealPath(path: string): Promise<void> {
-  return revealItemInDir(path);
+  return revealFile(path);
 }

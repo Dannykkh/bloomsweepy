@@ -62,6 +62,31 @@ process.stdout.write(
   `Prepared bloomsweepy-mcp ${versionMatch[1]} for ${targetTriple}.\n`,
 );
 
+const documentDestination = join(binaryDirectory, `bloomsweepy-document-worker-${targetTriple}${extension}`);
+if (targetTriple === "universal-apple-darwin") {
+  const armBinary = buildDocumentWorker("aarch64-apple-darwin", "");
+  const intelBinary = buildDocumentWorker("x86_64-apple-darwin", "");
+  run("lipo", ["-create", armBinary, intelBinary, "-output", documentDestination]);
+} else {
+  copyFileSync(buildDocumentWorker(targetTriple, extension), documentDestination);
+}
+if (process.platform !== "win32") chmodSync(documentDestination, 0o755);
+if (capture(documentDestination, ["--version"]).trim() !== `bloomsweepy-document-worker ${packageJson.version}`) {
+  fail("문서 처리 도구와 앱의 버전이 다릅니다.");
+}
+if (capture(documentDestination, ["--check-heap-budget"]).trim() !== "heap-budget-rejection-ok") {
+  fail("배포용 문서 처리 도구의 메모리 제한 자가검사가 실패했습니다.");
+}
+process.stdout.write(`Prepared document worker for ${targetTriple}.\n`);
+
+function buildDocumentWorker(target, targetExtension) {
+  run(rustTool("cargo", process.env.CARGO), [
+    "build", "--release", "--locked", "-p", "bloomsweepy-core",
+    "--bin", "bloomsweepy-document-worker", "--target", target,
+  ]);
+  return join(repositoryRoot, "target", target, "release", `bloomsweepy-document-worker${targetExtension}`);
+}
+
 function readTargetArgument(argumentsList) {
   if (argumentsList.length === 0) return null;
   if (argumentsList.length !== 2 || argumentsList[0] !== "--target") {

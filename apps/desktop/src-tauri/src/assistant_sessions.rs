@@ -25,8 +25,8 @@ const MAX_MODEL_NAME_CHARS: usize = 160;
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AssistantSessionSummary {
     id: String,
-    scope_kind: AssistantScopeKind,
-    scope_root: String,
+    pub(crate) scope_kind: AssistantScopeKind,
+    pub(crate) scope_root: String,
     scope_name: String,
     created_at_unix_ms: u64,
     updated_at_unix_ms: u64,
@@ -38,8 +38,8 @@ pub(crate) struct AssistantSessionSummary {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AssistantSessionDetail {
-    session: AssistantSessionSummary,
-    folder_summary: AssistantFolderSummary,
+    pub(crate) session: AssistantSessionSummary,
+    pub(crate) folder_summary: AssistantFolderSummary,
     messages: Vec<AssistantStoredMessage>,
 }
 
@@ -131,9 +131,14 @@ pub(crate) async fn delete_assistant_session(
 ) -> Result<bool, String> {
     validate_session_id(&session_id)?;
     let path = database_path(&app)?;
-    tauri::async_runtime::spawn_blocking(move || delete_session_at(&path, &session_id))
-        .await
-        .map_err(|error| format!("대화 삭제 작업이 중단됐습니다: {error}"))?
+    let worker_session = session_id.clone();
+    let deleted =
+        tauri::async_runtime::spawn_blocking(move || delete_session_at(&path, &worker_session))
+            .await
+            .map_err(|error| format!("대화 삭제 작업이 중단됐습니다: {error}"))??;
+    app.state::<crate::assistant_tools::AssistantToolsState>()
+        .forget(&session_id)?;
+    Ok(deleted)
 }
 
 fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -141,6 +146,25 @@ fn database_path(app: &AppHandle) -> Result<PathBuf, String> {
         .app_data_dir()
         .map(|directory| directory.join(DATABASE_FILE_NAME))
         .map_err(|error| format!("대화 기록 저장 위치를 찾지 못했습니다: {error}"))
+}
+
+pub(crate) async fn update_folder_summary(
+    app: AppHandle,
+    session_id: String,
+    summary: AssistantFolderSummary,
+) -> Result<(), String> {
+    validate_session_id(&session_id)?;
+    let path = database_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = open_database(&path)?;
+        let summary = serde_json::to_string(&summary).map_err(|error| error.to_string())?;
+        let changed = connection.execute(
+            "UPDATE assistant_sessions SET folder_summary_json = ?1, updated_at_unix_ms = ?2 WHERE id = ?3 AND scope_kind = 'folder'",
+            params![summary, unix_time_ms()?, session_id],
+        ).map_err(database_error)?;
+        if changed != 1 { return Err("폴더 대화가 삭제되었거나 변경되었습니다".to_owned()); }
+        Ok(())
+    }).await.map_err(|error| format!("폴더 요약 저장 작업이 중단됐습니다: {error}"))?
 }
 
 fn list_sessions_at(path: &Path) -> Result<Vec<AssistantSessionSummary>, String> {
@@ -318,7 +342,7 @@ fn append_message_at(
             ],
         )
         .map_err(database_error)?;
-    if request.role == AssistantChatRole::Assistant {
+    if request.role == AssistantChatRole::Assistant && request.provider.is_some() {
         transaction
             .execute(
                 "UPDATE assistant_sessions
@@ -436,7 +460,9 @@ fn map_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssistantStoredMessa
         role,
         content: row.get(2)?,
         provider,
-        provider_label: provider.map(|value| value.label().to_owned()),
+        provider_label: provider
+            .map(|value| value.label().to_owned())
+            .or_else(|| (role == AssistantChatRole::Assistant).then(|| "BroomSweepy".to_owned())),
         model: row.get(4)?,
         created_at_unix_ms: non_negative_u64(created_at, 5)?,
     })
@@ -584,7 +610,9 @@ fn validate_message(request: &AppendAssistantMessageRequest) -> Result<(), Strin
             return Err("사용자 메시지에는 AI 공급자를 저장할 수 없습니다".to_owned());
         }
         (AssistantChatRole::Assistant, None) => {
-            return Err("AI 응답에는 사용한 공급자가 필요합니다".to_owned());
+            if request.model.is_some() {
+                return Err("앱 작업 결과에는 AI 모델을 저장할 수 없습니다".to_owned());
+            }
         }
     }
     if request.model.as_ref().is_some_and(|model| {
@@ -840,6 +868,66 @@ mod tests {
         )
         .expect_err("user provider must be rejected");
         assert!(error.contains("사용자 메시지"));
+    }
+
+    #[test]
+    fn app_operation_results_persist_without_impersonating_an_ai_provider() {
+        let temp = tempfile::tempdir().unwrap();
+        let database = temp.path().join("session.sqlite3");
+        let detail = create_session_at(
+            &database,
+            CreateAssistantSessionRequest {
+                scope_kind: AssistantScopeKind::Folder,
+                scope_root: temp.path().to_string_lossy().into_owned(),
+                folder_summary: folder_summary("fixture"),
+            },
+        )
+        .unwrap();
+        append_message_at(
+            &database,
+            AppendAssistantMessageRequest {
+                session_id: detail.session.id.clone(),
+                role: AssistantChatRole::Assistant,
+                content: "Review these folders".into(),
+                provider: Some(AssistantProviderKind::Codex),
+                model: None,
+            },
+        )
+        .unwrap();
+        let mutation = append_message_at(
+            &database,
+            AppendAssistantMessageRequest {
+                session_id: detail.session.id.clone(),
+                role: AssistantChatRole::Assistant,
+                content: "Moved 2 of 3 items".into(),
+                provider: None,
+                model: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            mutation.session.last_provider,
+            Some(AssistantProviderKind::Codex)
+        );
+        let restored = get_session_at(&database, &detail.session.id).unwrap();
+        assert_eq!(
+            restored.messages[1].provider_label.as_deref(),
+            Some("BroomSweepy")
+        );
+        assert!(restored.messages[1].provider.is_none());
+        assert!(
+            append_message_at(
+                &database,
+                AppendAssistantMessageRequest {
+                    session_id: detail.session.id,
+                    role: AssistantChatRole::Assistant,
+                    content: "App result".into(),
+                    provider: None,
+                    model: Some("not-an-app-model".into()),
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]

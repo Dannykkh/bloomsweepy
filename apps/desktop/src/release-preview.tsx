@@ -104,6 +104,7 @@ mockIPC((command) => {
     detail: "Documentation sample", models: [], state: "ready", executablePath: null, version: null }];
   if (command === "list_assistant_sessions") return [session.session];
   if (command === "get_assistant_session") return session;
+  if (command === "get_assistant_empty_workspace") return null;
   if (command === "get_mcp_registration_statuses") return [];
   if (command === "plugin:autostart|is_enabled") return false;
   if (command === "set_application_language") return null;
@@ -131,7 +132,9 @@ function Preview() {
         state="success" error={null} breadcrumbs={[{ name: "Workspace", path: root }]} blocked={false}
         onPickFolder={noop} onCancel={noop} onCancelTrash={noop} onStart={noop}
         onReveal={async () => { throw new Error("Documentation preview only"); }}
-        onTrash={async () => { throw new Error("Documentation preview only"); }} /></div></> : null}
+        onTrash={async () => { throw new Error("Documentation preview only"); }}
+        onPrepareFolder={async () => { throw new Error("Documentation preview only"); }}
+        onConfirmFolder={async () => { throw new Error("Documentation preview only"); }} /></div></> : null}
     {view === "performance" ? <PerformanceView /> : null}
     {view === "assistant" ? <AssistantView status={control} canEnableSearch={false}
       updatingSearchAccess={false} searchAccessError={null} onToggleSearchAccess={noop}
@@ -139,7 +142,8 @@ function Preview() {
       scanAccessError={null} onToggleScanAccess={noop} canEnableCleanup={false} cleanupAccessLocked={false}
       updatingCleanupAccess={false} cleanupAccessError={null} onToggleCleanupAccess={noop} onReviewPending={noop}
       directoryProgress={null} directoryState="success" volumes={volumes} dockerStatus={null}
-      launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null} /> : null}
+      launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null}
+      onConfirmEmptyPlan={async () => { throw new Error("Documentation preview only"); }} /> : null}
     {view === "settings" ? <SettingsView config={config} onConfigChange={setConfig} dockerStatus={null}
       dockerLoading={false} dockerChanging={false} dockerError={null} onDockerEnabledChange={async () => {}}
       onOpenDocker={noop} /> : null}

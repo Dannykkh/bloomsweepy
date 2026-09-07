@@ -1,4 +1,4 @@
-import { FolderOpen, MapPin, Trash2 } from "lucide-react";
+import { ExternalLink, FolderOpen, MapPin, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useLanguage } from "../i18n";
@@ -11,10 +11,11 @@ export interface TreemapMenuTarget {
   trigger: HTMLElement;
 }
 
-export function TreemapItemMenu({ target, canTrash, onOpen, onReveal, onTrash, onClose }: {
+export function TreemapItemMenu({ target, canTrash, onOpen, onInspect, onReveal, onTrash, onClose }: {
   target: TreemapMenuTarget;
   canTrash: boolean;
   onOpen: () => void;
+  onInspect: () => void;
   onReveal: () => void;
   onTrash: () => void;
   onClose: () => void;
@@ -75,10 +76,14 @@ export function TreemapItemMenu({ target, canTrash, onOpen, onReveal, onTrash, o
       {target.node.isDirectory ? <button type="button" role="menuitem" tabIndex={-1} onClick={onOpen}>
         <FolderOpen size={17} aria-hidden="true" />{t("하위 폴더 탐색")}
       </button> : null}
-      <button type="button" role="menuitem" tabIndex={-1} onClick={onReveal}>
-        <MapPin size={17} aria-hidden="true" />{t("파일 위치 열기")}
+      <button type="button" role="menuitem" tabIndex={-1} onClick={onInspect}>
+        {target.node.isDirectory ? <FolderOpen size={17} aria-hidden="true" /> : <ExternalLink size={17} aria-hidden="true" />}
+        {target.node.isDirectory ? t("폴더 열기") : t("열기")}
       </button>
-      {canTrash && !target.node.isDirectory ? <button className="treemap-item-menu__danger"
+      <button type="button" role="menuitem" tabIndex={-1} onClick={onReveal}>
+        <MapPin size={17} aria-hidden="true" />{t("위치 표시")}
+      </button>
+      {canTrash ? <button className="treemap-item-menu__danger"
         type="button" role="menuitem" tabIndex={-1} onClick={onTrash}>
         <Trash2 size={17} aria-hidden="true" />{t("휴지통 이동 검토")}
       </button> : null}

@@ -25,12 +25,18 @@ const BACKGROUND_ARG: &str = "--background";
 
 mod action_recovery;
 mod app_memory_cleanup;
+mod application_actions;
 mod assistant_provider;
 mod assistant_sessions;
+mod assistant_tools;
 mod control_server;
 mod docker_tools;
+mod empty_trash;
 mod external_program;
+mod file_inspection;
+mod folder_actions;
 mod mcp_registration;
+mod menu_bar;
 mod system_inventory;
 mod system_memory;
 mod system_performance;
@@ -108,7 +114,11 @@ async fn set_application_language(app: AppHandle, language: String) -> Result<()
             .await
             .map_err(|error| format!("Windows tray language worker failed: {error}"))?
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        menu_bar::set_language(&app, language)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, language);
         Ok(())
@@ -162,6 +172,8 @@ impl ScanRuntime {
         if active.is_some() {
             return Err("이미 스캔 또는 정리 작업이 진행 중입니다".to_owned());
         }
+
+        bloomsweepy_core::ensure_operation_memory()?;
 
         let cancellation = Arc::new(AtomicBool::new(false));
         *active = Some(ActiveRuntimeWork {
@@ -1785,6 +1797,10 @@ pub fn run() {
         .manage(ScanRuntime::default())
         .manage(StoredReports::default())
         .manage(assistant_provider::AssistantProviderState::default())
+        .manage(assistant_tools::AssistantToolsState::default())
+        .manage(folder_actions::FolderActionsState::default())
+        .manage(empty_trash::EmptyTrashState::default())
+        .manage(application_actions::ApplicationActionsState::default())
         .manage(docker_tools::DockerManagerState::default())
         .manage(control_server::ControlStatusStore::default())
         .manage(mcp_registration::McpRegistrationRuntime::default())
@@ -1797,6 +1813,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            if let Err(error) = menu_bar::setup(app) {
+                eprintln!("Menu bar unavailable; keeping ordinary window behavior: {error}");
+            }
             #[cfg(windows)]
             if let Err(error) = windows_tray::setup(app) {
                 windows_tray::log_setup_failure(&error);
@@ -1813,6 +1833,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            menu_bar::get_menu_bar_settings,
+            menu_bar::set_menu_bar_memory_percent,
+            menu_bar::open_menu_bar_panel,
             control_server::get_control_status,
             control_server::configure_control_search_access,
             control_server::configure_control_scan_access,
@@ -1831,6 +1854,10 @@ pub fn run() {
             assistant_sessions::get_assistant_session,
             assistant_sessions::append_assistant_message,
             assistant_sessions::delete_assistant_session,
+            assistant_tools::get_assistant_empty_workspace,
+            assistant_tools::select_assistant_empty_candidates,
+            assistant_tools::prepare_assistant_empty_plan,
+            assistant_tools::confirm_assistant_empty_plan,
             docker_tools::get_docker_management_status,
             docker_tools::set_docker_management_enabled,
             docker_tools::create_docker_cleanup_preview,
@@ -1860,9 +1887,24 @@ pub fn run() {
             action_recovery::get_action_recovery_status,
             action_recovery::get_action_history,
             action_recovery::open_system_trash,
+            empty_trash::prepare_empty_system_trash,
+            empty_trash::confirm_empty_system_trash,
+            empty_trash::dismiss_empty_system_trash,
+            file_inspection::inspect_local_path,
+            file_inspection::reveal_local_path,
+            application_actions::get_application_inventory,
+            application_actions::prepare_application_trash,
+            application_actions::confirm_application_trash,
+            application_actions::prepare_application_data_trash,
+            application_actions::confirm_application_data_trash,
+            application_actions::dismiss_application_plan,
+            application_actions::open_application_uninstall_settings,
             trash_actions::trash_duplicate_files,
             trash_actions::trash_cleanup_candidates,
             trash_actions::trash_directory_file,
+            folder_actions::prepare_directory_folder_plan,
+            folder_actions::confirm_directory_folder_plan,
+            folder_actions::dismiss_directory_folder_plan,
             cancel_scan
         ])
         .build(context)
@@ -1893,6 +1935,8 @@ pub fn run() {
             queue_main_window_restore(app_handle.clone());
         }
         if matches!(event, tauri::RunEvent::Exit) {
+            #[cfg(target_os = "macos")]
+            menu_bar::shutdown(app_handle);
             #[cfg(windows)]
             foreground_activation_requested.stop_listener();
             assistant_provider::shutdown(app_handle);

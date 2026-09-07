@@ -57,7 +57,7 @@ jobs:
         working-directory: apps/desktop
         run: npm ci
 
-      - name: Prepare native MCP sidecar
+      - name: Prepare native MCP and bounded document helpers
         working-directory: apps/desktop
         env:
           TAURI_ENV_TARGET_TRIPLE: aarch64-apple-darwin
@@ -103,6 +103,12 @@ jobs:
           file "$helper" | grep -q arm64
           test "$("$helper" --version)" = "bloomsweepy-mcp $version"
           codesign -vvv --strict "$helper"
+          document_helper="$app/Contents/MacOS/bloomsweepy-document-worker"
+          test -x "$document_helper"
+          file "$document_helper" | grep -q arm64
+          test "$("$document_helper" --version)" = "bloomsweepy-document-worker $version"
+          test "$("$document_helper" --check-heap-budget)" = "heap-budget-rejection-ok"
+          codesign -vvv --strict "$document_helper"
           codesign -vvv --deep --strict "$app"
           codesign -dv --verbose=4 "$app" 2>&1 | grep -q "Signature=adhoc"
 

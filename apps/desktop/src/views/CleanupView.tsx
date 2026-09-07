@@ -13,7 +13,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { SafetyActionDialog } from "../components/SafetyActionDialog";
 import { TrashResultPanel } from "../components/TrashResultPanel";
-import { revealPath } from "../lib/bridge";
+import { FileInspectionStatus, FileOpenActions, useFileInspectionActions } from "../components/FileOpenActions";
 import {
   formatBytes,
   formatCount,
@@ -87,7 +87,7 @@ export function CleanupView({
 }: CleanupViewProps) {
   const { t } = useLanguage();
   const [filter, setFilter] = useState<CleanupFilter>("all");
-  const [revealMessage, setRevealMessage] = useState<string | null>(null);
+  const inspection = useFileInspectionActions({ scopeKey: report });
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
@@ -122,19 +122,6 @@ export function CleanupView({
   const selectedReviewCount = selectedCandidates.filter(
     (candidate) => candidate.confidence === "review",
   ).length;
-
-  async function revealCandidate(candidate: CleanupCandidate) {
-    try {
-      await revealPath(candidate.path);
-      setRevealMessage(t("{{name}} 위치를 파일 탐색기에서 표시했습니다.", { name: candidate.name }));
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : String(reason);
-      setRevealMessage(t("{{name}} 위치를 표시하지 못했습니다: {{detail}}", {
-        name: candidate.name,
-        detail: message,
-      }));
-    }
-  }
 
   function updateSelection(candidate: CleanupCandidate, selected: boolean) {
     setSelectedPaths((current) => {
@@ -328,6 +315,7 @@ export function CleanupView({
           ) : null}
 
           <section className="cleanup-candidate-list" aria-label={t("파일 정리 후보")}>
+            <FileInspectionStatus message={inspection.message} error={inspection.error} />
             {visibleCandidates.length === 0 ? (
               <div className="table-empty">{t("선택한 종류의 정리 후보가 없습니다.")}</div>
             ) : (
@@ -340,10 +328,11 @@ export function CleanupView({
                     aria-selected={selectedPaths.has(candidate.path)}
                     key={candidate.path}
                     title={t("더블클릭하여 파일 탐색기에서 위치 표시")}
-                    onDoubleClick={() => void revealCandidate(candidate)}
+                    onDoubleClick={() => void inspection.run(candidate.path, candidate.name, "reveal")}
                     onKeyDown={(event) => {
-                      if (event.target === event.currentTarget && event.key === "Enter") {
-                        void revealCandidate(candidate);
+                      if (event.target === event.currentTarget && event.key === "Enter" && !event.repeat) {
+                        event.preventDefault();
+                        void inspection.run(candidate.path, candidate.name, "reveal");
                       }
                     }}
                   >
@@ -381,11 +370,15 @@ export function CleanupView({
                       <span>{t("{{count}}개 항목", { count: formatCount(candidate.entryCount) })}</span>
                       <time>{formatDate(candidate.modifiedAtUnixMs)}</time>
                     </div>
+                    <div className="cleanup-candidate__inspection">
+                      <FileOpenActions name={candidate.name} disabled={inspection.busy || actionRunning || blocked}
+                        onOpen={() => void inspection.run(candidate.path, candidate.name)}
+                        onReveal={() => void inspection.run(candidate.path, candidate.name, "reveal")} />
+                    </div>
                   </article>
                 );
               })
             )}
-            {revealMessage ? <p className="cleanup-reveal-status" role="status">{revealMessage}</p> : null}
           </section>
 
           {platform === "windows" ? (
