@@ -827,6 +827,15 @@ fn push_skipped<I: JournalTrashItem>(
 
 #[cfg(test)]
 mod tests {
+    fn action_tempdir() -> tempfile::TempDir {
+        // Use disposable fixtures outside Windows' protected AppData tree.
+        #[cfg(windows)]
+        let directory = tempfile::tempdir_in(std::env::current_dir().unwrap());
+        #[cfg(not(windows))]
+        let directory = tempfile::tempdir();
+        directory.expect("create isolated trash fixture")
+    }
+
     use super::*;
     use bloomsweepy_core::{ScanConfig, scan_path};
     use std::sync::atomic::AtomicUsize;
@@ -889,7 +898,7 @@ mod tests {
 
     #[test]
     fn uncertain_native_error_preserves_incomplete_recovery_after_mock_move() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let source = temp.path().join("candidate");
         fs::write(&source, b"fixture").unwrap();
         let mock_trash = temp.path().join("mock-trash");
@@ -924,7 +933,7 @@ mod tests {
     #[test]
     fn application_pipeline_journal_failures_before_and_after_move_are_fail_closed() {
         for event in ["planned", "moving", "moved"] {
-            let temp = tempfile::tempdir().unwrap();
+            let temp = action_tempdir();
             let source = temp.path().join("candidate");
             fs::write(&source, b"fixture").unwrap();
             let mock_trash = temp.path().join("mock-trash");
@@ -959,7 +968,7 @@ mod tests {
 
     #[test]
     fn application_pipeline_rejects_changed_candidate_and_records_application_kind() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let source = temp.path().join("candidate");
         fs::write(&source, b"changed").unwrap();
         let mock_trash = temp.path().join("mock-trash");
@@ -996,7 +1005,7 @@ mod tests {
 
     #[test]
     fn directory_folder_pipeline_preserves_nested_contents_in_mock_trash_and_journals() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let root = temp.path().join("scope");
         let folder = root.join("download");
         fs::create_dir_all(folder.join("nested")).unwrap();
@@ -1038,7 +1047,7 @@ mod tests {
 
     #[test]
     fn directory_folder_pipeline_stops_changed_and_cancelled_folders_before_backend() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let folder = temp.path().join("folder");
         fs::create_dir(&folder).unwrap();
         let report = bloomsweepy_core::scan_directory_level(
@@ -1087,7 +1096,7 @@ mod tests {
 
     #[test]
     fn empty_directory_pipeline_moves_only_verified_fixture_items_and_journals_results() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let scope = temp.path().join("scope");
         let mock_trash = temp.path().join("mock-trash");
         fs::create_dir_all(scope.join("one")).unwrap();
@@ -1132,7 +1141,7 @@ mod tests {
 
     #[test]
     fn changed_empty_folder_stops_pipeline_without_touching_fixture_content() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         fs::create_dir(temp.path().join("empty")).unwrap();
         let report = bloomsweepy_core::scan_directory_level(
             temp.path(),
@@ -1179,7 +1188,7 @@ mod tests {
 
     #[test]
     fn partial_failure_stops_later_moves_and_records_each_outcome() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         for name in ["a.bin", "b.bin", "c.bin", "keeper.bin"] {
             fs::write(temp.path().join(name), b"identical").expect("write duplicate");
         }
@@ -1235,7 +1244,7 @@ mod tests {
 
     #[test]
     fn cancellation_before_the_first_move_never_calls_the_backend() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         for name in ["a.bin", "keeper.bin"] {
             fs::write(temp.path().join(name), b"identical").expect("write duplicate");
         }
@@ -1280,7 +1289,7 @@ mod tests {
 
     #[test]
     fn action_journal_rotates_at_the_size_limit() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         let path = temp.path().join("action-journal.jsonl");
         let file = File::create(&path).expect("create journal");
         file.set_len(MAX_ACTION_JOURNAL_BYTES)
@@ -1300,7 +1309,7 @@ mod tests {
     #[test]
     #[ignore = "moves a tiny fixture to the Windows Recycle Bin"]
     fn real_windows_backend_moves_fixture_to_recycle_bin() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         let fixture = temp.path().join(format!(
             "bloomsweepy-trash-smoke-{}-{}.txt",
             std::process::id(),

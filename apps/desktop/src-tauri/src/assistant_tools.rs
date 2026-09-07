@@ -503,6 +503,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     fn fixture(count: usize) -> (tempfile::TempDir, DirectoryScanReport) {
+        // AppData is intentionally protected, including the Windows temp root.
+        #[cfg(windows)]
+        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        #[cfg(not(windows))]
         let temp = tempfile::tempdir().unwrap();
         for index in 0..count {
             std::fs::create_dir(temp.path().join(format!("folder-{index:03}"))).unwrap();

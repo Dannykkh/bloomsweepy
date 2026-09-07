@@ -363,7 +363,9 @@ fn validate_directory_boundary(root: &Path, path: &Path) -> Result<(), ActionVal
     let mut prefix = PathBuf::new();
     for component in path.components() {
         prefix.push(component);
-        if !prefix.has_root() {
+        // Verbatim Windows prefixes report an implicit root, but `\\?\C:`
+        // alone is not a directory. Wait for RootDir before metadata access.
+        if matches!(component, std::path::Component::Prefix(_)) || !prefix.has_root() {
             continue;
         }
         let name = component.as_os_str().to_string_lossy().to_lowercase();
@@ -1156,9 +1158,38 @@ impl From<ScanError> for ActionValidationError {
 
 #[cfg(test)]
 mod tests {
+    fn action_tempdir() -> tempfile::TempDir {
+        // Windows' default temp directory is inside protected AppData. Keep
+        // allowed-action fixtures outside it without relaxing production policy.
+        #[cfg(windows)]
+        let directory = tempfile::tempdir_in(std::env::current_dir().unwrap());
+        #[cfg(not(windows))]
+        let directory = tempfile::tempdir();
+        directory.expect("create isolated action fixture")
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn directory_boundary_checks_root_after_verbatim_drive_prefix() {
+        let temp = action_tempdir();
+        let child = temp.path().join("ordinary-folder");
+        std::fs::create_dir(&child).unwrap();
+        let root = std::fs::canonicalize(temp.path()).unwrap();
+        let child = std::fs::canonicalize(child).unwrap();
+        assert!(matches!(
+            root.components().next(),
+            Some(std::path::Component::Prefix(prefix))
+                if matches!(prefix.kind(), std::path::Prefix::VerbatimDisk(_))
+        ));
+        super::validate_directory_boundary(&root, &child).unwrap();
+        let protected = child.join("AppData");
+        std::fs::create_dir(&protected).unwrap();
+        assert!(super::validate_directory_boundary(&root, &protected).is_err());
+    }
+
     #[test]
     fn empty_directory_trash_rejects_hidden_content_changed_identity_and_root() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let empty = temp.path().join("empty");
         std::fs::create_dir(&empty).unwrap();
         let report = crate::scan_directory_level(
@@ -1185,7 +1216,7 @@ mod tests {
 
     #[test]
     fn empty_directory_trash_protects_app_cloud_and_hidden_folders() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         for name in [
             ".git/empty",
             "Library/empty",
@@ -1218,7 +1249,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn empty_directory_trash_rejects_parent_symlink_swap_and_accepts_sibling_moves() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let root = temp.path().join("scope");
         std::fs::create_dir_all(root.join("one")).unwrap();
         std::fs::create_dir(root.join("two")).unwrap();
@@ -1282,7 +1313,7 @@ mod tests {
 
     #[test]
     fn directory_folder_review_includes_hidden_downloaded_apps_and_repository_contents() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let folder = temp.path().join("BroomSweepy-download");
         fs::create_dir_all(folder.join("BroomSweepy.app/Contents")).unwrap();
         fs::create_dir(folder.join(".git")).unwrap();
@@ -1301,7 +1332,7 @@ mod tests {
 
     #[test]
     fn directory_folder_review_rejects_new_content_replacement_unknown_root_and_cancel() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let folder = temp.path().join("download");
         fs::create_dir(&folder).unwrap();
         let report = directory_report(temp.path());
@@ -1321,7 +1352,7 @@ mod tests {
 
     #[test]
     fn directory_folder_review_rejects_cloud_ancestors_protected_targets_and_deep_trees() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         for relative in [
             "Library",
             "sample.app",
@@ -1354,7 +1385,7 @@ mod tests {
     #[test]
     fn directory_folder_review_rejects_nested_links_parent_swap_and_unreadable_subtrees() {
         use std::os::unix::fs::{PermissionsExt, symlink};
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let root = temp.path().join("root");
         let folder = root.join("folder");
         fs::create_dir_all(folder.join("nested")).unwrap();
@@ -1382,7 +1413,7 @@ mod tests {
 
     #[test]
     fn directory_trash_validates_file_and_rejects_changes() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let file = temp.path().join("item.txt");
         fs::write(&file, b"original").unwrap();
         let report = directory_report(temp.path());
@@ -1397,7 +1428,7 @@ mod tests {
 
     #[test]
     fn directory_trash_rejects_folders_unknown_paths_and_replaced_identity() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let file = temp.path().join("item.txt");
         fs::write(&file, b"original").unwrap();
         fs::create_dir(temp.path().join("folder")).unwrap();
@@ -1428,7 +1459,7 @@ mod tests {
     #[test]
     fn directory_trash_rejects_links_and_redirected_parent() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::tempdir().unwrap();
+        let temp = action_tempdir();
         let root = temp.path().join("root");
         fs::create_dir(&root).unwrap();
         let file = root.join("item.txt");
@@ -1467,7 +1498,7 @@ mod tests {
 
     #[test]
     fn duplicate_selection_always_leaves_a_verified_keeper() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         let first = temp.path().join("first.bin");
         let second = temp.path().join("second.bin");
         fs::write(&first, b"same-content").expect("write first");
@@ -1487,7 +1518,7 @@ mod tests {
 
     #[test]
     fn duplicate_revalidation_rejects_a_changed_file() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         fs::write(temp.path().join("first.bin"), b"same-content").expect("write first");
         fs::write(temp.path().join("second.bin"), b"same-content").expect("write second");
         let report = duplicate_report(temp.path());
@@ -1502,7 +1533,7 @@ mod tests {
 
     #[test]
     fn cleanup_revalidation_rejects_directory_structure_changes() {
-        let temp = tempfile::tempdir().expect("create temp directory");
+        let temp = action_tempdir();
         let candidate_path = temp.path().join("old-cache");
         fs::create_dir(&candidate_path).expect("create candidate");
         fs::write(candidate_path.join("cache.bin"), b"cache").expect("write cache");
