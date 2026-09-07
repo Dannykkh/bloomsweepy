@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 
 ### Performance and safety
 
+- **windows**: Wait for the root separator before inspecting a verbatim drive prefix during folder revalidation. Keep disposable action fixtures outside protected AppData and add a Windows regression without weakening protected-folder policy. ([2d5cb20](https://github.com/Dannykkh/bloomsweepy/commit/2d5cb20))
 - **core**: Bound streaming traversal, metadata retention and index storage; add cooperative host-memory, available-memory and free-disk guards. Isolate document parsing behind a 128 MiB Rust allocation budget and a 15-second deadline, preserving the previous completed index after failed rebuilds. These are not a whole-process-tree OS memory quota or proof of leak elimination. ([be47f5d](https://github.com/Dannykkh/bloomsweepy/commit/be47f5d))
 - **core**: Revalidate folder identity, protected/cloud/link boundaries and short-lived one-shot plans before OS Trash operations. Path-based OS calls retain a residual TOCTOU boundary. ([be47f5d](https://github.com/Dannykkh/bloomsweepy/commit/be47f5d))
 
