@@ -170,10 +170,7 @@ fn finder_alias(_path: &Path) -> Result<bool, String> {
 }
 
 fn validate_path_text(path: &str) -> Result<&Path, String> {
-    if path.is_empty()
-        || path.len() > MAX_PATH_BYTES
-        || path.chars().any(char::is_control)
-    {
+    if path.is_empty() || path.len() > MAX_PATH_BYTES || path.chars().any(char::is_control) {
         return Err("Only a local absolute file or folder path can be inspected.".into());
     }
     // Rust scans return canonical verbatim disk paths on Windows. Strip only
