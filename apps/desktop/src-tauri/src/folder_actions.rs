@@ -181,6 +181,10 @@ mod tests {
         state: &FolderActionsState,
         generation: u64,
     ) -> (tempfile::TempDir, FolderReviewPlan) {
+        // The Windows OS temp tree is protected AppData, not an allowed action scope.
+        #[cfg(windows)]
+        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        #[cfg(not(windows))]
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir(temp.path().join("download")).unwrap();
         std::fs::write(temp.path().join("download/file"), b"fixture").unwrap();

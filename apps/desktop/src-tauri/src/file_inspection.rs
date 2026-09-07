@@ -173,9 +173,24 @@ fn validate_path_text(path: &str) -> Result<&Path, String> {
     if path.is_empty()
         || path.len() > MAX_PATH_BYTES
         || path.chars().any(char::is_control)
-        || path.starts_with("//")
-        || path.starts_with("\\\\")
     {
+        return Err("Only a local absolute file or folder path can be inspected.".into());
+    }
+    // Rust scans return canonical verbatim disk paths on Windows. Strip only
+    // that exact local-disk prefix, then apply all ordinary Win32 safety checks
+    // to the same path used for metadata validation and OS dispatch.
+    #[cfg(windows)]
+    let path = path
+        .strip_prefix(r"\\?\")
+        .filter(|local| {
+            let bytes = local.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+        })
+        .unwrap_or(path);
+    if path.starts_with("//") || path.starts_with("\\\\") {
         return Err("Only a local absolute file or folder path can be inspected.".into());
     }
     let local = Path::new(path);
@@ -427,7 +442,10 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         // /var is a macOS OS alias; test only the canonical, local fixture root.
-        let root = temp.path().canonicalize().unwrap();
+        let canonical = temp.path().canonicalize().unwrap();
+        let root = validate_path_text(canonical.to_str().unwrap())
+            .unwrap()
+            .to_path_buf();
         (temp, root)
     }
 
@@ -632,10 +650,36 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn windows_canonical_local_disk_paths_share_the_checked_dispatch_path() {
+        let (_temp, root) = fixture();
+        let file = root.join("note.pdf");
+        fs::write(&file, b"synthetic").unwrap();
+        let canonical = file.canonicalize().unwrap();
+        let plan = inspection_plan(canonical.to_str().unwrap()).unwrap();
+        assert_eq!(plan.kind, Inspection::Document);
+        assert_eq!(
+            dispatch_plan(&plan, false).unwrap(),
+            OsDispatch::OpenDocument(file.clone())
+        );
+        assert_eq!(
+            dispatch_plan(&plan, true).unwrap(),
+            OsDispatch::RevealItem(file)
+        );
+        revalidate(canonical.to_str().unwrap(), &plan).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn windows_device_alternate_stream_and_alias_paths_are_rejected() {
         for path in [
             r"C:\Files\a.txt:payload",
-            r"\\?\C:\Files\a.txt",
+            r"\\?\C:\Files\a.txt:payload",
+            r"\\?\C:\Files\a.txt.",
+            r"\\?\C:\Files\NUL.txt",
+            r"\\?\C:\Files\..\a.txt",
+            r"\\?\UNC\server\share\a.txt",
+            r"\\?\GLOBALROOT\Device\HarddiskVolume1\a.txt",
+            r"\\?\C:Files\a.txt",
             r"\\.\C:\Files\a.txt",
             r"C:\Files\a.txt.",
             r"C:\Files\a.txt ",
