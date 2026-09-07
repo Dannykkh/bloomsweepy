@@ -1,16 +1,16 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
-use super::{ScanError, ScanIssue, bounded_worker_threads, push_issue, system_time_ms};
+use super::{ScanError, ScanIssue, push_issue, system_time_ms};
 
 const DIRECTORY_PROGRESS_ENTRY_INTERVAL: u64 = 2_048;
 const MAX_TRACKED_CHILDREN: usize = 65_536;
 const MAX_EMPTY_DIRECTORY_RESULTS: usize = 10_000;
 const MAX_DIRECTORY_ISSUES: usize = 1_000;
+const MAX_TRACKED_CHILD_PATH_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EMPTY_DIRECTORY_PATH_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -55,6 +55,10 @@ pub struct EmptyDirectory {
     pub name: String,
     pub path: String,
     pub modified_at_unix_ms: Option<u128>,
+    #[serde(skip)]
+    pub(crate) scan_identity: Option<super::FileObjectIdentity>,
+    #[serde(skip)]
+    pub(crate) scan_modified_at: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -100,6 +104,7 @@ struct NodeAccumulator {
     is_directory: bool,
     modified_at: Option<SystemTime>,
     scan_identity: Option<super::FileObjectIdentity>,
+    scan_modified_at: Option<SystemTime>,
 }
 
 pub fn scan_directory_level<F, C>(
@@ -150,10 +155,10 @@ where
     });
 
     let mut children: HashMap<PathBuf, NodeAccumulator> = HashMap::new();
-    let empty_directory_count = Arc::new(AtomicU64::new(0));
-    let empty_directory_paths = Arc::new(Mutex::new(Vec::new()));
-    let empty_count_for_walker = Arc::clone(&empty_directory_count);
-    let empty_paths_for_walker = Arc::clone(&empty_directory_paths);
+    let mut empty_directory_count = 0_u64;
+    let mut empty_directories = Vec::new();
+    let mut empty_directory_path_bytes = 0_usize;
+    let mut tracked_child_path_bytes = 0_usize;
     let mut issues = Vec::new();
     let mut processed_entries = 0_u64;
     let mut total_files = 0_u64;
@@ -163,25 +168,7 @@ where
     let mut unreadable_entries = 0_u64;
     let mut tracking_limit_reached = false;
 
-    let walker = jwalk::WalkDir::new(&root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
-        .process_read_dir(move |depth, path, _, entries| {
-            // Test emptiness before filtering: a cloud-only parent is not empty
-            // and must never be offered as an empty-directory cleanup candidate.
-            if depth.is_some_and(|depth| depth > 0) && entries.is_empty() {
-                empty_count_for_walker.fetch_add(1, Ordering::Relaxed);
-                if let Ok(mut paths) = empty_paths_for_walker.lock()
-                    && paths.len() < max_empty_directories
-                {
-                    paths.push(path.to_path_buf());
-                }
-            }
-            crate::scan_policy::prune_cloud_entries(entries);
-        });
-
-    for item in walker {
+    for item in crate::streaming_walk::StreamingWalk::new(&root, &should_cancel) {
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
@@ -189,6 +176,9 @@ where
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(ScanError::Access(error.to_string()));
+                }
                 unreadable_entries = unreadable_entries.saturating_add(1);
                 push_issue(
                     &mut issues,
@@ -206,6 +196,31 @@ where
 
         let path = entry.path();
         processed_entries = processed_entries.saturating_add(1);
+
+        if entry.is_empty_directory() {
+            empty_directory_count = empty_directory_count.saturating_add(1);
+            // Display name and lossy display path may expand invalid bytes.
+            let retained_bytes = path.as_os_str().len().saturating_mul(6);
+            if empty_directories.len() < max_empty_directories
+                && empty_directory_path_bytes.saturating_add(retained_bytes)
+                    <= MAX_EMPTY_DIRECTORY_PATH_BYTES
+            {
+                let metadata = entry.metadata().ok();
+                let modified = metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.modified().ok());
+                empty_directories.push(EmptyDirectory {
+                    name: display_name(&path),
+                    path: path.to_string_lossy().into_owned(),
+                    modified_at_unix_ms: system_time_ms(modified),
+                    scan_identity: metadata
+                        .as_ref()
+                        .and_then(|metadata| super::file_object_identity(&path, metadata)),
+                    scan_modified_at: modified,
+                });
+                empty_directory_path_bytes += retained_bytes;
+            }
+        }
 
         let relative = path.strip_prefix(&root).unwrap_or(&path);
         let Some(first_component) = relative.components().next() else {
@@ -234,6 +249,7 @@ where
                         &mut children,
                         direct_path,
                         max_tracked_children,
+                        &mut tracked_child_path_bytes,
                         &mut tracking_limit_reached,
                     ) {
                         child.is_directory = true;
@@ -247,10 +263,15 @@ where
                 &mut children,
                 direct_path,
                 max_tracked_children,
+                &mut tracked_child_path_bytes,
                 &mut tracking_limit_reached,
             ) {
                 child.is_directory = true;
                 child.directory_count = child.directory_count.saturating_add(1);
+                if is_direct_child {
+                    child.scan_identity = super::file_object_identity(&path, &metadata);
+                    child.scan_modified_at = modified_at;
+                }
                 update_latest(&mut child.modified_at, modified_at);
             }
         } else if file_type.is_file() {
@@ -279,6 +300,7 @@ where
                 &mut children,
                 direct_path,
                 max_tracked_children,
+                &mut tracked_child_path_bytes,
                 &mut tracking_limit_reached,
             ) {
                 child.is_directory = !is_direct_child;
@@ -286,6 +308,7 @@ where
                 child.file_count = child.file_count.saturating_add(1);
                 if is_direct_child {
                     child.scan_identity = super::file_object_identity(&path, &metadata);
+                    child.scan_modified_at = modified_at;
                 }
                 update_latest(&mut child.modified_at, modified_at);
             }
@@ -313,22 +336,6 @@ where
         unreadable_entries,
     });
 
-    let empty_directory_count = empty_directory_count.load(Ordering::Relaxed);
-    let mut empty_directories: Vec<EmptyDirectory> = empty_directory_paths
-        .lock()
-        .map(|paths| paths.clone())
-        .unwrap_or_default()
-        .into_iter()
-        .map(|path| EmptyDirectory {
-            name: display_name(&path),
-            path: path.to_string_lossy().into_owned(),
-            modified_at_unix_ms: system_time_ms(
-                std::fs::metadata(&path)
-                    .and_then(|metadata| metadata.modified())
-                    .ok(),
-            ),
-        })
-        .collect();
     empty_directories.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     let empty_directories_truncated = empty_directory_count > empty_directories.len() as u64;
 
@@ -343,7 +350,7 @@ where
             is_directory: child.is_directory,
             modified_at_unix_ms: system_time_ms(child.modified_at),
             scan_identity: child.scan_identity,
-            scan_modified_at: child.modified_at,
+            scan_modified_at: child.scan_modified_at,
         })
         .collect();
     children.sort_unstable_by(|left, right| {
@@ -400,12 +407,16 @@ fn tracked_child<'a>(
     children: &'a mut HashMap<PathBuf, NodeAccumulator>,
     path: PathBuf,
     limit: usize,
+    retained_path_bytes: &mut usize,
     limit_reached: &mut bool,
 ) -> Option<&'a mut NodeAccumulator> {
-    let can_insert = children.len() < limit;
+    let path_bytes = path.as_os_str().len().saturating_mul(6);
+    let can_insert = children.len() < limit
+        && retained_path_bytes.saturating_add(path_bytes) <= MAX_TRACKED_CHILD_PATH_BYTES;
     match children.entry(path) {
         Entry::Occupied(entry) => Some(entry.into_mut()),
         Entry::Vacant(entry) if can_insert => {
+            *retained_path_bytes += path_bytes;
             let path = entry.key().clone();
             Some(entry.insert(NodeAccumulator {
                 path,
@@ -561,5 +572,68 @@ mod tests {
             scan_directory_level(temp.path(), DirectoryScanConfig::default(), |_| {}, || true);
 
         assert!(matches!(result, Err(ScanError::Cancelled)));
+    }
+
+    #[test]
+    fn child_path_budget_rejects_new_keys_but_keeps_existing_totals() {
+        let mut children = HashMap::new();
+        let mut bytes = 0;
+        let mut limited = false;
+        let path = PathBuf::from("existing");
+        tracked_child(&mut children, path.clone(), 10, &mut bytes, &mut limited)
+            .unwrap()
+            .file_count = 1;
+        bytes = MAX_TRACKED_CHILD_PATH_BYTES;
+        assert!(
+            tracked_child(
+                &mut children,
+                PathBuf::from("new"),
+                10,
+                &mut bytes,
+                &mut limited
+            )
+            .is_none()
+        );
+        assert!(limited);
+        tracked_child(&mut children, path.clone(), 10, &mut bytes, &mut limited)
+            .unwrap()
+            .file_count += 1;
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[&path].file_count, 2);
+    }
+
+    #[test]
+    fn folder_snapshot_keeps_own_identity_and_mtime_separate_from_display_rollup() {
+        let temp = tempfile::tempdir().unwrap();
+        let folder = temp.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let nested = folder.join("file");
+        fs::write(&nested, b"fixture").unwrap();
+        let future = SystemTime::now() + std::time::Duration::from_secs(3_600);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&nested)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(future))
+            .unwrap();
+        let metadata = fs::symlink_metadata(&folder).unwrap();
+        let report = scan_directory_level(
+            temp.path(),
+            DirectoryScanConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let node = report
+            .children
+            .iter()
+            .find(|node| node.name == "folder")
+            .unwrap();
+        assert_eq!(
+            node.scan_identity,
+            super::super::file_object_identity(&folder, &metadata)
+        );
+        assert_eq!(node.scan_modified_at, metadata.modified().ok());
+        assert!(node.modified_at_unix_ms > system_time_ms(node.scan_modified_at));
     }
 }

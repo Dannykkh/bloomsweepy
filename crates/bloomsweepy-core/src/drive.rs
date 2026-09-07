@@ -9,6 +9,7 @@ const DRIVE_PROGRESS_FILE_INTERVAL: u64 = 4_096;
 const MAX_TRACKED_LOCATIONS: usize = 65_536;
 const MAX_DRIVE_LOCATION_RESULTS: usize = 10_000;
 const MAX_DRIVE_ISSUES: usize = 1_000;
+const MAX_LOCATION_PATH_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(not(windows))]
 const MAX_DRIVE_HARD_LINK_IDENTITIES: usize = 250_000;
 
@@ -176,6 +177,7 @@ where
     let location_depth = config.location_depth.clamp(1, 8);
     let mut categories: HashMap<StorageCategoryKind, CategoryAccumulator> = HashMap::new();
     let mut locations: HashMap<PathBuf, LocationAccumulator> = HashMap::new();
+    let mut location_path_bytes = 0_usize;
     let mut seen_files = HashSet::new();
     let mut issues = Vec::new();
     let mut total_files = 0_u64;
@@ -194,14 +196,7 @@ where
         categories: category_summaries(&categories),
     });
 
-    for item in jwalk::WalkDir::new(&root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(
-            super::bounded_worker_threads(),
-        ))
-        .process_read_dir(|_, _, _, entries| crate::scan_policy::prune_cloud_entries(entries))
-    {
+    for item in crate::streaming_walk::StreamingWalk::new(&root, &should_cancel) {
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
@@ -209,6 +204,9 @@ where
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(ScanError::Access(error.to_string()));
+                }
                 unreadable_entries = unreadable_entries.saturating_add(1);
                 push_issue(&mut issues, max_issues, None, error.to_string());
                 continue;
@@ -258,6 +256,7 @@ where
             &mut locations,
             bucket,
             max_tracked_locations,
+            &mut location_path_bytes,
             &mut location_tracking_limit_reached,
         ) {
             location.logical_bytes = location.logical_bytes.saturating_add(logical_bytes);
@@ -393,12 +392,18 @@ fn tracked_location<'a>(
     locations: &'a mut HashMap<PathBuf, LocationAccumulator>,
     path: PathBuf,
     limit: usize,
+    retained_path_bytes: &mut usize,
     limit_reached: &mut bool,
 ) -> Option<&'a mut LocationAccumulator> {
-    let can_insert = locations.len() < limit;
+    let path_bytes = path.as_os_str().len().saturating_mul(6);
+    let can_insert = locations.len() < limit
+        && retained_path_bytes.saturating_add(path_bytes) <= MAX_LOCATION_PATH_BYTES;
     match locations.entry(path) {
         Entry::Occupied(entry) => Some(entry.into_mut()),
-        Entry::Vacant(entry) if can_insert => Some(entry.insert(LocationAccumulator::default())),
+        Entry::Vacant(entry) if can_insert => {
+            *retained_path_bytes += path_bytes;
+            Some(entry.insert(LocationAccumulator::default()))
+        }
         Entry::Vacant(_) => {
             *limit_reached = true;
             None

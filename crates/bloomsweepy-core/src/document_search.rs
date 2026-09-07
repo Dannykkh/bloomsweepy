@@ -12,15 +12,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use zip::ZipArchive;
 
-use crate::{bounded_worker_threads, open_read_shared, system_time_ms};
+use crate::index_budget::{BuildGuard, IndexBudget, run_guarded};
+use crate::{open_read_shared, system_time_ms};
 
 const INDEX_SCHEMA_VERSION: i64 = 1;
 const DEFAULT_MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const DEFAULT_MAX_EXTRACTED_BYTES: usize = 4 * 1024 * 1024;
 const DEFAULT_MAX_DOCUMENTS: usize = 100_000;
 const DEFAULT_MAX_ISSUES: usize = 100;
-const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
-const MAX_EXTRACTED_BYTES: usize = 16 * 1024 * 1024;
+// Custom requests cannot bypass the low-resource policy. Defaults are unchanged.
+const MAX_FILE_BYTES: u64 = DEFAULT_MAX_FILE_BYTES;
+const MAX_EXTRACTED_BYTES: usize = DEFAULT_MAX_EXTRACTED_BYTES;
 const MAX_DOCUMENTS: usize = 500_000;
 const MAX_ISSUES: usize = 1_000;
 const MAX_SEARCH_RESULTS: usize = 250;
@@ -243,17 +245,27 @@ enum CandidateKind {
 }
 
 #[derive(Debug)]
-enum ExtractionError {
+pub(crate) enum ExtractionError {
     Cancelled,
     Unreadable(String),
     NoText(String),
+    WorkerFailure(String),
+}
+
+#[cfg(test)]
+thread_local! {
+    // Thread-local injection avoids global environment changes or launching a
+    // failing process just to test the transaction's infrastructure error path.
+    static TEST_WORKER_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl ExtractionError {
-    fn message(&self) -> Option<&str> {
+    pub(crate) fn message(&self) -> Option<&str> {
         match self {
             Self::Cancelled => None,
-            Self::Unreadable(message) | Self::NoText(message) => Some(message),
+            Self::Unreadable(message) | Self::NoText(message) | Self::WorkerFailure(message) => {
+                Some(message)
+            }
         }
     }
 
@@ -266,8 +278,61 @@ pub fn build_document_index<F, C>(
     root: impl AsRef<Path>,
     database_path: impl AsRef<Path>,
     config: DocumentIndexConfig,
+    on_progress: F,
+    should_cancel: C,
+) -> Result<DocumentIndexReport, DocumentSearchError>
+where
+    F: FnMut(DocumentIndexProgress),
+    C: Fn() -> bool + Sync,
+{
+    build_document_index_with_budget(
+        root.as_ref(),
+        database_path.as_ref(),
+        config,
+        on_progress,
+        should_cancel,
+        IndexBudget::default(),
+    )
+}
+
+fn build_document_index_with_budget<F, C>(
+    root: &Path,
+    database_path: &Path,
+    config: DocumentIndexConfig,
+    on_progress: F,
+    should_cancel: C,
+    budget: IndexBudget,
+) -> Result<DocumentIndexReport, DocumentSearchError>
+where
+    F: FnMut(DocumentIndexProgress),
+    C: Fn() -> bool + Sync,
+{
+    run_guarded(
+        database_path,
+        budget,
+        &should_cancel,
+        || DocumentSearchError::Cancelled,
+        DocumentSearchError::Index,
+        |guard| {
+            build_document_index_inner(
+                root,
+                database_path,
+                config,
+                on_progress,
+                || should_cancel() || guard.stopped(),
+                guard,
+            )
+        },
+    )
+}
+
+fn build_document_index_inner<F, C>(
+    root: &Path,
+    database_path: &Path,
+    config: DocumentIndexConfig,
     mut on_progress: F,
     should_cancel: C,
+    guard: &BuildGuard,
 ) -> Result<DocumentIndexReport, DocumentSearchError>
 where
     F: FnMut(DocumentIndexProgress),
@@ -275,7 +340,7 @@ where
 {
     let started = Instant::now();
     let config = config.bounded();
-    let requested_root = root.as_ref();
+    let requested_root = root;
     crate::scan_policy::ensure_local_path(requested_root).map_err(DocumentSearchError::Index)?;
     if !requested_root.exists() {
         return Err(DocumentSearchError::MissingPath(
@@ -293,8 +358,19 @@ where
         .map_err(|error| DocumentSearchError::Index(error.to_string()))?;
     crate::scan_policy::ensure_local_path(&root).map_err(DocumentSearchError::Index)?;
     let root_string = display_path(&root);
-    let mut connection = open_index(database_path.as_ref())?;
-    initialize_schema(&connection)?;
+    let mut connection = open_index(database_path)?;
+    guard
+        .configure(&connection)
+        .map_err(DocumentSearchError::Index)?;
+    {
+        let schema = connection.transaction().map_err(index_error)?;
+        initialize_schema(&schema)?;
+        guard.check_now().map_err(DocumentSearchError::Index)?;
+        if should_cancel() {
+            return Err(DocumentSearchError::Cancelled);
+        }
+        schema.commit().map_err(index_error)?;
+    }
 
     on_progress(DocumentIndexProgress {
         phase: DocumentIndexPhase::Discovering,
@@ -337,12 +413,7 @@ where
     let mut issues = Vec::new();
     let mut last_detailed_progress = Instant::now();
 
-    for item in jwalk::WalkDir::new(&root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
-        .process_read_dir(|_, _, _, entries| crate::scan_policy::prune_cloud_entries(entries))
-    {
+    for item in crate::streaming_walk::StreamingWalk::new(&root, &should_cancel) {
         if should_cancel() {
             return Err(DocumentSearchError::Cancelled);
         }
@@ -350,6 +421,9 @@ where
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(DocumentSearchError::Index(error.to_string()));
+                }
                 unreadable_entries = unreadable_entries.saturating_add(1);
                 push_issue(&mut issues, config.max_issues, None, error.to_string());
                 continue;
@@ -516,6 +590,9 @@ where
         let content = match extract_document(&path, format, &config, &should_cancel) {
             Ok(content) => content,
             Err(ExtractionError::Cancelled) => return Err(DocumentSearchError::Cancelled),
+            Err(ExtractionError::WorkerFailure(message)) => {
+                return Err(DocumentSearchError::Index(message));
+            }
             Err(error) => {
                 if error.is_unreadable() {
                     unreadable_entries = unreadable_entries.saturating_add(1);
@@ -534,6 +611,7 @@ where
         };
 
         let name = display_name(&path);
+        guard.check_now().map_err(DocumentSearchError::Index)?;
         transaction
             .execute(
                 "INSERT INTO documents (
@@ -559,6 +637,7 @@ where
                 ],
             )
             .map_err(index_error)?;
+        guard.check_now().map_err(DocumentSearchError::Index)?;
         indexed_documents = indexed_documents.saturating_add(1);
         updated_documents = updated_documents.saturating_add(1);
     }
@@ -616,10 +695,9 @@ where
     if should_cancel() {
         return Err(DocumentSearchError::Cancelled);
     }
+    guard.check_now().map_err(DocumentSearchError::Index)?;
     transaction.commit().map_err(index_error)?;
-    connection
-        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-        .map_err(index_error)?;
+    crate::index_budget::checkpoint_after_commit(&connection);
 
     Ok(DocumentIndexReport {
         status: DocumentIndexStatus {
@@ -853,10 +931,10 @@ fn open_index(path: &Path) -> Result<Connection, DocumentSearchError> {
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA secure_delete = ON;
-             PRAGMA temp_store = MEMORY;",
+             PRAGMA secure_delete = ON;",
         )
         .map_err(index_error)?;
+    crate::index_budget::configure_connection(&connection).map_err(index_error)?;
     Ok(connection)
 }
 
@@ -866,11 +944,9 @@ fn open_existing_index(path: &Path) -> Result<Connection, DocumentSearchError> {
         .busy_timeout(Duration::from_secs(2))
         .map_err(index_error)?;
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA temp_store = MEMORY;",
-        )
+        .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(index_error)?;
+    crate::index_budget::configure_connection(&connection).map_err(index_error)?;
     Ok(connection)
 }
 
@@ -1002,19 +1078,34 @@ where
             let bytes = read_file_limited(path, config.max_file_bytes, should_cancel)?;
             decode_text(&bytes)?
         }
-        DocumentFormat::Pdf => {
-            let bytes = read_file_limited(path, config.max_file_bytes, should_cancel)?;
+        DocumentFormat::Pdf
+        | DocumentFormat::Word
+        | DocumentFormat::Spreadsheet
+        | DocumentFormat::Presentation
+        | DocumentFormat::Hwpx => {
             if should_cancel() {
                 return Err(ExtractionError::Cancelled);
             }
-            pdf_extract::extract_text_from_mem(&bytes).map_err(|error| {
-                ExtractionError::Unreadable(format!("PDF 텍스트를 읽지 못했습니다: {error}"))
-            })?
+            #[cfg(test)]
+            if TEST_WORKER_FAILURE.with(std::cell::Cell::get) {
+                return Err(map_worker_error(
+                    crate::document_worker::WorkerError::Infrastructure(
+                        "synthetic worker infrastructure failure".to_owned(),
+                    ),
+                ));
+            }
+            let extracted = crate::document_worker::extract_document(
+                path,
+                format,
+                config.max_file_bytes,
+                config.max_extracted_bytes,
+                should_cancel,
+            );
+            if should_cancel() {
+                return Err(ExtractionError::Cancelled);
+            }
+            extracted.map_err(map_worker_error)?
         }
-        DocumentFormat::Word
-        | DocumentFormat::Spreadsheet
-        | DocumentFormat::Presentation
-        | DocumentFormat::Hwpx => extract_archive_text(path, format, config, should_cancel)?,
     };
     let normalized = normalize_text(&text, config.max_extracted_bytes);
     if normalized.trim().is_empty() {
@@ -1026,6 +1117,17 @@ where
         return Err(ExtractionError::NoText(message.to_owned()));
     }
     Ok(normalized)
+}
+
+fn map_worker_error(error: crate::document_worker::WorkerError) -> ExtractionError {
+    match error {
+        crate::document_worker::WorkerError::Document(message) => {
+            ExtractionError::Unreadable(message)
+        }
+        crate::document_worker::WorkerError::Infrastructure(message) => {
+            ExtractionError::WorkerFailure(message)
+        }
+    }
 }
 
 fn read_file_limited<C>(
@@ -1094,6 +1196,8 @@ fn decode_text(bytes: &[u8]) -> Result<String, ExtractionError> {
     if !korean_had_errors && korean.chars().any(is_hangul) {
         return Ok(korean.into_owned());
     }
+    // Do not retain a failed decoder's full output while trying another encoding.
+    drop(korean);
     let null_bytes = bytes.iter().filter(|byte| **byte == 0).count();
     if null_bytes <= bytes.len() / 100 {
         let (western, _, western_had_errors) = WINDOWS_1252.decode(bytes);
@@ -1129,7 +1233,7 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> Result<String, ExtractionE
         .map_err(|error| ExtractionError::Unreadable(error.to_string()))
 }
 
-fn extract_archive_text<C>(
+pub(crate) fn extract_archive_text<C>(
     path: &Path,
     format: DocumentFormat,
     config: &DocumentIndexConfig,
@@ -1614,7 +1718,7 @@ fn saturating_u128_to_i64(value: u128) -> i64 {
 }
 
 fn index_error(error: rusqlite::Error) -> DocumentSearchError {
-    DocumentSearchError::Index(error.to_string())
+    DocumentSearchError::Index(crate::index_budget::sqlite_error_message(&error))
 }
 
 #[cfg(test)]
@@ -1623,6 +1727,86 @@ mod tests {
     use std::io::Write;
     use zip::ZipWriter;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn custom_document_limits_cannot_bypass_low_resource_caps() {
+        let bounded = DocumentIndexConfig {
+            max_file_bytes: u64::MAX,
+            max_extracted_bytes: usize::MAX,
+            ..DocumentIndexConfig::default()
+        }
+        .bounded();
+        assert_eq!(bounded.max_file_bytes, 32 * 1024 * 1024);
+        assert_eq!(bounded.max_extracted_bytes, 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn worker_infrastructure_failure_preserves_previous_index_and_allows_retry() {
+        struct ResetWorkerFailure;
+        impl Drop for ResetWorkerFailure {
+            fn drop(&mut self) {
+                TEST_WORKER_FAILURE.set(false);
+            }
+        }
+        let fixture = tempfile::tempdir().unwrap();
+        let database = fixture.path().join("index.sqlite3");
+        let root = fixture.path().join("documents");
+        fs::create_dir(&root).unwrap();
+        let stable = root.join("stable.txt");
+        let worker_document = root.join("incoming.pdf");
+        fs::write(&stable, "original-worker-failure-marker").unwrap();
+        build_document_index(
+            &root,
+            &database,
+            DocumentIndexConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        fs::rename(&stable, &worker_document).unwrap();
+        TEST_WORKER_FAILURE.set(true);
+        let reset = ResetWorkerFailure;
+        let result = build_document_index(
+            &root,
+            &database,
+            DocumentIndexConfig::default(),
+            |_| {},
+            || false,
+        );
+        drop(reset);
+        assert!(
+            matches!(result, Err(DocumentSearchError::Index(message)) if message == "synthetic worker infrastructure failure")
+        );
+        let search = search_document_index(
+            &database,
+            DocumentSearchRequest {
+                query: "original-worker-failure-marker".to_owned(),
+                extensions: vec![],
+                max_results: 10,
+            },
+        )
+        .unwrap();
+        assert_eq!(search.total_matches, 1);
+        assert_eq!(search.results[0].name, "stable.txt");
+        assert_eq!(
+            document_index_status(&database)
+                .unwrap()
+                .unwrap()
+                .indexed_documents,
+            1
+        );
+        fs::rename(&worker_document, &stable).unwrap();
+        let report = build_document_index(
+            &root,
+            &database,
+            DocumentIndexConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.status.indexed_documents, 1);
+        assert_eq!(report.reused_documents, 1);
+    }
 
     #[test]
     fn cancellable_search_stops_before_querying() {
@@ -1887,6 +2071,93 @@ mod tests {
             .expect("read previous status")
             .expect("previous status");
         assert_eq!(status.indexed_documents, 1);
+    }
+
+    #[test]
+    fn low_disk_finalization_rolls_back_document_fts_and_retry_reuses_storage() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let fixture = tempfile::tempdir().unwrap();
+        let database = fixture.path().join("index.sqlite3");
+        let root = fixture.path().join("documents");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("stable.txt"), "original-search-marker").unwrap();
+        build_document_index(
+            &root,
+            &database,
+            DocumentIndexConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        fs::write(root.join("new.txt"), "new-search-marker").unwrap();
+        let free_bytes = Arc::new(AtomicU64::new(u64::MAX));
+        let budget = IndexBudget {
+            max_database_bytes: 1024 * 1024,
+            max_storage_bytes: 2 * 1024 * 1024,
+            min_free_bytes: 1024,
+            free_bytes: Some(Arc::clone(&free_bytes)),
+        };
+        let failed = build_document_index_with_budget(
+            &root,
+            &database,
+            DocumentIndexConfig::default(),
+            |progress| {
+                if matches!(progress.phase, DocumentIndexPhase::Finalizing) {
+                    free_bytes.store(0, Ordering::Release);
+                }
+            },
+            || false,
+            budget.clone(),
+        );
+        assert!(
+            matches!(failed, Err(DocumentSearchError::Index(message)) if message.contains("여유 공간"))
+        );
+        assert_eq!(
+            document_index_status(&database)
+                .unwrap()
+                .unwrap()
+                .indexed_documents,
+            1
+        );
+        let request = |query: &str| DocumentSearchRequest {
+            query: query.to_owned(),
+            extensions: vec![],
+            max_results: 10,
+        };
+        assert_eq!(
+            search_document_index(&database, request("original-search-marker"))
+                .unwrap()
+                .total_matches,
+            1
+        );
+        assert_eq!(
+            search_document_index(&database, request("new-search-marker"))
+                .unwrap()
+                .total_matches,
+            0
+        );
+        free_bytes.store(u64::MAX, Ordering::Release);
+        for _ in 0..4 {
+            let report = build_document_index_with_budget(
+                &root,
+                &database,
+                DocumentIndexConfig::default(),
+                |_| {},
+                || false,
+                budget.clone(),
+            )
+            .unwrap();
+            assert_eq!(report.status.indexed_documents, 2);
+            assert_eq!(report.updated_documents + report.reused_documents, 2);
+            assert!(fs::metadata(&database).unwrap().len() <= budget.max_database_bytes);
+            assert_eq!(
+                fs::metadata(fixture.path().join("index.sqlite3-wal"))
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0),
+                0
+            );
+        }
     }
 
     #[test]

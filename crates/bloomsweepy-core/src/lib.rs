@@ -11,14 +11,32 @@ mod actions;
 mod cleanup;
 mod directory;
 mod document_search;
+mod document_worker;
 mod drive;
 mod file_catalog;
+mod index_budget;
+mod resource_guard;
 mod scan_policy;
+mod streaming_walk;
+
+pub use document_worker::run_document_worker;
+pub use resource_guard::ensure_operation_memory;
+
+/// Shared lexical guard for local-only desktop operations; performs no I/O.
+pub fn is_cloud_storage_path(path: &Path) -> bool {
+    scan_policy::is_cloud_path(path)
+}
+
+/// Checks OS placeholder flags without reading or downloading file contents.
+pub fn is_online_only_metadata(metadata: &Metadata) -> bool {
+    scan_policy::is_online_only(metadata)
+}
 
 pub use actions::{
     ActionValidationError, VerifiedTrashItem, revalidate_verified_trash_item,
     validate_cleanup_trash_candidate, validate_directory_trash_file,
-    validate_duplicate_trash_selection,
+    validate_directory_trash_folder, validate_duplicate_trash_selection,
+    validate_empty_directory_trash,
 };
 
 pub use cleanup::{
@@ -55,11 +73,14 @@ const COMPARE_CHUNK_BYTES: usize = 256 * 1024;
 const PROGRESS_FILE_INTERVAL: u64 = 512;
 const SAMPLE_BATCH_SIZE: usize = 512;
 const FULL_HASH_BATCH_SIZE: usize = 16;
-const MAX_WALK_WORKERS: usize = 4;
 const MAX_HASH_WORKERS: usize = 2;
 const MAX_LARGE_FILE_RESULTS: usize = 10_000;
+const MAX_LARGE_FILE_RETAINED_BYTES: usize = 4 * 1024 * 1024;
 const MAX_DUPLICATE_GROUP_RESULTS: usize = 10_000;
 const MAX_DUPLICATE_CANDIDATES: usize = 250_000;
+// Candidate structs contain both native and display paths, and move through
+// grouping stages. Count limits alone are insufficient for long file names.
+const MAX_DUPLICATE_CANDIDATE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ISSUES: usize = 1_000;
 const MAX_TRACKED_HARD_LINK_IDENTITIES: usize = 250_000;
 
@@ -237,16 +258,14 @@ where
     let mut issues = Vec::new();
     let mut seen_files = HashSet::new();
     let mut large_files = Vec::new();
+    let mut large_file_retained_bytes = 0_usize;
+    let mut large_file_memory_limit_reached = false;
     let mut size_groups: HashMap<u64, Vec<Candidate>> = HashMap::new();
     let mut duplicate_candidates = 0_usize;
+    let mut duplicate_candidate_bytes = 0_usize;
     let mut candidate_limit_reached = false;
 
-    for item in jwalk::WalkDir::new(&root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
-        .process_read_dir(|_, _, _, entries| scan_policy::prune_cloud_entries(entries))
-    {
+    for item in streaming_walk::StreamingWalk::new(&root, &should_cancel) {
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
@@ -254,6 +273,9 @@ where
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(ScanError::Access(error.to_string()));
+                }
                 unreadable_entries += 1;
                 push_issue(&mut issues, config.max_issues, None, error.to_string());
                 continue;
@@ -309,11 +331,20 @@ where
         };
 
         if logical_bytes >= config.min_large_file_bytes {
-            push_bounded_large_file(&mut large_files, file_entry.clone(), config.max_large_files);
+            large_file_memory_limit_reached |= push_bounded_large_file(
+                &mut large_files,
+                file_entry.clone(),
+                config.max_large_files,
+                &mut large_file_retained_bytes,
+            );
         }
 
         if duplicate_safe && logical_bytes >= config.min_duplicate_file_bytes {
-            if duplicate_candidates < config.max_duplicate_candidates {
+            let retained_bytes = candidate_retained_bytes(&file_entry, &path);
+            if duplicate_candidates < config.max_duplicate_candidates
+                && duplicate_candidate_bytes.saturating_add(retained_bytes)
+                    <= MAX_DUPLICATE_CANDIDATE_BYTES
+            {
                 size_groups
                     .entry(logical_bytes)
                     .or_default()
@@ -323,6 +354,7 @@ where
                         modified_at: metadata.modified().ok(),
                     });
                 duplicate_candidates += 1;
+                duplicate_candidate_bytes += retained_bytes;
             } else {
                 candidate_limit_reached = true;
             }
@@ -345,6 +377,21 @@ where
             config.max_issues,
             None,
             "하드링크 파일이 너무 많아 이후 항목을 중복 분석에서 제외했습니다".to_owned(),
+        );
+    }
+
+    if candidate_limit_reached {
+        push_issue(
+            &mut issues,
+            config.max_issues,
+            None,
+            "중복 후보의 개수 또는 메모리 안전 상한에 도달해 일부 파일은 용량 합계에만 반영했습니다".to_owned(),
+        );
+    }
+    if large_file_memory_limit_reached {
+        push_issue(
+            &mut issues, config.max_issues, None,
+            "큰 파일 목록의 경로 메모리 상한에 도달해 표시 항목을 줄였습니다. 전체 용량 합계는 유지됩니다".to_owned(),
         );
     }
 
@@ -384,6 +431,7 @@ where
     let mut sampled_count = 0_usize;
     let mut candidate_iter = candidates.into_iter();
     loop {
+        ensure_operation_memory().map_err(ScanError::Access)?;
         let batch: Vec<Candidate> = candidate_iter.by_ref().take(SAMPLE_BATCH_SIZE).collect();
         if batch.is_empty() {
             break;
@@ -411,6 +459,9 @@ where
                     .or_default()
                     .push(candidate),
                 Err(error) => {
+                    if error.kind() == io::ErrorKind::OutOfMemory {
+                        return Err(ScanError::Access(error.to_string()));
+                    }
                     unreadable_entries += 1;
                     push_issue(
                         &mut issues,
@@ -452,6 +503,7 @@ where
     let mut hashed_count = 0_usize;
     let mut full_hash_iter = full_hash_candidates.into_iter();
     loop {
+        ensure_operation_memory().map_err(ScanError::Access)?;
         let batch: Vec<Candidate> = full_hash_iter.by_ref().take(FULL_HASH_BATCH_SIZE).collect();
         if batch.is_empty() {
             break;
@@ -479,6 +531,9 @@ where
                     .or_default()
                     .push(candidate),
                 Err(error) => {
+                    if error.kind() == io::ErrorKind::OutOfMemory {
+                        return Err(ScanError::Access(error.to_string()));
+                    }
                     unreadable_entries += 1;
                     push_issue(
                         &mut issues,
@@ -576,6 +631,7 @@ where
     let mut partitions: Vec<Vec<Candidate>> = Vec::new();
 
     'candidate: for candidate in candidates {
+        ensure_operation_memory().map_err(ScanError::Access)?;
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
@@ -590,6 +646,9 @@ where
                 Err(error) => {
                     if error.kind() == io::ErrorKind::Interrupted {
                         return Err(ScanError::Cancelled);
+                    }
+                    if error.kind() == io::ErrorKind::OutOfMemory {
+                        return Err(ScanError::Access(error.to_string()));
                     }
                     push_issue(
                         issues,
@@ -728,7 +787,8 @@ where
     if should_cancel() {
         Err(io::Error::new(io::ErrorKind::Interrupted, "scan cancelled"))
     } else {
-        Ok(())
+        ensure_operation_memory()
+            .map_err(|message| io::Error::new(io::ErrorKind::OutOfMemory, message))
     }
 }
 
@@ -751,11 +811,13 @@ fn open_read_shared(path: &Path) -> io::Result<File> {
     options.open(path)
 }
 
-fn bounded_worker_threads() -> usize {
-    std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
-        .clamp(1, MAX_WALK_WORKERS)
+fn candidate_retained_bytes(entry: &FileEntry, path: &Path) -> usize {
+    std::mem::size_of::<Candidate>()
+        .saturating_add(entry.name.len())
+        .saturating_add(entry.path.len())
+        .saturating_add(path.as_os_str().len())
+        // Hash-map, group Vec capacity and transient grouping overhead.
+        .saturating_add(128)
 }
 
 fn bounded_hash_worker_threads() -> usize {
@@ -782,15 +844,42 @@ fn sort_large_files(files: &mut [FileEntry]) {
     });
 }
 
-fn push_bounded_large_file(files: &mut Vec<FileEntry>, entry: FileEntry, limit: usize) {
+fn file_entry_retained_bytes(entry: &FileEntry) -> usize {
+    std::mem::size_of::<FileEntry>()
+        .saturating_add(entry.name.len())
+        .saturating_add(entry.path.len())
+}
+
+fn push_bounded_large_file(
+    files: &mut Vec<FileEntry>,
+    entry: FileEntry,
+    limit: usize,
+    retained_bytes: &mut usize,
+) -> bool {
     if limit == 0 {
-        return;
+        return false;
     }
+    *retained_bytes = retained_bytes.saturating_add(file_entry_retained_bytes(&entry));
     files.push(entry);
-    if files.len() > limit.saturating_mul(2) {
+    let memory_limit = *retained_bytes > MAX_LARGE_FILE_RETAINED_BYTES;
+    if files.len() > limit.saturating_mul(2) || memory_limit {
         sort_large_files(files);
         files.truncate(limit);
+        if memory_limit {
+            // Leave headroom so a wide directory does not sort on every file.
+            let mut bytes = 0_usize;
+            files.retain(|entry| {
+                let next = bytes.saturating_add(file_entry_retained_bytes(entry));
+                if next > MAX_LARGE_FILE_RETAINED_BYTES / 2 {
+                    return false;
+                }
+                bytes = next;
+                true
+            });
+        }
+        *retained_bytes = files.iter().map(file_entry_retained_bytes).sum();
     }
+    memory_limit
 }
 
 fn push_issue(
@@ -939,6 +1028,7 @@ mod tests {
     #[test]
     fn bounds_large_file_working_set_before_final_sort() {
         let mut files = Vec::new();
+        let mut retained_bytes = 0;
         for index in 0..10_000_u64 {
             push_bounded_large_file(
                 &mut files,
@@ -949,6 +1039,7 @@ mod tests {
                     modified_at_unix_ms: None,
                 },
                 32,
+                &mut retained_bytes,
             );
             assert!(files.len() <= 65);
         }
@@ -996,6 +1087,49 @@ mod tests {
 
         let error = validate_candidate_snapshot(&candidate).expect_err("file changed");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn large_file_results_have_a_path_byte_budget_not_only_a_count_cap() {
+        let mut entries = Vec::new();
+        let mut bytes = 0;
+        let mut limited = false;
+        for index in 0..300 {
+            limited |= push_bounded_large_file(
+                &mut entries,
+                FileEntry {
+                    name: format!("file-{index}"),
+                    path: format!("/{}-{index}", "x".repeat(16 * 1024)),
+                    logical_bytes: index,
+                    modified_at_unix_ms: None,
+                },
+                10_000,
+                &mut bytes,
+            );
+            assert!(bytes <= MAX_LARGE_FILE_RETAINED_BYTES);
+        }
+        assert!(limited);
+        assert!(entries.len() < 300);
+        assert_eq!(bytes, entries.iter().map(file_entry_retained_bytes).sum());
+        assert!(entries.iter().any(|entry| entry.logical_bytes == 299));
+    }
+
+    #[test]
+    fn duplicate_candidate_budget_accounts_for_native_and_display_paths() {
+        let path = PathBuf::from("/fixture/long-name");
+        let entry = FileEntry {
+            name: "long-name".to_owned(),
+            path: path.to_string_lossy().into_owned(),
+            logical_bytes: 1,
+            modified_at_unix_ms: None,
+        };
+        assert!(
+            candidate_retained_bytes(&entry, &path)
+                >= std::mem::size_of::<Candidate>()
+                    + entry.name.len()
+                    + entry.path.len()
+                    + path.as_os_str().len()
+        );
     }
 
     #[cfg(windows)]

@@ -8,6 +8,7 @@ const MAX_CLEANUP_CANDIDATES: usize = 10_000;
 const MAX_CLEANUP_ENTRIES: u64 = 5_000_000;
 const MAX_CLEANUP_ISSUES: usize = 1_000;
 const MAX_INSTALLED_IDENTITY_TOKENS: usize = 50_000;
+const MAX_CLEANUP_PATH_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -140,6 +141,7 @@ where
     F: FnMut(CleanupScanProgress),
     C: Fn() -> bool,
 {
+    crate::ensure_operation_memory().map_err(ScanError::Access)?;
     let started = Instant::now();
     let now = SystemTime::now();
     let total_roots = config.roots.len();
@@ -155,6 +157,7 @@ where
         .filter(|token| token.len() >= 3)
         .collect();
     let mut candidates = Vec::new();
+    let mut candidate_path_bytes = 0_usize;
     let mut issues = Vec::new();
     let mut processed_entries = 0_u64;
     let mut processed_bytes = 0_u64;
@@ -166,8 +169,23 @@ where
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
+        crate::ensure_operation_memory().map_err(ScanError::Access)?;
 
-        if !root.path.is_dir() {
+        if let Err(message) = crate::scan_policy::ensure_local_path(&root.path) {
+            push_cleanup_issue(
+                &mut issues,
+                max_issues,
+                Some(root.path.to_string_lossy().into_owned()),
+                message,
+            );
+            continue;
+        }
+        let root_metadata = fs::symlink_metadata(&root.path).ok();
+        if root_metadata.as_ref().is_none_or(|metadata| {
+            !metadata.is_dir()
+                || metadata.file_type().is_symlink()
+                || crate::scan_policy::is_reparse_point(metadata)
+        }) {
             push_cleanup_issue(
                 &mut issues,
                 max_issues,
@@ -194,6 +212,7 @@ where
         let candidates_before_root = candidates.len();
 
         for entry in direct_entries {
+            crate::ensure_operation_memory().map_err(ScanError::Access)?;
             let path = match entry {
                 Ok(entry) => entry.path(),
                 Err(error) => {
@@ -210,6 +229,9 @@ where
 
             if should_cancel() {
                 return Err(ScanError::Cancelled);
+            }
+            if crate::scan_policy::is_cloud_path(&path) {
+                continue;
             }
             if candidates.len() >= max_candidates || processed_entries >= max_entries {
                 limit_reached = true;
@@ -248,7 +270,10 @@ where
                     continue;
                 }
             };
-            if metadata.file_type().is_symlink() {
+            if metadata.file_type().is_symlink()
+                || crate::scan_policy::is_online_only(&metadata)
+                || crate::scan_policy::is_reparse_point(&metadata)
+            {
                 continue;
             }
             let Some(top_modified) = metadata.modified().ok() else {
@@ -283,6 +308,12 @@ where
                 limit_reached = true;
                 break 'roots;
             }
+            // Never offer a parent whose excluded or unreadable content was
+            // not inspected. Otherwise pruning could hide a cloud descendant
+            // inside an apparently safe cache-folder candidate.
+            if stats.unreadable_entries > 0 {
+                continue;
+            }
 
             let latest_modified = stats.latest_modified.unwrap_or(top_modified);
             let inactive = age_since(now, latest_modified);
@@ -291,6 +322,16 @@ where
             }
             let inactive_days = inactive.as_secs() / 86_400;
             let (confidence, evidence) = candidate_evidence(root.kind, inactive_days);
+            let retained_bytes = path
+                .as_os_str()
+                .len()
+                .saturating_mul(6)
+                .saturating_add(root.label.len());
+            if candidate_path_bytes.saturating_add(retained_bytes) > MAX_CLEANUP_PATH_BYTES {
+                limit_reached = true;
+                break 'roots;
+            }
+            candidate_path_bytes += retained_bytes;
             candidates.push(CleanupCandidate {
                 kind: root.kind,
                 confidence,
@@ -364,17 +405,17 @@ where
         latest_modified: metadata.modified().ok(),
         ..CandidateStats::default()
     };
-    for item in jwalk::WalkDir::new(path)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::Serial)
-    {
+    let mut walker = crate::streaming_walk::StreamingWalk::new(path, should_cancel);
+    for item in walker.by_ref() {
         if should_cancel() {
             return Err(ScanError::Cancelled);
         }
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(ScanError::Access(error.to_string()));
+                }
                 stats.unreadable_entries = stats.unreadable_entries.saturating_add(1);
                 push_cleanup_issue(
                     issues,
@@ -413,6 +454,18 @@ where
             stats.logical_bytes = stats.logical_bytes.saturating_add(entry_metadata.len());
         }
         update_latest(&mut stats.latest_modified, entry_metadata.modified().ok());
+    }
+    if walker.excluded_entries() > 0 {
+        stats.unreadable_entries = stats
+            .unreadable_entries
+            .saturating_add(walker.excluded_entries());
+        push_cleanup_issue(
+            issues,
+            max_issues,
+            Some(path.to_string_lossy().into_owned()),
+            "클라우드 또는 온라인 전용 항목이 포함되어 이 폴더를 정리 후보에서 제외했습니다"
+                .to_owned(),
+        );
     }
     Ok(stats)
 }
@@ -490,6 +543,41 @@ fn push_cleanup_issue(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn excludes_cleanup_parent_containing_cloud_descendants() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(
+            temp.path()
+                .join("old/Users/test/Library/CloudStorage/provider"),
+        )
+        .unwrap();
+        fs::write(temp.path().join("old/local-cache"), b"local").unwrap();
+        fs::write(temp.path().join("local.tmp"), b"safe").unwrap();
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![CleanupRootSpec::new(
+                    temp.path(),
+                    "fixture",
+                    CleanupCandidateKind::CacheDirectory,
+                    Duration::ZERO,
+                )],
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(report.candidates[0].name, "local.tmp");
+        assert!(report.unreadable_entries > 0);
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.message.contains("클라우드"))
+        );
+    }
 
     #[test]
     fn scans_direct_cleanup_candidates_and_sums_nested_files() {

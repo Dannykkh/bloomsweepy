@@ -9,17 +9,20 @@ repository.workspace = true
 blake3.workspace = true
 dirs.workspace = true
 encoding_rs.workspace = true
-jwalk.workspace = true
 pdf-extract = "0.12"
 quick-xml.workspace = true
 rayon.workspace = true
 rusqlite.workspace = true
 serde.workspace = true
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 thiserror.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

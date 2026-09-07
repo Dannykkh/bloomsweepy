@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
-use crate::{bounded_worker_threads, system_time_ms};
+use crate::index_budget::{BuildGuard, IndexBudget, run_guarded};
+use crate::system_time_ms;
 
 mod query;
 #[cfg(windows)]
@@ -360,8 +361,61 @@ pub fn build_file_catalog<F, C>(
     root: impl AsRef<Path>,
     database_path: impl AsRef<Path>,
     config: FileCatalogConfig,
+    on_progress: F,
+    should_cancel: C,
+) -> Result<FileCatalogReport, FileCatalogError>
+where
+    F: FnMut(FileCatalogProgress),
+    C: Fn() -> bool + Sync,
+{
+    build_file_catalog_with_budget(
+        root.as_ref(),
+        database_path.as_ref(),
+        config,
+        on_progress,
+        should_cancel,
+        IndexBudget::default(),
+    )
+}
+
+fn build_file_catalog_with_budget<F, C>(
+    root: &Path,
+    database_path: &Path,
+    config: FileCatalogConfig,
+    on_progress: F,
+    should_cancel: C,
+    budget: IndexBudget,
+) -> Result<FileCatalogReport, FileCatalogError>
+where
+    F: FnMut(FileCatalogProgress),
+    C: Fn() -> bool + Sync,
+{
+    run_guarded(
+        database_path,
+        budget,
+        &should_cancel,
+        || FileCatalogError::Cancelled,
+        FileCatalogError::Index,
+        |guard| {
+            build_file_catalog_inner(
+                root,
+                database_path,
+                config,
+                on_progress,
+                || should_cancel() || guard.stopped(),
+                guard,
+            )
+        },
+    )
+}
+
+fn build_file_catalog_inner<F, C>(
+    root: &Path,
+    database_path: &Path,
+    config: FileCatalogConfig,
     mut on_progress: F,
     should_cancel: C,
+    guard: &BuildGuard,
 ) -> Result<FileCatalogReport, FileCatalogError>
 where
     F: FnMut(FileCatalogProgress),
@@ -369,7 +423,7 @@ where
 {
     let started = Instant::now();
     let config = config.bounded();
-    let requested_root = root.as_ref();
+    let requested_root = root;
     crate::scan_policy::ensure_local_path(requested_root).map_err(FileCatalogError::Index)?;
     if !requested_root.exists() {
         return Err(FileCatalogError::MissingPath(display_path(requested_root)));
@@ -383,9 +437,22 @@ where
         .map_err(|error| FileCatalogError::Index(error.to_string()))?;
     crate::scan_policy::ensure_local_path(&root).map_err(FileCatalogError::Index)?;
     let root_string = display_path(&root);
-    let database_path = database_path.as_ref().to_path_buf();
+    let database_path = database_path.to_path_buf();
     let mut connection = open_index(&database_path)?;
-    initialize_schema(&connection)?;
+    guard
+        .configure(&connection)
+        .map_err(FileCatalogError::Index)?;
+    {
+        // Schema upgrades are transactional as well: resource interruption must
+        // not leave an older, usable index half migrated.
+        let schema = connection.transaction().map_err(index_error)?;
+        initialize_schema(&schema)?;
+        guard.check_now().map_err(FileCatalogError::Index)?;
+        if should_cancel() {
+            return Err(FileCatalogError::Cancelled);
+        }
+        schema.commit().map_err(index_error)?;
+    }
     #[cfg(windows)]
     let previous = read_meta(&connection)?;
     let (mut source, fallback_issue) = CatalogSource::select(&root);
@@ -415,6 +482,7 @@ where
                 &mut on_progress,
                 &should_cancel,
                 started,
+                guard,
             )? {
                 IncrementalBuild::Applied(report) => return Ok(report),
                 IncrementalBuild::FullRequired(message) => {
@@ -459,6 +527,7 @@ where
         &should_cancel,
         initial_issues,
         started,
+        guard,
     )
 }
 
@@ -474,6 +543,7 @@ fn build_full_catalog<F, C>(
     should_cancel: &C,
     initial_issues: Vec<FileCatalogIssue>,
     started: Instant,
+    guard: &BuildGuard,
 ) -> Result<FileCatalogReport, FileCatalogError>
 where
     F: FnMut(FileCatalogProgress),
@@ -598,6 +668,7 @@ where
             .map_err(index_error)? as u64,
     );
     rebuild_bulk_indexes(&transaction)?;
+    guard.check_now().map_err(FileCatalogError::Index)?;
     if should_cancel() {
         return Err(FileCatalogError::Cancelled);
     }
@@ -623,8 +694,9 @@ where
     if should_cancel() {
         return Err(FileCatalogError::Cancelled);
     }
+    guard.check_now().map_err(FileCatalogError::Index)?;
     transaction.commit().map_err(index_error)?;
-    checkpoint_index(connection)?;
+    crate::index_budget::checkpoint_after_commit(connection);
 
     Ok(FileCatalogReport {
         status,
@@ -756,7 +828,7 @@ impl CatalogRecordSink for CatalogWriter<'_, '_> {
                 record.source_parent_record_id.map(saturating_u64_to_i64),
                 self.observed_at_ms,
             ])
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| crate::index_budget::sqlite_error_message(&error))?;
 
         self.stats.indexed_entries = self.stats.indexed_entries.saturating_add(1);
         self.stats.indexed_bytes = self
@@ -882,18 +954,16 @@ fn enumerate_portable_walk<C>(
 where
     C: Fn() -> bool + Sync,
 {
-    for item in jwalk::WalkDir::new(root)
-        .follow_links(false)
-        .skip_hidden(false)
-        .parallelism(jwalk::Parallelism::RayonNewPool(bounded_worker_threads()))
-        .process_read_dir(|_, _, _, entries| crate::scan_policy::prune_cloud_entries(entries))
-    {
+    for item in crate::streaming_walk::StreamingWalk::new(root, should_cancel) {
         if should_cancel() {
             return Err(FileCatalogError::Cancelled);
         }
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
+                if error.is_resource_limit() {
+                    return Err(FileCatalogError::Index(error.to_string()));
+                }
                 writer.add_unreadable_entries(1);
                 writer.issue(None, error.to_string());
                 continue;
@@ -1038,12 +1108,6 @@ fn write_meta(
     Ok(())
 }
 
-fn checkpoint_index(connection: &Connection) -> Result<(), FileCatalogError> {
-    connection
-        .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
-        .map_err(index_error)
-}
-
 #[cfg(windows)]
 enum IncrementalBuild {
     Applied(FileCatalogReport),
@@ -1064,6 +1128,7 @@ fn apply_ntfs_incremental<F, C>(
     on_progress: &mut F,
     should_cancel: &C,
     started: Instant,
+    guard: &BuildGuard,
 ) -> Result<IncrementalBuild, FileCatalogError>
 where
     F: FnMut(FileCatalogProgress),
@@ -1255,8 +1320,9 @@ where
     if should_cancel() {
         return Err(FileCatalogError::Cancelled);
     }
+    guard.check_now().map_err(FileCatalogError::Index)?;
     transaction.commit().map_err(index_error)?;
-    checkpoint_index(connection)?;
+    crate::index_budget::checkpoint_after_commit(connection);
 
     Ok(IncrementalBuild::Applied(FileCatalogReport {
         status,
@@ -1808,10 +1874,10 @@ fn open_index(path: &Path) -> Result<Connection, FileCatalogError> {
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
-             PRAGMA secure_delete = ON;
-             PRAGMA temp_store = MEMORY;",
+             PRAGMA secure_delete = ON;",
         )
         .map_err(index_error)?;
+    crate::index_budget::configure_connection(&connection).map_err(index_error)?;
     Ok(connection)
 }
 
@@ -1821,11 +1887,9 @@ fn open_existing_index(path: &Path) -> Result<Connection, FileCatalogError> {
         .busy_timeout(Duration::from_secs(2))
         .map_err(index_error)?;
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA temp_store = MEMORY;",
-        )
+        .execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(index_error)?;
+    crate::index_budget::configure_connection(&connection).map_err(index_error)?;
     Ok(connection)
 }
 
@@ -2202,7 +2266,7 @@ fn saturating_u128_to_i64(value: u128) -> i64 {
 }
 
 fn index_error(error: rusqlite::Error) -> FileCatalogError {
-    FileCatalogError::Index(error.to_string())
+    FileCatalogError::Index(crate::index_budget::sqlite_error_message(&error))
 }
 
 #[cfg(test)]
@@ -2234,6 +2298,82 @@ mod tests {
             timezone_offset_minutes: 0,
             sort: FileCatalogSort::Relevance,
             max_results: 100,
+        }
+    }
+
+    #[test]
+    fn low_disk_during_finalization_preserves_catalog_and_allows_bounded_retries() {
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicU64;
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("stable.txt"), "stable").unwrap();
+        let database = temporary.path().join("catalog.sqlite3");
+        build(&root, &database);
+        fs::write(root.join("new.txt"), "new").unwrap();
+        let free_bytes = Arc::new(AtomicU64::new(u64::MAX));
+        let budget = IndexBudget {
+            max_database_bytes: 1024 * 1024,
+            max_storage_bytes: 2 * 1024 * 1024,
+            min_free_bytes: 1024,
+            free_bytes: Some(Arc::clone(&free_bytes)),
+        };
+        let failure = build_file_catalog_with_budget(
+            &root,
+            &database,
+            FileCatalogConfig::default(),
+            |progress| {
+                if matches!(progress.phase, FileCatalogPhase::Finalizing) {
+                    free_bytes.store(0, Ordering::Release);
+                }
+            },
+            || false,
+            budget.clone(),
+        );
+        assert!(
+            matches!(failure, Err(FileCatalogError::Index(message)) if message.contains("여유 공간"))
+        );
+        assert_eq!(
+            file_catalog_status(&database)
+                .unwrap()
+                .unwrap()
+                .indexed_files,
+            1
+        );
+        assert_eq!(
+            search_file_catalog(&database, request("stable"))
+                .unwrap()
+                .results
+                .len(),
+            1
+        );
+        assert!(
+            search_file_catalog(&database, request("new"))
+                .unwrap()
+                .results
+                .is_empty()
+        );
+
+        free_bytes.store(u64::MAX, Ordering::Release);
+        for _ in 0..4 {
+            let report = build_file_catalog_with_budget(
+                &root,
+                &database,
+                FileCatalogConfig::default(),
+                |_| {},
+                || false,
+                budget.clone(),
+            )
+            .unwrap();
+            assert_eq!(report.status.indexed_files, 2);
+            assert!(fs::metadata(&database).unwrap().len() <= budget.max_database_bytes);
+            assert_eq!(
+                fs::metadata(database.with_file_name("catalog.sqlite3-wal"))
+                    .map(|metadata| metadata.len())
+                    .unwrap_or(0),
+                0
+            );
         }
     }
 

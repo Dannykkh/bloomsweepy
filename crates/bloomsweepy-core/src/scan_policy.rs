@@ -1,4 +1,4 @@
-//! Local-only scanning: prune cloud roots before jwalk schedules their children.
+//! Local-only scanning: prune cloud roots before opening their directory stream.
 //! This is independent of the dashboard's mounted-volume visibility filter.
 
 use std::fs;
@@ -75,21 +75,6 @@ pub(crate) fn ensure_local_path(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn prune_cloud_entries<C: jwalk::ClientState>(
-    entries: &mut Vec<Result<jwalk::DirEntry<C>, jwalk::Error>>,
-) {
-    entries.retain(|item| match item {
-        Ok(entry) => {
-            !is_cloud_path(&entry.path())
-                // Directory placeholders must be pruned BEFORE read_dir. Files
-                // are checked with the metadata already read by each consumer.
-                && (!entry.file_type().is_dir()
-                    || !entry.metadata().is_ok_and(|metadata| is_online_only(&metadata)))
-        }
-        Err(_) => true, // Preserve genuine access errors for the existing reports.
-    });
-}
-
 pub(crate) fn is_online_only(metadata: &fs::Metadata) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -105,6 +90,19 @@ pub(crate) fn is_online_only(metadata: &fs::Metadata) -> bool {
         metadata.file_attributes() & (0x1000 | 0x40000 | 0x400000) != 0
     }
     #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        let _ = metadata;
+        false
+    }
+}
+
+pub(crate) fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
     {
         let _ = metadata;
         false
@@ -155,18 +153,8 @@ mod tests {
         let cloud = temp.path().join("Users/test/Library/CloudStorage/provider");
         fs::create_dir_all(&cloud).unwrap();
         fs::write(cloud.join("private.txt"), b"must not be read").unwrap();
-        let entries: Vec<_> = jwalk::WalkDir::new(temp.path())
-            .process_read_dir(|depth, path, _, entries| {
-                if depth.is_some() {
-                    assert!(
-                        !is_cloud_path(path),
-                        "cloud read_dir was scheduled: {path:?}"
-                    );
-                }
-                prune_cloud_entries(entries);
-            })
-            .into_iter()
-            .collect();
+        let entries: Vec<_> =
+            crate::streaming_walk::StreamingWalk::new(temp.path(), &|| false).collect();
         assert!(
             entries
                 .iter()
