@@ -15,6 +15,20 @@ BroomSweepy는 Windows와 macOS용 **대화형 파일관리 시스템**을 만�
 
 **Rust + Tauri 2 + React가 기본 프로젝트**이며, 기존 SwiftUI 앱의 시원한 카드·아이콘·글래스 UI 경험을 이어갑니다. `BroomSweepy/`의 Swift 소스는 레거시 참고 구현입니다. 큰 파일·검증된 중복 파일·문서 검색은 로컬 Rust 엔진으로 동작하며, 기존 탐색·검사 화면은 AI 연결 없이도 사용할 수 있습니다. 하나의 설치본에서 English·한국어·日本語·简体中文을 지원하며, 첫 실행 언어는 영어입니다. `Settings > Display language`에서 바꿀 수 있습니다.
 
+## 15초 브랜드 필름
+
+<p align="center">
+  <a href="docs/assets/video/BroomSweepy-15s.mp4">
+    <img src="docs/assets/video/BroomSweepy-15s-poster.jpg" width="880" alt="BroomSweepy 15초 브랜드 필름 — 용량이 꽉 찼다">
+  </a>
+</p>
+
+<p align="center">
+  <a href="docs/assets/video/BroomSweepy-15s.mp4"><strong>▶ 영상 보기 — AI야. 정리해. 끝.</strong></a>
+</p>
+
+매일 쌓이는 파일·캐시·앱·메모리 앞에서 무엇부터 지울지 고민하는 순간을 15초에 담았습니다. 실제 BroomSweepy 화면과 브랜드 연출을 결합했으며, 노트북을 닫는 한 번의 동작으로 정리가 끝나는 감각을 표현합니다.
+
 ## v1.7.0 — 대화형 파일관리와 저자원 보호
 
 [정식 릴리스와 설치 파일](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.7.0) · [변경 기록](CHANGELOG.md)
