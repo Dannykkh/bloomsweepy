@@ -62,6 +62,7 @@ pub(crate) enum ActionHistoryKind {
     CleanupCandidates,
     DirectoryFile,
     DirectoryFolder,
+    AssistantFiles,
     ApplicationBundle,
     ApplicationData,
     #[default]
@@ -1170,6 +1171,24 @@ mod tests {
         ));
         assert!(report.entries[0].cancelled);
         assert_eq!(report.entries[1].moved_bytes, 10);
+    }
+
+    #[test]
+    fn conversational_files_have_a_recoverable_history_kind() {
+        let temp = tempfile::tempdir().unwrap();
+        let journal = temp.path().join("journal.jsonl");
+        fs::write(&journal, concat!(
+            "{\"schemaVersion\":1,\"timestampUnixMs\":100,\"operationId\":\"chat\",\"event\":\"planned\",\"actionKind\":\"assistantFiles\",\"items\":[{\"path\":\"local-only\",\"logicalBytes\":16}]}\n",
+            "{\"timestampUnixMs\":120,\"operationId\":\"chat\",\"event\":\"completed\",\"actionKind\":\"assistantFiles\",\"requestedCount\":2,\"movedCount\":2,\"movedBytes\":16,\"cancelled\":false,\"stoppedEarly\":false}\n"
+        )).unwrap();
+        let report = inspect_action_history(journal).unwrap();
+        assert!(report.issues.is_empty());
+        assert_eq!(report.entries.len(), 1);
+        assert!(matches!(
+            report.entries[0].action_kind,
+            ActionHistoryKind::AssistantFiles
+        ));
+        assert_eq!(report.entries[0].moved_count, 2);
     }
 
     #[test]

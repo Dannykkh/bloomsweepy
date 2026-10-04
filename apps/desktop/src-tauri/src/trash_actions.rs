@@ -133,6 +133,7 @@ pub(crate) enum TrashActionKind {
     DirectoryFile,
     EmptyDirectories,
     DirectoryFolder,
+    AssistantFiles,
     #[cfg(any(target_os = "macos", test))]
     ApplicationBundle,
     #[cfg(any(target_os = "macos", test))]
@@ -232,6 +233,49 @@ pub(crate) async fn trash_verified_empty_directories(
     })
     .await
     .map_err(|error| format!("빈 폴더 휴지통 이동 작업이 중단됐습니다: {error}"))?
+}
+
+pub(crate) async fn trash_verified_assistant_files(
+    app: AppHandle,
+    items: Vec<VerifiedTrashItem>,
+    cancellation: Arc<AtomicBool>,
+) -> Result<TrashOperationResult, String> {
+    trash_assistant_files_worker(app, items, cancellation, None).await
+}
+
+/// Keep the runtime lease in the worker if the Webview request is dropped.
+pub(crate) async fn trash_verified_cleanup_tree_files(
+    app: AppHandle,
+    items: Vec<VerifiedTrashItem>,
+    cancellation: Arc<AtomicBool>,
+    completion: ScanCompletionGuard,
+) -> Result<TrashOperationResult, String> {
+    trash_assistant_files_worker(app, items, cancellation, Some(completion)).await
+}
+
+async fn trash_assistant_files_worker(
+    app: AppHandle,
+    items: Vec<VerifiedTrashItem>,
+    cancellation: Arc<AtomicBool>,
+    completion: Option<ScanCompletionGuard>,
+) -> Result<TrashOperationResult, String> {
+    let journal_path = action_journal_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _completion = completion;
+        validate_requested_count(items.len())?;
+        execute_verified_items(
+            items,
+            journal_path,
+            TrashActionKind::AssistantFiles,
+            &cancellation,
+            |progress| {
+                let _ = app.emit("trash-progress", progress);
+            },
+            &SystemTrash,
+        )
+    })
+    .await
+    .map_err(|error| format!("대화 파일 휴지통 이동 작업이 중단됐습니다: {error}"))?
 }
 
 impl Journal {
@@ -839,6 +883,64 @@ mod tests {
     use super::*;
     use bloomsweepy_core::{ScanConfig, scan_path};
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    #[ignore = "Opt-in native Trash check: moves only two tiny fixtures created by this test"]
+    fn native_assistant_file_trash_synthetic_only() {
+        let temp = action_tempdir();
+        let root = temp.path().canonicalize().unwrap();
+        let nonce = crate::assistant_tools::new_id().unwrap();
+        let folder = root.join(format!("broomsweepy-qa-folder-{nonce}"));
+        let file = root.join(format!("broomsweepy-qa-file-{nonce}.txt"));
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("synthetic.txt"), "synthetic").unwrap();
+        fs::write(&file, "fixture").unwrap();
+        fs::write(root.join("keep.txt"), "keep").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("keep.txt"), folder.join("outside-link")).unwrap();
+        let report = bloomsweepy_core::scan_directory_level(
+            &root,
+            bloomsweepy_core::DirectoryScanConfig::default(),
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let items = vec![
+            bloomsweepy_core::validate_directory_trash_folder(
+                &report,
+                folder.to_str().unwrap(),
+                || false,
+            )
+            .unwrap(),
+            bloomsweepy_core::validate_directory_trash_file(
+                &report,
+                file.to_str().unwrap(),
+                || false,
+            )
+            .unwrap(),
+        ];
+        let result = execute_verified_items(
+            items,
+            root.join("journal.jsonl"),
+            TrashActionKind::AssistantFiles,
+            &AtomicBool::new(false),
+            |_| {},
+            &SystemTrash,
+        )
+        .unwrap();
+        assert_eq!(result.moved_count, 2, "{result:?}");
+        assert!(!folder.exists());
+        assert!(!file.exists());
+        assert_eq!(fs::read_to_string(root.join("keep.txt")).unwrap(), "keep");
+        assert!(
+            fs::read_to_string(root.join("journal.jsonl"))
+                .unwrap()
+                .contains("assistantFiles")
+        );
+        println!(
+            "Native Trash moved two synthetic QA items (16 bytes); unselected fixture preserved."
+        );
+    }
 
     struct FailSecondMove {
         calls: AtomicUsize,

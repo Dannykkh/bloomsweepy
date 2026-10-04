@@ -6,15 +6,18 @@ use crate::StoredReports;
 use crate::{ScanCompletionGuard, ScanRuntime, system_inventory, trash_actions};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
 use tauri::Manager;
 use tauri::{AppHandle, State, WebviewWindow};
 
 #[cfg(any(windows, test))]
 const WINDOWS_UNINSTALL_SETTINGS_URI: &str = "ms-settings:appsfeatures";
+const INVENTORY_CACHE_TTL_MS: u64 = 60_000;
 
 #[derive(Default)]
 pub(crate) struct ApplicationActionsState {
+    /// Shared read-only source for UI/chat/MCP paging. A real refresh replaces
+    /// the inventory and its removal identities together; paging never does.
+    inventory: std::sync::Mutex<Option<CachedApplicationInventory>>,
     #[cfg(target_os = "macos")]
     inner: std::sync::Mutex<mac::ActionsInner>,
     /// Refreshing an inventory must not permit retries after an uncertain OS reply.
@@ -29,6 +32,23 @@ pub(crate) struct ApplicationInventory {
     inventory_id: String,
     applications: Vec<ApplicationEntry>,
     issues: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CachedApplicationInventory {
+    pub(crate) inventory: ApplicationInventory,
+    pub(crate) captured_at_unix_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApplicationInspection {
+    application: ApplicationEntry,
+    inventory_id: String,
+    captured_at_unix_ms: u64,
+    related_data: Vec<DataCandidate>,
+    related_data_supported: bool,
+    warnings: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -126,11 +146,22 @@ pub(crate) async fn get_application_inventory(
     runtime: State<'_, ScanRuntime>,
 ) -> Result<ApplicationInventory, String> {
     require_main(&window)?;
+    load_inventory(app, runtime.inner()).await
+}
+
+async fn load_inventory(
+    app: AppHandle,
+    runtime: &ScanRuntime,
+) -> Result<ApplicationInventory, String> {
     let cancellation = runtime.begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
     let worker_completion = _completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _completion = worker_completion;
+        *app.state::<ApplicationActionsState>()
+            .inventory
+            .lock()
+            .map_err(|_| "앱 목록 캐시를 잠그지 못했습니다")? = None;
         #[cfg(target_os = "macos")]
         {
             *app.state::<ApplicationActionsState>()
@@ -145,12 +176,9 @@ pub(crate) async fn get_application_inventory(
         cancelled(&cancellation)?;
         let inventory_id = opaque_id()?;
         #[cfg(target_os = "macos")]
-        {
-            mac::publish_inventory(&app, inventory, inventory_id, &cancellation)
-        }
+        let published = mac::publish_inventory(&app, inventory, inventory_id, &cancellation)?;
         #[cfg(not(target_os = "macos"))]
-        {
-            let _ = app;
+        let published = {
             let applications = inventory
                 .applications
                 .into_iter()
@@ -175,7 +203,7 @@ pub(crate) async fn get_application_inventory(
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(ApplicationInventory {
+            ApplicationInventory {
                 platform: if cfg!(windows) {
                     "windows"
                 } else {
@@ -184,11 +212,136 @@ pub(crate) async fn get_application_inventory(
                 inventory_id,
                 applications,
                 issues: inventory.issues,
-            })
-        }
+            }
+        };
+        cancelled(&cancellation)?;
+        *app.state::<ApplicationActionsState>()
+            .inventory
+            .lock()
+            .map_err(|_| "앱 목록 캐시를 잠그지 못했습니다")? = Some(CachedApplicationInventory {
+            inventory: published.clone(),
+            captured_at_unix_ms: unix_time_ms(),
+        });
+        Ok(published)
     })
     .await
     .map_err(|error| format!("앱 목록 조회가 중단됐습니다: {error}"))?
+}
+
+/// Trusted service entry point: UI wrappers retain their WebView gate, while
+/// callers of this helper must have passed the common app tool access check.
+pub(crate) async fn inventory_for_tools(
+    app: &AppHandle,
+) -> Result<CachedApplicationInventory, String> {
+    if let Some(cached) = app
+        .state::<ApplicationActionsState>()
+        .inventory
+        .lock()
+        .map_err(|_| "앱 목록 캐시를 잠그지 못했습니다")?
+        .clone()
+    {
+        #[cfg(target_os = "macos")]
+        let has_ready_plan = app
+            .state::<ApplicationActionsState>()
+            .inner
+            .lock()
+            .map_err(|_| "앱 확인 상태를 잠그지 못했습니다")?
+            .has_live_plan();
+        #[cfg(not(target_os = "macos"))]
+        let has_ready_plan = false;
+        if inventory_cache_is_reusable(cached.captured_at_unix_ms, unix_time_ms(), has_ready_plan) {
+            return Ok(cached);
+        }
+    }
+    load_inventory(app.clone(), app.state::<ScanRuntime>().inner()).await?;
+    app.state::<ApplicationActionsState>()
+        .inventory
+        .lock()
+        .map_err(|_| "앱 목록 캐시를 잠그지 못했습니다".to_owned())?
+        .clone()
+        .ok_or_else(|| "앱 목록이 변경됐습니다. 새 목록에서 다시 선택하세요".to_owned())
+}
+
+fn inventory_cache_is_reusable(captured_at: u64, now: u64, has_ready_plan: bool) -> bool {
+    has_ready_plan || now.saturating_sub(captured_at) < INVENTORY_CACHE_TTL_MS
+}
+
+pub(crate) async fn inspect_for_tools(
+    app: &AppHandle,
+    inventory_id: &str,
+    application_id: &str,
+) -> Result<ApplicationInspection, String> {
+    let cached = app
+        .state::<ApplicationActionsState>()
+        .inventory
+        .lock()
+        .map_err(|_| "앱 목록 캐시를 잠그지 못했습니다")?
+        .clone()
+        .ok_or_else(|| "앱 목록이 없습니다. 먼저 설치 앱을 조회하세요".to_owned())?;
+    if cached.inventory.inventory_id != inventory_id {
+        return Err("앱 목록이 변경됐습니다. 새 목록에서 다시 선택하세요".to_owned());
+    }
+    let application = cached
+        .inventory
+        .applications
+        .iter()
+        .find(|entry| entry.id == application_id)
+        .cloned()
+        .ok_or_else(|| "앱 목록에서 대상을 다시 선택하세요".to_owned())?;
+    #[cfg(target_os = "macos")]
+    let (related_data, warnings) = {
+        let cancellation = app.state::<ScanRuntime>().begin()?;
+        let completion = ScanCompletionGuard::new(app.clone());
+        let worker_completion = completion.clone();
+        let worker_app = app.clone();
+        let request = PrepareApplicationRequest {
+            inventory_id: inventory_id.to_owned(),
+            application_id: application_id.to_owned(),
+        };
+        tauri::async_runtime::spawn_blocking(move || {
+            let _completion = worker_completion;
+            mac::inspect_candidates(&worker_app, request, &cancellation)
+        })
+        .await
+        .map_err(|error| format!("앱 관련 데이터 확인을 완료하지 못했습니다: {error}"))??
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (related_data, warnings) = (Vec::new(), Vec::new());
+    Ok(ApplicationInspection {
+        application,
+        inventory_id: inventory_id.to_owned(),
+        captured_at_unix_ms: cached.captured_at_unix_ms,
+        related_data,
+        related_data_supported: cfg!(target_os = "macos"),
+        warnings,
+    })
+}
+
+pub(crate) async fn prepare_for_tools(
+    app: &AppHandle,
+    inventory_id: &str,
+    application_id: &str,
+    candidate_ids: Option<Vec<String>>,
+) -> Result<ApplicationPlan, String> {
+    prepare(
+        app.clone(),
+        app.state::<ScanRuntime>().inner(),
+        PrepareApplicationRequest {
+            inventory_id: inventory_id.to_owned(),
+            application_id: application_id.to_owned(),
+        },
+        candidate_ids,
+    )
+    .await
+}
+
+fn unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[tauri::command]
@@ -539,6 +692,11 @@ mod mac {
     }
 
     impl ActionsInner {
+        pub(super) fn has_live_plan(&self) -> bool {
+            self.pending
+                .as_ref()
+                .is_some_and(|plan| plan.deadline > Instant::now())
+        }
         fn record(&self, request: &PrepareApplicationRequest) -> Result<Record, String> {
             if self.inventory_id != request.inventory_id {
                 return Err("앱 목록이 변경됐습니다. 새 목록에서 다시 선택하세요".to_owned());
@@ -547,6 +705,18 @@ mod mac {
                 .get(&request.application_id)
                 .cloned()
                 .ok_or_else(|| "앱 목록에서 대상을 다시 선택하세요".to_owned())
+        }
+        fn publish_inspected_candidates(
+            &mut self,
+            request: &PrepareApplicationRequest,
+            candidates: Vec<StoredCandidate>,
+        ) -> Result<(), String> {
+            self.record(request)?;
+            self.entries
+                .get_mut(&request.application_id)
+                .expect("checked application inspection record")
+                .candidates = candidates;
+            Ok(())
         }
         pub(super) fn claim(&mut self, id: &str, data_only: bool) -> Result<StoredPlan, String> {
             let plan = self.pending.as_ref().ok_or_else(|| {
@@ -681,6 +851,56 @@ mod mac {
             pending: None,
         };
         Ok(result)
+    }
+
+    /// Discover only the supported cache/preferences candidates. This does not
+    /// prepare, replace, dismiss, or consume any removal plan.
+    pub(super) fn inspect_candidates(
+        app: &AppHandle,
+        request: PrepareApplicationRequest,
+        cancellation: &AtomicBool,
+    ) -> Result<(Vec<DataCandidate>, Vec<String>), String> {
+        let state = app.state::<ApplicationActionsState>();
+        let record = state
+            .inner
+            .lock()
+            .map_err(|_| "앱 확인 상태를 잠그지 못했습니다")?
+            .record(&request)?;
+        cancelled(cancellation)?;
+        if let Some(reason) = record.view.protection_reason {
+            return Ok((Vec::new(), vec![reason]));
+        }
+        let bundle = record
+            .bundle
+            .ok_or_else(|| "안전한 앱 본체를 확인하지 못했습니다".to_owned())?;
+        verify_app_current(&bundle, record.removed)?;
+        if record.shared_id {
+            return Ok((
+                Vec::new(),
+                vec![
+                    "같은 앱 식별자를 사용하는 다른 앱이 있어 관련 데이터는 보호됩니다".to_owned(),
+                ],
+            ));
+        }
+        let candidates = if record.candidates.is_empty() && !record.removed {
+            collect_candidates(&bundle, cancellation)?
+        } else {
+            record.candidates
+        };
+        cancelled(cancellation)?;
+        verify_app_current(&bundle, record.removed)?;
+        let mut inner = state
+            .inner
+            .lock()
+            .map_err(|_| "앱 확인 상태를 잠그지 못했습니다")?;
+        inner.publish_inspected_candidates(&request, candidates.clone())?;
+        Ok((
+            candidates.into_iter().map(|candidate| candidate.view).collect(),
+            vec![
+                "후보는 정확한 앱 식별자에 연결된 캐시·환경설정만 포함하며, 불필요하다는 보장은 아닙니다".to_owned(),
+                "사용자 문서·공유 데이터·Application Support·Containers는 포함하지 않습니다".to_owned(),
+            ],
+        ))
     }
 
     pub(super) fn prepare(
@@ -1349,6 +1569,46 @@ mod mac {
         }
 
         #[test]
+        fn readonly_candidate_publication_preserves_ready_plan_and_rejects_stale_inventory() {
+            let mut state = plan_fixture(false);
+            state.entries.insert(
+                "app".to_owned(),
+                Record {
+                    view: ApplicationEntry {
+                        id: "app".to_owned(),
+                        display_name: "Fixture".to_owned(),
+                        display_version: None,
+                        publisher: None,
+                        install_location: None,
+                        estimated_bytes: None,
+                        removal_mode: "trashBundle",
+                        protection_reason: None,
+                    },
+                    bundle: None,
+                    candidates: Vec::new(),
+                    removed: false,
+                    shared_id: false,
+                },
+            );
+            let mut request = PrepareApplicationRequest {
+                inventory_id: "inventory".to_owned(),
+                application_id: "app".to_owned(),
+            };
+            state
+                .publish_inspected_candidates(&request, Vec::new())
+                .unwrap();
+            assert!(state.has_live_plan());
+            assert_eq!(state.pending.as_ref().unwrap().view.plan_id, "plan");
+            request.inventory_id = "stale".to_owned();
+            assert!(
+                state
+                    .publish_inspected_candidates(&request, Vec::new())
+                    .is_err()
+            );
+            assert!(state.claim("plan", false).is_ok());
+        }
+
+        #[test]
         fn concurrent_application_claim_can_only_succeed_once() {
             let state = std::sync::Mutex::new(plan_fixture(false));
             std::thread::scope(|scope| {
@@ -1506,6 +1766,13 @@ mod mac {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_pages_preserve_live_review_but_unreviewed_cache_can_refresh() {
+        assert!(inventory_cache_is_reusable(100, 200, false));
+        assert!(!inventory_cache_is_reusable(100, 60_100, false));
+        assert!(inventory_cache_is_reusable(100, 120_100, true));
+    }
 
     #[test]
     fn windows_uninstall_target_is_fixed_os_settings_only() {

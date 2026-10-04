@@ -1,0 +1,45 @@
+.cleanup-tree { border: 1px solid var(--line); border-radius: 18px; background: var(--surface); min-width: 0; overflow: hidden; }
+.cleanup-tree__header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 24px; }
+.cleanup-tree__header > div { min-width: 0; flex: 1 1 260px; }
+.cleanup-tree__header h2 { margin: 4px 0 8px; font-size: 18px; overflow-wrap: anywhere; }
+.cleanup-tree__header p:not(.eyebrow) { margin: 0; color: var(--text-muted); overflow-wrap: anywhere; }
+.cleanup-tree__toolbar { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 24px; }
+.cleanup-tree__scope { padding: 0 24px; color: var(--text-muted); line-height: 1.6; }
+.cleanup-tree__viewport { max-height: 600px; overflow-y: auto; overscroll-behavior: contain; border-block: 1px solid var(--line); }
+.cleanup-tree__list { list-style: none; padding: 0; margin: 0; }
+.cleanup-tree__row { display: grid; grid-template-columns: 44px 44px 20px minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 10px 16px 10px 4px; border-bottom: 1px solid var(--line); }
+.cleanup-tree__row.is-checked, .cleanup-tree__row.is-mixed { background: var(--surface-strong); }
+.cleanup-tree__row.is-blocked { color: var(--text-muted); }
+.cleanup-tree__disclosure, .cleanup-tree__check, .cleanup-tree__disclosure-space { display: flex; align-items: center; justify-content: center; width: 44px; min-height: 44px; }
+.cleanup-tree__disclosure { border: 0; background: transparent; border-radius: 8px; }
+.cleanup-tree__check { cursor: pointer; }
+.cleanup-tree__check input { width: 18px; height: 18px; accent-color: var(--primary); }
+.cleanup-tree__kind { display: inline-flex; color: var(--text-muted); }
+.cleanup-tree__identity { min-width: 0; padding: 4px 8px; display: flex; flex-direction: column; gap: 5px; overflow-wrap: anywhere; }
+.cleanup-tree__identity strong { font-weight: 650; }
+.cleanup-tree__identity span, .cleanup-tree__identity small { color: var(--text-muted); font-size: 14px; line-height: 1.5; }
+.cleanup-tree__identity .cleanup-tree__warning { color: var(--warning); }
+.cleanup-tree__size { padding: 4px 0 4px 12px; text-align: right; font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; font-size: 14px; }
+.cleanup-tree__open { grid-column: 4 / -1; padding: 4px 8px; }
+.cleanup-tree__children { margin-left: var(--cleanup-indent, 24px); border-left: 1px solid var(--line); }
+.cleanup-tree__children[hidden] { display: none; }
+.cleanup-tree__pages { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 8px 16px; color: var(--text-muted); font-size: 14px; }
+.cleanup-tree__pages button, .cleanup-tree .text-button { min-height: 44px; }
+.cleanup-tree__branch-state, .cleanup-tree__branch-note { display: flex; align-items: flex-start; gap: 8px; padding: 12px 16px; margin: 0; font-size: 14px; color: var(--text-muted); line-height: 1.6; }
+.cleanup-tree__branch-note svg { flex-shrink: 0; margin-top: 3px; }
+.cleanup-tree__notice { display: flex; align-items: flex-start; gap: 10px; margin: 12px 24px; font-size: 14px; line-height: 1.6; color: var(--warning); }
+.cleanup-tree__notice svg { flex-shrink: 0; margin-top: 2px; }
+.cleanup-tree__notice.is-error { color: var(--danger); }
+.cleanup-tree__selection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; padding: 24px; }
+.cleanup-tree__selection > div { display: flex; flex-direction: column; flex: 1 1 300px; gap: 8px; min-width: 0; }
+.cleanup-tree__selection span { color: var(--text-muted); font-size: 14px; line-height: 1.6; }
+@media (max-width: 680px) {
+  .cleanup-tree__header, .cleanup-tree__selection { padding: 16px; }
+  .cleanup-tree__toolbar { padding-inline: 16px; }
+  .cleanup-tree__scope { padding-inline: 16px; }
+  .cleanup-tree__row { grid-template-columns: 44px 44px 20px minmax(0, 1fr); padding-right: 8px; }
+  .cleanup-tree__size { grid-column: 4; text-align: left; padding-left: 8px; }
+  .cleanup-tree__open { grid-column: 2 / -1; }
+  .cleanup-tree__children { margin-left: min(var(--cleanup-indent, 24px), 12px); }
+}
+@media (prefers-reduced-motion: reduce) { .cleanup-tree button:active:not(:disabled) { transform: none; } }

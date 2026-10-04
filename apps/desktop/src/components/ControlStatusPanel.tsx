@@ -21,6 +21,9 @@ interface ControlStatusPanelProps {
   cleanupAccessError: string | null;
   onToggleCleanupAccess: () => void;
   onReviewPending: () => void;
+  updatingInspectionAccess?: boolean;
+  inspectionAccessError?: string | null;
+  onToggleInspectionAccess?: () => void;
 }
 
 const operationNames: Record<string, MessageKey> = {
@@ -39,6 +42,8 @@ const operationNames: Record<string, MessageKey> = {
   documentSearch: "문서 검색",
   document_search: "문서 검색",
   fileCatalog: "빠른 파일 목록 만들기",
+  fileIndex: "빠른 파일 목록 만들기",
+  systemCleanup: "정리 후보 검사",
   file_catalog: "빠른 파일 목록 만들기",
   fileSearch: "파일 찾기",
   file_search: "파일 찾기",
@@ -114,6 +119,9 @@ export function ControlStatusPanel({
   cleanupAccessError,
   onToggleCleanupAccess,
   onReviewPending,
+  updatingInspectionAccess,
+  inspectionAccessError,
+  onToggleInspectionAccess,
 }: ControlStatusPanelProps) {
   const { t } = useLanguage();
   const copy = connectionCopy(status, t);
@@ -187,6 +195,13 @@ export function ControlStatusPanel({
       </div>
 
       <div className="control-status-panel__permissions">
+        <div className="control-permission">
+          <div><strong>{t("시스템·앱 조회 허용")}</strong>
+            <p id="control-inspection-description">{t("외부 AI에 CPU·메모리·작업·설치 앱의 제한된 목록 공개를 이번 실행에서 허용합니다. 실행·삭제 승인은 아닙니다.")}</p>
+            {inspectionAccessError ? <small role="alert">{inspectionAccessError}</small> : null}
+          </div>
+          <label className="control-permission__scan-button"><input type="checkbox" checked={status.inspectionAllowed === true} disabled={!status.bridgeAvailable || updatingInspectionAccess || !onToggleInspectionAccess} aria-describedby="control-inspection-description" onChange={onToggleInspectionAccess} />{t("시스템·앱 조회 허용")}</label>
+        </div>
         <div className="control-permission control-permission--search">
           <div>
             <strong>{t("파일·문서 검색 허용")}</strong>
@@ -271,6 +286,7 @@ export function ControlStatusPanel({
         <div className="control-permission control-permission--cleanup">
           <div>
             <strong>{t("정리 계획 검토 허용")}</strong>
+            <p>{t("시스템 정리는 대화 폴더 밖도 검사하므로 내장 AI와 외부 AI 모두 이 허용이 필요합니다. 검사 전에 켤 수 있으며 최종 실행은 별도로 확인합니다.")}</p>
             <p>
               {cleanupEnabled
                 ? t("외부 AI가 익명 후보 번호로 계획을 만들 수 있습니다. 실제 경로와 승인은 앱에만 표시됩니다.")

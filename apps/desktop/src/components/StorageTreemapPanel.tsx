@@ -584,7 +584,7 @@ export function StorageTreemapPanel({
       items={[{ path: pendingTrash.plan?.path ?? pendingTrash.node.path,
         logicalBytes: pendingTrash.plan?.logicalBytes ?? pendingTrash.node.logicalBytes,
         detail: pendingTrash.node.isDirectory ? pendingTrash.plan
-          ? t("파일 {{files}}개 · 폴더 {{folders}}개(선택 폴더 포함) · 내용은 전송하지 않고 메타데이터로 변경을 확인합니다.", { files: formatCount(pendingTrash.plan.fileCount), folders: formatCount(pendingTrash.plan.directoryCount) })
+          ? [t("파일 {{files}}개 · 폴더 {{folders}}개(선택 폴더 포함) · 내용은 전송하지 않고 메타데이터로 변경을 확인합니다.", { files: formatCount(pendingTrash.plan.fileCount), folders: formatCount(pendingTrash.plan.directoryCount) }), pendingTrash.plan.linkCount > 0 ? t("링크 {{count}}개는 링크 자체만 이동하며 원본은 건드리지 않습니다.", { count: formatCount(pendingTrash.plan.linkCount) }) : null].filter(Boolean).join(" ")
           : t("포함 항목과 변경 여부를 확인하고 있습니다. 검토가 끝나기 전에는 이동할 수 없습니다.") : undefined }]}
       reviewCount={pendingTrash.node.isDirectory ? 1 : 0}
       reviewAcknowledgementLabel={pendingTrash.node.isDirectory ? t("숨김 파일·앱·프로젝트를 포함한 하위 항목 전체가 함께 이동함을 확인했습니다.") : undefined}

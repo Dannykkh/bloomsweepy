@@ -1,0 +1,1081 @@
+//! App-owned file workspace. Models can browse and request review, never approve.
+use crate::assistant_provider::{AssistantFolderSummary, AssistantScopeKind};
+use crate::{
+    ScanCompletionGuard, ScanRuntime, StoredReports, assistant_sessions, assistant_tools,
+    trash_actions,
+};
+use bloomsweepy_core::{
+    DirectoryNode, DirectoryScanConfig, VerifiedTrashItem, scan_directory_level,
+    search_local_entries, validate_directory_trash_file, validate_directory_trash_folder,
+    validate_local_directory_path,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
+
+const PAGE_SIZE: usize = 24;
+const MAX_WORKSPACES: usize = 16;
+const MAX_SELECTION: usize = 100;
+const PLAN_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum FileAction {
+    Scan {},
+    Largest {},
+    Search {
+        query: String,
+    },
+    ReviewNamed {
+        name: String,
+    },
+    Browse {
+        revision: String,
+        #[serde(rename = "entryId")]
+        entry_id: String,
+    },
+    Parent {
+        revision: String,
+    },
+    Page {
+        revision: String,
+        offset: usize,
+    },
+    Select {
+        revision: String,
+        #[serde(rename = "includeIds")]
+        include_ids: Vec<String>,
+        #[serde(rename = "excludeIds")]
+        exclude_ids: Vec<String>,
+    },
+    Review {
+        revision: String,
+        ids: Vec<String>,
+    },
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileEntryView {
+    id: String,
+    number: usize,
+    name: String,
+    path: String,
+    is_directory: bool,
+    logical_bytes: Option<u64>,
+    file_count: Option<u64>,
+    directory_count: Option<u64>,
+    link_count: Option<u64>,
+    modified_at_unix_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileReviewPlan {
+    id: String,
+    entries: Vec<FileEntryView>,
+    logical_bytes: u64,
+    requires_nested_ack: bool,
+    expires_at_unix_ms: u64,
+    #[serde(skip)]
+    deadline: Instant,
+    #[serde(skip)]
+    verified: Vec<VerifiedTrashItem>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct FileWorkspaceView {
+    revision: String,
+    current_path: String,
+    current_name: String,
+    can_go_up: bool,
+    query: Option<String>,
+    size_ranked: bool,
+    map_generation: Option<u64>,
+    summary: AssistantFolderSummary,
+    total_entries: usize,
+    truncated: bool,
+    unreadable_entries: u64,
+    offset: usize,
+    next_offset: Option<usize>,
+    entries: Vec<FileEntryView>,
+    selected_ids: Vec<String>,
+    plan: Option<FileReviewPlan>,
+}
+
+struct Workspace {
+    revision: String,
+    scope: PathBuf,
+    current: PathBuf,
+    nodes: Vec<DirectoryNode>,
+    summary: AssistantFolderSummary,
+    query: Option<String>,
+    size_ranked: bool,
+    map_generation: Option<u64>,
+    truncated: bool,
+    unreadable: u64,
+    offset: usize,
+    selected: Vec<String>,
+    plan: Option<FileReviewPlan>,
+}
+
+impl Workspace {
+    fn entry(&self, index: usize) -> FileEntryView {
+        let node = &self.nodes[index];
+        let measured = self.query.is_none() || !node.is_directory;
+        FileEntryView {
+            id: format!("{}-{}", self.revision, index + 1),
+            number: index + 1,
+            name: node.name.clone(),
+            path: node.path.clone(),
+            is_directory: node.is_directory,
+            logical_bytes: measured.then_some(node.logical_bytes),
+            file_count: measured.then_some(node.file_count),
+            directory_count: measured.then_some(node.directory_count),
+            link_count: None,
+            modified_at_unix_ms: node.modified_at_unix_ms,
+        }
+    }
+    fn index(&self, id: &str) -> Result<usize, String> {
+        id.strip_prefix(&format!("{}-", self.revision))
+            .and_then(|number| number.parse::<usize>().ok())
+            .filter(|&number| {
+                number > 0
+                    && number <= self.nodes.len()
+                    && id == format!("{}-{number}", self.revision)
+            })
+            .map(|number| number - 1)
+            .ok_or_else(|| "현재 목록에 없는 항목입니다. 다시 검사하세요".into())
+    }
+    fn view(&self) -> FileWorkspaceView {
+        FileWorkspaceView {
+            revision: self.revision.clone(),
+            current_path: self.current.display().to_string(),
+            current_name: self
+                .current
+                .file_name()
+                .unwrap_or(self.current.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+            can_go_up: self.current != self.scope,
+            query: self.query.clone(),
+            size_ranked: self.size_ranked,
+            map_generation: self.map_generation,
+            summary: self.summary.clone(),
+            total_entries: self.nodes.len(),
+            truncated: self.truncated,
+            unreadable_entries: self.unreadable,
+            offset: self.offset,
+            next_offset: (self.offset + PAGE_SIZE < self.nodes.len())
+                .then_some(self.offset + PAGE_SIZE),
+            entries: (self.offset..self.nodes.len())
+                .take(PAGE_SIZE)
+                .map(|i| self.entry(i))
+                .collect(),
+            selected_ids: self.selected.clone(),
+            plan: self.plan.clone(),
+        }
+    }
+    fn check_page_ids(&self, ids: &[String]) -> Result<(), String> {
+        validate_ids(ids)?;
+        for id in ids {
+            let index = self.index(id)?;
+            if index < self.offset || index >= self.offset + PAGE_SIZE {
+                return Err("AI에 전달된 현재 페이지에서만 항목을 지정할 수 있습니다".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct AssistantFilesState(Mutex<HashMap<String, Workspace>>);
+impl AssistantFilesState {
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, Workspace>>, String> {
+        self.0
+            .lock()
+            .map_err(|_| "파일 대화 상태를 읽지 못했습니다".into())
+    }
+    pub(crate) fn forget(&self, session_id: &str) -> Result<(), String> {
+        self.lock()?.remove(session_id);
+        Ok(())
+    }
+    fn view(&self, session_id: &str) -> Result<Option<FileWorkspaceView>, String> {
+        Ok(self.lock()?.get(session_id).map(Workspace::view))
+    }
+    pub(crate) fn prompt_context(&self, session_id: &str) -> Result<String, String> {
+        let workspaces = self.lock()?;
+        let Some(workspace) = workspaces.get(session_id) else {
+            return Ok(json!({"freshScan":false}).to_string());
+        };
+        let view = workspace.view();
+        let entries: Vec<_> = view.entries.iter().map(|entry| json!({"id":entry.id,"number":entry.number,
+            "name":entry.name.chars().take(240).collect::<String>(),"kind":if entry.is_directory {"directory"} else {"file"},
+            "logicalBytes":entry.logical_bytes,"files":entry.file_count,"directories":entry.directory_count,
+            "modifiedAtUnixMs":entry.modified_at_unix_ms,
+            "selected":view.selected_ids.contains(&entry.id)})).collect();
+        Ok(json!({"freshScan":true,"revision":view.revision,"currentFolder":view.current_name,"canGoUp":view.can_go_up,
+            "query":view.query,"sizeRanked":view.size_ranked,"scanCompletedAtUnixMs":view.summary.completed_at_unix_ms,
+            "rankingScope":"direct children; folder sizes include descendants; logical bytes, not reclaimable space",
+            "deletionSafety":"unknown; names, sizes and modification times cannot establish backup, necessity or reproducibility",
+            "totalEntries":view.total_entries,"truncated":view.truncated,"unreadable":view.unreadable_entries,
+            "offset":view.offset,"nextOffset":view.next_offset,"entries":entries,"selectedCount":view.selected_ids.len(),
+            "reviewReady":view.plan.is_some(),"approval":"local final confirmation button only"}).to_string())
+    }
+    fn insert(&self, session_id: &str, workspace: Workspace) -> Result<FileWorkspaceView, String> {
+        let view = workspace.view();
+        let mut workspaces = self.lock()?;
+        if !workspaces.contains_key(session_id)
+            && workspaces.len() >= MAX_WORKSPACES
+            && let Some(key) = workspaces.keys().next().cloned()
+        {
+            workspaces.remove(&key);
+        }
+        workspaces.insert(session_id.into(), workspace);
+        Ok(view)
+    }
+    fn select(
+        &self,
+        session_id: &str,
+        revision: &str,
+        ids: Vec<String>,
+    ) -> Result<FileWorkspaceView, String> {
+        validate_ids(&ids)?;
+        let mut workspaces = self.lock()?;
+        let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
+        for id in &ids {
+            workspace.index(id)?;
+        }
+        workspace.selected = ids;
+        workspace.plan = None;
+        Ok(workspace.view())
+    }
+    fn claim(
+        &self,
+        session_id: &str,
+        revision: &str,
+        plan_id: &str,
+        nested_ack: bool,
+    ) -> Result<Vec<VerifiedTrashItem>, String> {
+        let mut workspaces = self.lock()?;
+        let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
+        let plan = workspace
+            .plan
+            .as_ref()
+            .ok_or("확인할 계획이 없습니다. 다시 검토하세요")?;
+        if plan.id != plan_id || plan.deadline <= Instant::now() {
+            workspace.plan = None;
+            return Err("확인 계획이 변경됐거나 만료됐습니다. 다시 검토하세요".into());
+        }
+        if plan.requires_nested_ack && !nested_ack {
+            return Err("폴더의 하위 항목 전체가 이동함을 확인해 주세요".into());
+        }
+        let plan = workspace.plan.take().expect("checked plan");
+        // Consume before I/O. Failure cannot make a destructive operation replayable.
+        workspace.nodes.clear();
+        workspace.selected.clear();
+        Ok(plan.verified)
+    }
+}
+
+fn validate_ids(ids: &[String]) -> Result<(), String> {
+    if ids.len() > MAX_SELECTION
+        || ids.iter().any(|id| id.len() > 80)
+        || ids.iter().collect::<HashSet<_>>().len() != ids.len()
+    {
+        return Err("중복 없이 최대 100개 항목을 선택하세요".into());
+    }
+    Ok(())
+}
+fn workspace_mut<'a>(
+    map: &'a mut HashMap<String, Workspace>,
+    session_id: &str,
+    revision: &str,
+) -> Result<&'a mut Workspace, String> {
+    map.get_mut(session_id)
+        .filter(|workspace| workspace.revision == revision)
+        .ok_or_else(|| "파일 목록이 변경됐습니다. 다시 검사하세요".into())
+}
+fn confined(scope: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.starts_with(scope) {
+        return Err("선택한 대화 폴더 밖으로 이동할 수 없습니다".into());
+    }
+    let scope_live = validate_local_directory_path(scope).map_err(|error| error.to_string())?;
+    let path_live = validate_local_directory_path(path).map_err(|error| error.to_string())?;
+    if scope_live != scope || path_live != path || !path_live.starts_with(&scope_live) {
+        return Err("폴더 경계가 변경됐습니다. 새 대화에서 다시 선택하세요".into());
+    }
+    Ok(path_live)
+}
+
+fn scan_workspace(
+    scope: PathBuf,
+    current: PathBuf,
+    reports: &StoredReports,
+    cancellation: &impl Fn() -> bool,
+) -> Result<Workspace, String> {
+    let current = confined(&scope, &current)?;
+    let report = scan_directory_level(
+        &current,
+        DirectoryScanConfig::default(),
+        |_| {},
+        cancellation,
+    )
+    .map_err(|error| error.to_string())?;
+    let summary = assistant_tools::folder_summary(&report);
+    // One bounded snapshot is shared with the treemap; workspaces retain only its generation.
+    let result = reports.replace_directory(report)?;
+    let report = result.report;
+    Ok(Workspace {
+        revision: assistant_tools::new_id()?,
+        scope,
+        current,
+        nodes: report.children,
+        summary,
+        query: None,
+        size_ranked: false,
+        map_generation: Some(result.generation),
+        truncated: report.children_truncated || report.tracking_limit_reached,
+        unreadable: report.unreadable_entries,
+        offset: 0,
+        selected: Vec::new(),
+        plan: None,
+    })
+}
+
+fn prepare(
+    state: &AssistantFilesState,
+    session_id: &str,
+    revision: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<FileWorkspaceView, String> {
+    let started = Instant::now();
+    let cancelled = || cancelled() || started.elapsed() > Duration::from_secs(60);
+    let (scope, selected) = {
+        let mut workspaces = state.lock()?;
+        let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
+        // Re-preparation invalidates the previous plan even if validation fails.
+        workspace.plan = None;
+        if workspace.selected.is_empty() {
+            return Err("휴지통으로 보낼 항목을 먼저 선택하세요".into());
+        }
+        let nodes: Result<Vec<_>, String> = workspace
+            .selected
+            .iter()
+            .map(|id| {
+                workspace
+                    .index(id)
+                    .map(|index| (workspace.entry(index), workspace.nodes[index].clone()))
+            })
+            .collect();
+        (workspace.scope.clone(), nodes?)
+    };
+    for (_, node) in &selected {
+        if selected.iter().any(|(_, parent)| {
+            parent.is_directory
+                && parent.path != node.path
+                && Path::new(&node.path).starts_with(&parent.path)
+        }) {
+            return Err("폴더와 그 안의 항목을 함께 선택할 수 없습니다. 상위 폴더 또는 하위 항목만 선택하세요".into());
+        }
+    }
+    let mut verified = Vec::new();
+    let mut entries = Vec::new();
+    // One parent report at a time; no retained per-parent scan cache.
+    let mut parent_report: Option<bloomsweepy_core::DirectoryScanReport> = None;
+    for (mut entry, old) in selected {
+        if cancelled() {
+            return Err("파일 검토를 취소했습니다".into());
+        }
+        let parent = Path::new(&old.path)
+            .parent()
+            .ok_or("부모 폴더가 없습니다")?;
+        confined(&scope, parent)?;
+        if parent_report
+            .as_ref()
+            .is_none_or(|report| Path::new(&report.root) != parent)
+        {
+            parent_report = Some(
+                scan_directory_level(parent, DirectoryScanConfig::default(), |_| {}, cancelled)
+                    .map_err(|error| error.to_string())?,
+            );
+        }
+        let report = parent_report.as_ref().expect("parent report loaded");
+        let live = report
+            .children
+            .iter()
+            .find(|node| node.path == old.path)
+            .ok_or("대상이 현재 검사 상한 밖이거나 없어졌습니다. 더 작은 폴더를 탐색하세요")?;
+        if !old.same_entry_as(live) {
+            return Err("검색 후 대상이 변경됐습니다. 다시 검사하고 검토하세요".into());
+        }
+        let item = if live.is_directory {
+            validate_directory_trash_folder(report, &live.path, cancelled)
+        } else {
+            validate_directory_trash_file(report, &live.path, cancelled)
+        }
+        .map_err(|error| error.to_string())?;
+        entry.logical_bytes = Some(item.logical_bytes());
+        entry.file_count = Some(live.file_count);
+        entry.directory_count = Some(live.directory_count);
+        entry.link_count = Some(item.directory_link_count());
+        entries.push(entry);
+        verified.push(item);
+    }
+    if cancelled() {
+        return Err("파일 검토를 취소했습니다".into());
+    }
+    let plan = FileReviewPlan {
+        id: assistant_tools::new_id()?,
+        logical_bytes: verified.iter().fold(0_u64, |total, item| {
+            total.saturating_add(item.logical_bytes())
+        }),
+        requires_nested_ack: entries.iter().any(|entry| entry.is_directory),
+        entries,
+        expires_at_unix_ms: assistant_tools::unix_ms() + PLAN_TTL.as_millis() as u64,
+        deadline: Instant::now() + PLAN_TTL,
+        verified,
+    };
+    let mut workspaces = state.lock()?;
+    let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
+    if workspace.selected
+        != plan
+            .entries
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect::<Vec<_>>()
+    {
+        return Err("검토 중 선택이 변경됐습니다".into());
+    }
+    workspace.plan = Some(plan);
+    Ok(workspace.view())
+}
+
+pub(crate) async fn dispatch(
+    app: AppHandle,
+    session_id: String,
+    operation: FileAction,
+    request_cancel: Arc<AtomicBool>,
+) -> Result<FileWorkspaceView, String> {
+    let session =
+        assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
+    if session.session.scope_kind != AssistantScopeKind::Folder {
+        return Err("폴더 대화에서만 사용할 수 있습니다".into());
+    }
+    let scope = PathBuf::from(session.session.scope_root);
+    let cancellation = app.state::<ScanRuntime>().begin()?;
+    let _completion = ScanCompletionGuard::new(app.clone());
+    app.state::<assistant_tools::AssistantToolsState>()
+        .forget(&session_id)?;
+    let worker_app = app.clone();
+    let worker_session = session_id.clone();
+    let view = tauri::async_runtime::spawn_blocking(move || {
+        let state = worker_app.state::<AssistantFilesState>();
+        let cancelled =
+            || cancellation.load(Ordering::Acquire) || request_cancel.load(Ordering::Acquire);
+        if cancelled() {
+            return Err("대화 작업을 취소했습니다".into());
+        }
+        match operation {
+            FileAction::Scan {} | FileAction::Largest {} => {
+                let size_ranked = matches!(operation, FileAction::Largest {});
+                let current = state
+                    .lock()?
+                    .get(&worker_session)
+                    .map(|workspace| workspace.current.clone())
+                    .unwrap_or(scope.clone());
+                state.forget(&worker_session)?;
+                let mut workspace = scan_workspace(
+                    scope,
+                    current,
+                    &worker_app.state::<StoredReports>(),
+                    &cancelled,
+                )?;
+                workspace.size_ranked = size_ranked;
+                state.insert(&worker_session, workspace)
+            }
+            FileAction::Search { query } | FileAction::ReviewNamed { name: query } => {
+                // ReviewNamed is handled by the caller flag below; exact, unique names only.
+                let current = state
+                    .lock()?
+                    .get(&worker_session)
+                    .map(|workspace| workspace.current.clone())
+                    .unwrap_or(scope.clone());
+                state.forget(&worker_session)?;
+                let current = confined(&scope, &current)?;
+                let report = search_local_entries(&current, &query, cancelled)
+                    .map_err(|error| error.to_string())?;
+                state.insert(
+                    &worker_session,
+                    Workspace {
+                        revision: assistant_tools::new_id()?,
+                        scope,
+                        current,
+                        nodes: report.entries,
+                        summary: session.folder_summary,
+                        query: Some(query),
+                        size_ranked: false,
+                        map_generation: None,
+                        truncated: report.truncated,
+                        unreadable: report.unreadable_entries,
+                        offset: 0,
+                        selected: Vec::new(),
+                        plan: None,
+                    },
+                )
+            }
+            FileAction::Browse { revision, entry_id } => {
+                let target = {
+                    let workspaces = state.lock()?;
+                    let workspace = workspaces
+                        .get(&worker_session)
+                        .filter(|workspace| workspace.revision == revision)
+                        .ok_or("파일 목록이 변경됐습니다")?;
+                    workspace.check_page_ids(std::slice::from_ref(&entry_id))?;
+                    let node = &workspace.nodes[workspace.index(&entry_id)?];
+                    if !node.is_directory {
+                        return Err("폴더만 하위 탐색할 수 있습니다".into());
+                    }
+                    PathBuf::from(&node.path)
+                };
+                state.forget(&worker_session)?;
+                state.insert(
+                    &worker_session,
+                    scan_workspace(
+                        scope,
+                        target,
+                        &worker_app.state::<StoredReports>(),
+                        &cancelled,
+                    )?,
+                )
+            }
+            FileAction::Parent { revision } => {
+                let target = {
+                    let workspaces = state.lock()?;
+                    let workspace = workspaces
+                        .get(&worker_session)
+                        .filter(|workspace| workspace.revision == revision)
+                        .ok_or("파일 목록이 변경됐습니다")?;
+                    if workspace.current == scope {
+                        return Err("대화 폴더 밖으로 이동할 수 없습니다".into());
+                    }
+                    workspace
+                        .current
+                        .parent()
+                        .ok_or("부모 폴더가 없습니다")?
+                        .to_owned()
+                };
+                state.forget(&worker_session)?;
+                state.insert(
+                    &worker_session,
+                    scan_workspace(
+                        scope,
+                        target,
+                        &worker_app.state::<StoredReports>(),
+                        &cancelled,
+                    )?,
+                )
+            }
+            FileAction::Page { revision, offset } => {
+                let mut workspaces = state.lock()?;
+                let workspace = workspace_mut(&mut workspaces, &worker_session, &revision)?;
+                if offset != 0 && offset >= workspace.nodes.len() {
+                    return Err("목록 페이지 범위를 벗어났습니다".into());
+                }
+                workspace.offset = offset;
+                Ok(workspace.view())
+            }
+            FileAction::Select {
+                revision,
+                include_ids,
+                exclude_ids,
+            } => {
+                let selected = {
+                    let workspaces = state.lock()?;
+                    let workspace = workspaces
+                        .get(&worker_session)
+                        .filter(|workspace| workspace.revision == revision)
+                        .ok_or("파일 목록이 변경됐습니다")?;
+                    workspace.check_page_ids(&include_ids)?;
+                    workspace.check_page_ids(&exclude_ids)?;
+                    if include_ids.iter().any(|id| exclude_ids.contains(id)) {
+                        return Err("같은 항목을 포함하고 제외할 수 없습니다".into());
+                    }
+                    let mut selected = workspace.selected.clone();
+                    selected.retain(|id| !exclude_ids.contains(id));
+                    for id in include_ids {
+                        if !selected.contains(&id) {
+                            selected.push(id);
+                        }
+                    }
+                    selected
+                };
+                state.select(&worker_session, &revision, selected)
+            }
+            FileAction::Review { revision, ids } => {
+                state
+                    .lock()?
+                    .get(&worker_session)
+                    .filter(|workspace| workspace.revision == revision)
+                    .ok_or("파일 목록이 변경됐습니다")?
+                    .check_page_ids(&ids)?;
+                state.select(&worker_session, &revision, ids)?;
+                prepare(&state, &worker_session, &revision, &cancelled)
+            }
+        }
+    })
+    .await
+    .map_err(|error| format!("파일 대화 작업이 중단됐습니다: {error}"))??;
+    if view.query.is_none() && view.current_path == scope_path(&app, &session_id).await? {
+        assistant_sessions::update_folder_summary(app.clone(), session_id, view.summary.clone())
+            .await?;
+    }
+    Ok(view)
+}
+
+async fn scope_path(app: &AppHandle, id: &str) -> Result<String, String> {
+    Ok(
+        assistant_sessions::get_assistant_session(app.clone(), id.into())
+            .await?
+            .session
+            .scope_root,
+    )
+}
+
+pub(crate) async fn review_named(
+    app: AppHandle,
+    session_id: String,
+    name: String,
+    cancelled: Arc<AtomicBool>,
+) -> Result<FileWorkspaceView, String> {
+    let view = dispatch(
+        app.clone(),
+        session_id.clone(),
+        FileAction::Search {
+            query: name.clone(),
+        },
+        cancelled.clone(),
+    )
+    .await?;
+    let ids = {
+        let state = app.state::<AssistantFilesState>();
+        let workspaces = state.lock()?;
+        let workspace = workspaces.get(&session_id).ok_or("파일 목록이 없습니다")?;
+        let Some(id) = unique_exact_id(workspace, &name) else {
+            return Ok(view);
+        };
+        vec![id]
+    };
+    // Unique exact match may be beyond page one. Change page so it is explicitly in context.
+    {
+        let state = app.state::<AssistantFilesState>();
+        let mut workspaces = state.lock()?;
+        let workspace = workspace_mut(&mut workspaces, &session_id, &view.revision)?;
+        workspace.offset = workspace.index(&ids[0])? / PAGE_SIZE * PAGE_SIZE;
+    }
+    dispatch(
+        app,
+        session_id,
+        FileAction::Review {
+            revision: view.revision,
+            ids,
+        },
+        cancelled,
+    )
+    .await
+}
+
+fn unique_exact_id(workspace: &Workspace, name: &str) -> Option<String> {
+    if workspace.truncated || workspace.unreadable > 0 {
+        return None;
+    }
+    let name = name.trim().to_lowercase();
+    let mut matches = workspace
+        .nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, node)| node.name.to_lowercase() == name);
+    let (index, _) = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(workspace.entry(index).id)
+}
+
+#[tauri::command]
+pub(crate) fn get_assistant_file_workspace(
+    state: State<'_, AssistantFilesState>,
+    session_id: String,
+) -> Result<Option<FileWorkspaceView>, String> {
+    state.view(&session_id)
+}
+
+#[tauri::command]
+pub(crate) fn get_assistant_directory_report(
+    state: State<'_, AssistantFilesState>,
+    reports: State<'_, StoredReports>,
+    session_id: String,
+    revision: String,
+) -> Result<crate::DirectoryScanResult, String> {
+    directory_snapshot(&state, &reports, &session_id, &revision)
+}
+
+fn directory_snapshot(
+    state: &AssistantFilesState,
+    reports: &StoredReports,
+    session_id: &str,
+    revision: &str,
+) -> Result<crate::DirectoryScanResult, String> {
+    let (generation, current) = {
+        let mut workspaces = state.lock()?;
+        let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
+        (
+            workspace
+                .map_generation
+                .ok_or("이름 검색만으로는 용량지도를 만들 수 없습니다. 폴더를 검사하세요")?,
+            workspace.current.clone(),
+        )
+    };
+    let report = reports.directory_report(generation)?;
+    if Path::new(&report.root) != current {
+        return Err("폴더 지도 경계가 변경됐습니다. 다시 검사하세요".into());
+    }
+    Ok(crate::DirectoryScanResult { generation, report })
+}
+
+/// Native candidate trees pin a trusted measured snapshot without changing the
+/// chat workspace or the shared treemap generation.
+pub(crate) fn cleanup_tree_seed(
+    state: &AssistantFilesState,
+    reports: &StoredReports,
+    session_id: &str,
+    revision: &str,
+) -> Result<bloomsweepy_core::DirectoryScanReport, String> {
+    Ok(directory_snapshot(state, reports, session_id, revision)?.report)
+}
+#[tauri::command]
+pub(crate) async fn assistant_file_action(
+    app: AppHandle,
+    session_id: String,
+    operation: FileAction,
+) -> Result<FileWorkspaceView, String> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    if let FileAction::ReviewNamed { name } = operation {
+        review_named(app, session_id, name, cancelled).await
+    } else {
+        dispatch(app, session_id, operation, cancelled).await
+    }
+}
+#[tauri::command]
+pub(crate) fn select_assistant_files(
+    state: State<'_, AssistantFilesState>,
+    session_id: String,
+    revision: String,
+    ids: Vec<String>,
+) -> Result<FileWorkspaceView, String> {
+    state.select(&session_id, &revision, ids)
+}
+#[tauri::command]
+pub(crate) async fn prepare_assistant_file_plan(
+    app: AppHandle,
+    session_id: String,
+    revision: String,
+) -> Result<FileWorkspaceView, String> {
+    let cancellation = app.state::<ScanRuntime>().begin()?;
+    let _completion = ScanCompletionGuard::new(app.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        prepare(
+            &app.state::<AssistantFilesState>(),
+            &session_id,
+            &revision,
+            &|| cancellation.load(Ordering::Acquire),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+#[tauri::command]
+pub(crate) async fn confirm_assistant_file_plan(
+    app: AppHandle,
+    window: WebviewWindow,
+    session_id: String,
+    revision: String,
+    plan_id: String,
+    nested_contents_acknowledged: bool,
+) -> Result<trash_actions::TrashOperationResult, String> {
+    if window.label() != "main" {
+        return Err("기본 앱 화면에서만 최종 확인할 수 있습니다".into());
+    }
+    let session =
+        assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
+    if session.session.scope_kind != AssistantScopeKind::Folder {
+        return Err("폴더 대화가 아닙니다".into());
+    }
+    let cancellation = app.state::<ScanRuntime>().begin()?;
+    let _completion = ScanCompletionGuard::new(app.clone());
+    let items = app.state::<AssistantFilesState>().claim(
+        &session_id,
+        &revision,
+        &plan_id,
+        nested_contents_acknowledged,
+    )?;
+    let result =
+        trash_actions::trash_verified_assistant_files(app.clone(), items, cancellation).await;
+    app.state::<AssistantFilesState>().forget(&session_id)?;
+    app.state::<assistant_tools::AssistantToolsState>()
+        .forget(&session_id)?;
+    app.state::<StoredReports>().clear_all()?;
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn fixture() -> (tempfile::TempDir, Workspace) {
+        #[cfg(windows)]
+        let temp = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+        #[cfg(not(windows))]
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("promo-video")).unwrap();
+        std::fs::write(root.join("promo-video/clip.mp4"), "synthetic").unwrap();
+        std::fs::write(root.join("notes.txt"), "notes").unwrap();
+        let workspace =
+            scan_workspace(root.clone(), root, &StoredReports::default(), &|| false).unwrap();
+        (temp, workspace)
+    }
+    #[test]
+    fn cleanup_tree_seed_rejects_old_revision_missing_workspace_and_replaced_map() {
+        let (_temp, fixture_workspace) = fixture();
+        let reports = StoredReports::default();
+        let files = AssistantFilesState::default();
+        let workspace = scan_workspace(
+            fixture_workspace.scope.clone(),
+            fixture_workspace.current.clone(),
+            &reports,
+            &|| false,
+        )
+        .unwrap();
+        let view = files.insert("test-tree-source", workspace).unwrap();
+        assert!(cleanup_tree_seed(&files, &reports, "test-tree-source", &view.revision).is_ok());
+        assert!(cleanup_tree_seed(&files, &reports, "test-tree-source", "old-revision").is_err());
+        reports
+            .replace_directory(
+                scan_directory_level(
+                    &fixture_workspace.current,
+                    Default::default(),
+                    |_| {},
+                    || false,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert!(cleanup_tree_seed(&files, &reports, "test-tree-source", &view.revision).is_err());
+        files.forget("test-tree-source").unwrap();
+        assert!(cleanup_tree_seed(&files, &reports, "test-tree-source", &view.revision).is_err());
+    }
+    #[test]
+    fn review_nonempty_folder_requires_ack_and_consumes_once() {
+        let (_temp, workspace) = fixture();
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        let id = view
+            .entries
+            .iter()
+            .find(|entry| entry.name == "promo-video")
+            .unwrap()
+            .id
+            .clone();
+        state.select("test", &view.revision, vec![id]).unwrap();
+        let reviewed = prepare(&state, "test", &view.revision, &|| false).unwrap();
+        let plan = reviewed.plan.unwrap();
+        assert!(plan.requires_nested_ack);
+        assert_eq!(plan.logical_bytes, 9);
+        assert!(
+            state
+                .claim("test", &view.revision, &plan.id, false)
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .claim("test", &view.revision, &plan.id, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(state.claim("test", &view.revision, &plan.id, true).is_err());
+    }
+    #[test]
+    fn changed_files_stale_ids_cancel_and_selection_invalidate_plans() {
+        let (_temp, workspace) = fixture();
+        let root = workspace.scope.clone();
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        let id = view
+            .entries
+            .iter()
+            .find(|entry| entry.name == "notes.txt")
+            .unwrap()
+            .id
+            .clone();
+        assert!(state.select("test", "old", vec![id.clone()]).is_err());
+        assert!(
+            state
+                .select("test", &view.revision, vec![id.clone(), id.clone()])
+                .is_err()
+        );
+        state
+            .select("test", &view.revision, vec![id.clone()])
+            .unwrap();
+        assert!(prepare(&state, "test", &view.revision, &|| true).is_err());
+        let plan = prepare(&state, "test", &view.revision, &|| false)
+            .unwrap()
+            .plan
+            .unwrap();
+        state.select("test", &view.revision, vec![id]).unwrap();
+        assert!(state.claim("test", &view.revision, &plan.id, true).is_err());
+        std::fs::write(root.join("notes.txt"), "changed content").unwrap();
+        assert!(prepare(&state, "test", &view.revision, &|| false).is_err());
+        assert!(confined(&root, root.parent().unwrap()).is_err());
+    }
+    #[test]
+    fn prompt_omits_paths_and_protocol_cannot_approve_or_run_shell() {
+        let (_temp, workspace) = fixture();
+        let root = workspace.scope.display().to_string();
+        let state = AssistantFilesState::default();
+        state.insert("test", workspace).unwrap();
+        let context = state.prompt_context("test").unwrap();
+        assert!(!context.contains(&root));
+        for raw in [
+            r#"{"kind":"confirm","planId":"x"}"#,
+            r#"{"kind":"search","query":"x","path":"/"}"#,
+            r#"{"kind":"shell","command":"rm -rf"}"#,
+        ] {
+            assert!(serde_json::from_str::<FileAction>(raw).is_err());
+        }
+    }
+    #[test]
+    fn exact_names_are_unique_not_partial_and_expired_plans_fail() {
+        let (_temp, mut workspace) = fixture();
+        let id = unique_exact_id(&workspace, "PROMO-VIDEO").unwrap();
+        assert!(unique_exact_id(&workspace, "promo").is_none());
+        workspace.truncated = true;
+        assert!(unique_exact_id(&workspace, "promo-video").is_none());
+        workspace.truncated = false;
+        workspace.unreadable = 1;
+        assert!(unique_exact_id(&workspace, "promo-video").is_none());
+        workspace.unreadable = 0;
+        workspace.nodes.push(
+            workspace
+                .nodes
+                .iter()
+                .find(|node| node.name == "promo-video")
+                .unwrap()
+                .clone(),
+        );
+        assert!(unique_exact_id(&workspace, "promo-video").is_none());
+        workspace.nodes.pop();
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        state.select("test", &view.revision, vec![id]).unwrap();
+        let plan = prepare(&state, "test", &view.revision, &|| false)
+            .unwrap()
+            .plan
+            .unwrap();
+        state
+            .lock()
+            .unwrap()
+            .get_mut("test")
+            .unwrap()
+            .plan
+            .as_mut()
+            .unwrap()
+            .deadline = Instant::now();
+        assert!(state.claim("test", &view.revision, &plan.id, true).is_err());
+        assert!(state.view("test").unwrap().unwrap().plan.is_none());
+    }
+    #[test]
+    fn mixed_files_and_folders_and_page_scope() {
+        let (_temp, workspace) = fixture();
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        let ids: Vec<_> = view.entries.iter().map(|entry| entry.id.clone()).collect();
+        state.select("test", &view.revision, ids.clone()).unwrap();
+        let plan = prepare(&state, "test", &view.revision, &|| false)
+            .unwrap()
+            .plan
+            .unwrap();
+        assert_eq!(plan.entries.len(), 2);
+        assert_eq!(plan.logical_bytes, 14);
+        let mut workspaces = state.lock().unwrap();
+        let workspace = workspaces.get_mut("test").unwrap();
+        workspace.offset = 1;
+        assert!(workspace.check_page_ids(&[ids[0].clone()]).is_err());
+        assert!(workspace.check_page_ids(&[ids[1].clone()]).is_ok());
+    }
+    #[test]
+    fn discovery_and_map_share_bytes_without_selection_or_plan() {
+        let (_temp, seed) = fixture();
+        let reports = StoredReports::default();
+        let mut workspace =
+            scan_workspace(seed.scope.clone(), seed.current, &reports, &|| false).unwrap();
+        workspace.size_ranked = true;
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        assert!(view.size_ranked);
+        assert!(view.selected_ids.is_empty());
+        assert!(view.plan.is_none());
+        let map = directory_snapshot(&state, &reports, "test", &view.revision).unwrap();
+        assert_eq!(Some(map.generation), view.map_generation);
+        assert_eq!(map.report.root, view.current_path);
+        assert_eq!(
+            map.report.total_logical_bytes,
+            view.summary.total_logical_bytes
+        );
+        assert_eq!(view.entries[0].name, "promo-video");
+        for (entry, node) in view.entries.iter().zip(map.report.children.iter()) {
+            assert_eq!(entry.path, node.path);
+            assert_eq!(entry.logical_bytes, Some(node.logical_bytes));
+        }
+        let context = state.prompt_context("test").unwrap();
+        assert!(context.contains("deletionSafety"));
+        assert!(context.contains("scanCompletedAtUnixMs"));
+        assert!(!context.contains(&view.current_path));
+        assert!(directory_snapshot(&state, &reports, "other-session", &view.revision).is_err());
+        assert!(directory_snapshot(&state, &reports, "test", "old-revision").is_err());
+        reports.replace_directory(map.report).unwrap();
+        assert!(directory_snapshot(&state, &reports, "test", &view.revision).is_err());
+    }
+    #[test]
+    fn name_only_search_cannot_masquerade_as_a_measured_map() {
+        let (_temp, mut workspace) = fixture();
+        workspace.query = Some("promo".into());
+        workspace.map_generation = None;
+        let state = AssistantFilesState::default();
+        let view = state.insert("test", workspace).unwrap();
+        assert!(
+            view.entries
+                .iter()
+                .filter(|entry| entry.is_directory)
+                .all(|entry| entry.logical_bytes.is_none())
+        );
+        assert!(
+            directory_snapshot(&state, &StoredReports::default(), "test", &view.revision).is_err()
+        );
+        assert!(serde_json::from_str::<FileAction>(r#"{"kind":"largest","delete":true}"#).is_err());
+        assert!(matches!(
+            serde_json::from_str::<FileAction>(r#"{"kind":"largest"}"#).unwrap(),
+            FileAction::Largest {}
+        ));
+    }
+}

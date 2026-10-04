@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const CONTROL_STATUS_EVENT: &str = "control-status-changed";
 const MAX_STATUS_ERROR_CHARS: usize = 1_000;
@@ -34,6 +34,7 @@ const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(25);
 const RESPONSE_ENVELOPE_RESERVE_BYTES: usize = 64 * 1024;
 const MAX_RESULT_VALUE_BYTES: usize = MAX_RESPONSE_BYTES - RESPONSE_ENVELOPE_RESERVE_BYTES;
 const MAX_COMPLETED_OPERATIONS: usize = 16;
+const MAX_OPERATION_AUTHORITIES: usize = MAX_COMPLETED_OPERATIONS + 1;
 const MAX_START_REQUESTS: usize = MAX_COMPLETED_OPERATIONS;
 const CLEANUP_PLAN_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_COMPLETED_CLEANUP_PLANS: usize = 16;
@@ -53,6 +54,7 @@ pub(crate) struct ControlStatus {
     search_access: ControlSearchAccess,
     scan_access: ControlScanAccess,
     cleanup_access: ControlCleanupAccess,
+    inspection_allowed: bool,
 }
 
 impl Default for ControlStatus {
@@ -70,6 +72,7 @@ impl Default for ControlStatus {
             search_access: ControlSearchAccess::default(),
             scan_access: ControlScanAccess::default(),
             cleanup_access: ControlCleanupAccess::default(),
+            inspection_allowed: false,
         }
     }
 }
@@ -199,12 +202,95 @@ pub(crate) struct CleanupPlanExecution {
     pub(crate) expires_at_unix_ms: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OperationActor {
+    Native(String),
+    External,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum OperationPermission {
+    SelectedRoot,
+    FileSearch(PathBuf),
+    DocumentSearch(PathBuf),
+    StorageScan(PathBuf),
+    Cleanup,
+}
+
+#[derive(Clone, Debug)]
+struct OperationAuthority {
+    actor: OperationActor,
+    session_root: Option<PathBuf>,
+    permission: OperationPermission,
+}
+
+impl OperationActor {
+    fn from_scope(scope: &crate::app_tools::ToolScope) -> Self {
+        match scope {
+            crate::app_tools::ToolScope::Native { session_id, .. } => {
+                Self::Native(session_id.clone())
+            }
+            crate::app_tools::ToolScope::External => Self::External,
+        }
+    }
+
+    fn source(&self) -> ControlOperationSource {
+        match self {
+            Self::Native(_) => ControlOperationSource::App,
+            Self::External => ControlOperationSource::ChatCli,
+        }
+    }
+}
+
+/// Ownership is independent from current consent. The owner may stop previously
+/// authorized work after revocation, but may not inspect its restricted result.
+fn operation_authorized(
+    authority: &OperationAuthority,
+    actor: &OperationActor,
+    permission_current: bool,
+    cancelling: bool,
+) -> bool {
+    authority.actor == *actor && (permission_current || cancelling)
+}
+
+fn operation_bound_root(authority: &OperationAuthority) -> Option<&Path> {
+    match &authority.permission {
+        OperationPermission::SelectedRoot => authority.session_root.as_deref(),
+        OperationPermission::FileSearch(root)
+        | OperationPermission::DocumentSearch(root)
+        | OperationPermission::StorageScan(root) => Some(root.as_path()),
+        OperationPermission::Cleanup => None,
+    }
+}
+
+fn operation_root_matches(authority: &OperationAuthority, current: Option<&Path>) -> bool {
+    authority.session_root.as_deref() == current
+}
+
+fn external_operation_visible(
+    authority: &OperationAuthority,
+    source: ControlOperationSource,
+) -> bool {
+    authority.actor == OperationActor::External && source == ControlOperationSource::ChatCli
+}
+
+fn remember_operation_authority(
+    authorities: &mut VecDeque<(String, OperationAuthority)>,
+    operation_id: String,
+    authority: OperationAuthority,
+) {
+    authorities.retain(|(id, _)| id != &operation_id);
+    authorities.push_front((operation_id, authority));
+    authorities.truncate(MAX_OPERATION_AUTHORITIES);
+}
+
 pub(crate) struct ControlStatusStore {
     status: Mutex<ControlStatus>,
     search_scopes: Mutex<ControlSearchScopes>,
     search_active: AtomicBool,
     scan_plan: Mutex<Option<ControlScanPlan>>,
     completed_operations: Mutex<VecDeque<ControlOperationStatus>>,
+    operation_authorities: Mutex<VecDeque<(String, OperationAuthority)>>,
     start_requests: Mutex<VecDeque<(String, String)>>,
     cleanup_review: Mutex<CleanupReviewState>,
 }
@@ -217,6 +303,7 @@ impl Default for ControlStatusStore {
             search_active: AtomicBool::new(false),
             scan_plan: Mutex::new(None),
             completed_operations: Mutex::new(VecDeque::new()),
+            operation_authorities: Mutex::new(VecDeque::new()),
             start_requests: Mutex::new(VecDeque::new()),
             cleanup_review: Mutex::new(CleanupReviewState::default()),
         }
@@ -655,6 +742,7 @@ impl ControlStatusStore {
         &self,
         app: &AppHandle,
         operation: ControlOperationStatus,
+        authority: OperationAuthority,
     ) -> Result<ControlOperationStatus, String> {
         let snapshot = {
             let mut status = self
@@ -664,6 +752,20 @@ impl ControlStatusStore {
             if status.active_operation.is_some() {
                 return Err("다른 채팅 작업이 진행 중입니다".to_owned());
             }
+            if operation.source != authority.actor.source() {
+                return Err("작업 출처와 시작 주체가 일치하지 않습니다".to_owned());
+            }
+            // Record ownership before publishing the ID. A client observing the
+            // status event cannot race an as-yet-unowned operation.
+            let mut authorities = self
+                .operation_authorities
+                .lock()
+                .map_err(|_| "작업 소유 범위를 잠글 수 없습니다".to_owned())?;
+            remember_operation_authority(
+                &mut authorities,
+                operation.operation_id.clone(),
+                authority,
+            );
             status.active_operation = Some(operation.clone());
             status.revision = status.revision.saturating_add(1);
             status.clone()
@@ -760,6 +862,14 @@ impl ControlStatusStore {
             operation.summary = summary;
             history.push_front(operation.clone());
             history.truncate(MAX_COMPLETED_OPERATIONS);
+            self.operation_authorities
+                .lock()
+                .map_err(|_| "작업 소유 범위를 잠글 수 없습니다".to_owned())?
+                .retain(|(id, _)| {
+                    history
+                        .iter()
+                        .any(|operation| &operation.operation_id == id)
+                });
             status.last_operation = Some(operation.clone());
             status.revision = status.revision.saturating_add(1);
             (status.clone(), operation)
@@ -788,6 +898,16 @@ impl ControlStatusStore {
             .find(|operation| operation.operation_id == operation_id)
             .cloned()
             .ok_or_else(|| "이 앱 실행에서 작업 번호를 찾을 수 없습니다".to_owned())
+    }
+
+    fn operation_authority(&self, operation_id: &str) -> Result<OperationAuthority, String> {
+        self.operation_authorities
+            .lock()
+            .map_err(|_| "작업 소유 범위를 잠글 수 없습니다".to_owned())?
+            .iter()
+            .find(|(id, _)| id == operation_id)
+            .map(|(_, authority)| authority.clone())
+            .ok_or_else(|| "이 호출 주체가 시작한 앱 작업을 찾을 수 없습니다".to_owned())
     }
 
     fn operation_for_start_request(
@@ -885,6 +1005,284 @@ pub(crate) fn get_control_status(
     state: State<'_, ControlStatusStore>,
 ) -> Result<ControlStatus, String> {
     state.snapshot()
+}
+
+/// External system/application inspection is independent from file search and
+/// cleanup. It is closed by default and can only be changed by the main UI.
+#[tauri::command]
+pub(crate) fn configure_control_inspection_access(
+    window: WebviewWindow,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<ControlStatus, String> {
+    if window.label() != "main" {
+        return Err("시스템 조회 허용은 앱의 메인 화면에서만 변경할 수 있습니다".to_owned());
+    }
+    app.state::<ControlStatusStore>().update(&app, |status| {
+        status.inspection_allowed = enabled;
+        status.last_error = None;
+    })
+}
+
+pub(crate) fn inspection_access_allowed(app: &AppHandle) -> Result<bool, String> {
+    Ok(app
+        .state::<ControlStatusStore>()
+        .snapshot()?
+        .inspection_allowed)
+}
+
+/// The same approved roots are used by MCP and native document excerpts. This
+/// helper does not enable access or choose a folder on the user's behalf.
+pub(crate) fn tool_search_root(app: &AppHandle, documents: bool) -> Result<PathBuf, String> {
+    let stored = app
+        .state::<ControlStatusStore>()
+        .allowed_root(if documents {
+            SearchScopeKind::Documents
+        } else {
+            SearchScopeKind::Files
+        })?;
+    let stored_text = stored
+        .to_str()
+        .ok_or_else(|| "허용한 검색 폴더 경로가 UTF-8이 아닙니다".to_owned())?;
+    let current = canonical_directory(stored_text)?;
+    if current != stored {
+        return Err("허용한 검색 폴더가 바뀌었습니다. 공개 범위를 다시 선택해 주세요".to_owned());
+    }
+    Ok(stored)
+}
+
+pub(crate) fn tool_cleanup_access(app: &AppHandle) -> Result<(), String> {
+    app.state::<ControlStatusStore>().ensure_cleanup_access()
+}
+
+fn tool_operation_authority(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    kind: &str,
+    bound_root: Option<&Path>,
+) -> Result<OperationAuthority, String> {
+    let actor = OperationActor::from_scope(scope);
+    let session_root = scope
+        .root()
+        .map(|root| {
+            root.canonicalize()
+                .map_err(|_| "대화의 원래 검사 범위를 확인할 수 없습니다".to_owned())
+        })
+        .transpose()?;
+    let permission = match kind {
+        "fileIndex" if scope.is_external() => {
+            OperationPermission::FileSearch(tool_search_root(app, false)?)
+        }
+        "documentIndex" => {
+            let root = tool_search_root(app, true)?;
+            if !scope.is_external() && session_root.as_ref() != Some(&root) {
+                return Err("대화 범위와 문서 공개 허용 범위가 다릅니다".to_owned());
+            }
+            OperationPermission::DocumentSearch(root)
+        }
+        "storageScan" if scope.is_external() => OperationPermission::StorageScan(
+            app.state::<ControlStatusStore>()
+                .scan_plan()?
+                .canonical_root,
+        ),
+        "fileIndex" | "storageScan" => {
+            if session_root.is_none() {
+                return Err("앱에서 선택한 폴더 대화가 필요합니다".to_owned());
+            }
+            OperationPermission::SelectedRoot
+        }
+        "systemCleanup" => {
+            tool_cleanup_access(app)?;
+            OperationPermission::Cleanup
+        }
+        _ => return Err("소유/권한 규약이 없는 앱 작업은 시작할 수 없습니다".to_owned()),
+    };
+    let authority = OperationAuthority {
+        actor,
+        session_root,
+        permission,
+    };
+    let actual_root = bound_root
+        .map(Path::canonicalize)
+        .transpose()
+        .map_err(|_| "검사할 원래 폴더를 확인할 수 없습니다".to_owned())?;
+    if operation_bound_root(&authority) != actual_root.as_deref() {
+        return Err("작업 준비 중 폴더 허용 범위가 바뀌어 시작하지 않았습니다".to_owned());
+    }
+    Ok(authority)
+}
+
+fn operation_permission_current(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    authority: &OperationAuthority,
+) -> bool {
+    if !scope.is_external() {
+        let current = scope.root().map(Path::canonicalize).transpose();
+        if current.as_ref().is_err()
+            || !operation_root_matches(
+                authority,
+                current.as_ref().ok().and_then(|root| root.as_deref()),
+            )
+        {
+            return false;
+        }
+    }
+    match &authority.permission {
+        OperationPermission::SelectedRoot => {
+            !scope.is_external() && authority.session_root.is_some()
+        }
+        OperationPermission::FileSearch(root) => {
+            tool_search_root(app, false).is_ok_and(|current| &current == root)
+        }
+        OperationPermission::DocumentSearch(root) => {
+            tool_search_root(app, true).is_ok_and(|current| &current == root)
+        }
+        OperationPermission::StorageScan(root) => app
+            .state::<ControlStatusStore>()
+            .scan_plan()
+            .is_ok_and(|plan| &plan.canonical_root == root),
+        OperationPermission::Cleanup => tool_cleanup_access(app).is_ok(),
+    }
+}
+
+fn authorize_operation(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    operation_id: &str,
+    cancelling: bool,
+) -> Result<bool, RequestFailure> {
+    let authority = app
+        .state::<ControlStatusStore>()
+        .operation_authority(operation_id)
+        .map_err(operation_not_found)?;
+    let actor = OperationActor::from_scope(scope);
+    if authority.actor != actor {
+        return Err(RequestFailure {
+            code: "operation_owner_required",
+            message: "다른 대화나 호출 주체가 시작한 작업은 조회/취소할 수 없습니다".to_owned(),
+            retryable: false,
+        });
+    }
+    let current = operation_permission_current(app, scope, &authority);
+    if !operation_authorized(&authority, &actor, current, cancelling) {
+        return Err(RequestFailure {
+            code: "operation_approval_required",
+            message: "이 작업의 원래 조회 권한이나 폴더 범위가 바뀌었습니다".to_owned(),
+            retryable: false,
+        });
+    }
+    Ok(current)
+}
+
+fn restricted_operation(mut operation: ControlOperationStatus) -> ControlOperationStatus {
+    operation.summary = None;
+    operation.processed_items = None;
+    operation.processed_bytes = None;
+    operation.message = Some("조회 권한이 철회되어 작업 식별/취소 상태만 표시합니다".to_owned());
+    operation
+}
+
+/// The public status endpoint does not advertise native conversation jobs. Even
+/// with an ID obtained elsewhere, both operation endpoints enforce ownership.
+fn external_status(app: &AppHandle) -> Result<ControlStatus, String> {
+    let store = app.state::<ControlStatusStore>();
+    let mut status = store.snapshot()?;
+    let scope = crate::app_tools::ToolScope::External;
+    let visible = |operation: ControlOperationStatus| -> Option<ControlOperationStatus> {
+        let authority = store.operation_authority(&operation.operation_id).ok()?;
+        if !external_operation_visible(&authority, operation.source) {
+            return None;
+        }
+        Some(if operation_permission_current(app, &scope, &authority) {
+            operation
+        } else {
+            restricted_operation(operation)
+        })
+    };
+    status.active_operation = status.active_operation.take().and_then(&visible);
+    status.last_operation = status.last_operation.take().and_then(visible);
+    Ok(status)
+}
+
+pub(crate) struct ToolOperationReservation {
+    pub(crate) operation: ControlOperationStatus,
+    pub(crate) cancellation: Arc<AtomicBool>,
+    pub(crate) completion: super::ScanCompletionGuard,
+}
+
+/// Reserve the existing single-work runtime and bounded operation history. Long
+/// index/cleanup jobs return this ID instead of blocking an assistant round.
+pub(crate) fn reserve_tool_operation(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    kind: &str,
+    bound_root: Option<&Path>,
+) -> Result<ToolOperationReservation, String> {
+    let authority = tool_operation_authority(app, scope, kind, bound_root)?;
+    let source = authority.actor.source();
+    let operation_id = random_operation_id().map_err(|error| error.to_string())?;
+    let cancellation = app
+        .state::<super::ScanRuntime>()
+        .begin_control(operation_id.clone())?;
+    let completion = super::ScanCompletionGuard::for_control(app.clone(), operation_id.clone());
+    let operation = app.state::<ControlStatusStore>().start_operation(
+        app,
+        ControlOperationStatus {
+            operation_id,
+            kind: kind.to_owned(),
+            source,
+            state: ControlOperationState::Running,
+            cancellation_requested: false,
+            message: Some("앱 조회 작업을 시작했습니다".to_owned()),
+            processed_items: Some(0),
+            processed_bytes: Some(0),
+            started_at_unix_ms: unix_time_ms(),
+            finished_at_unix_ms: None,
+            scan_generation: None,
+            summary: None,
+        },
+        authority,
+    )?;
+    Ok(ToolOperationReservation {
+        operation,
+        cancellation,
+        completion,
+    })
+}
+
+pub(crate) fn finish_tool_operation(
+    app: &AppHandle,
+    operation_id: &str,
+    state: ControlOperationState,
+    message: String,
+    generation: Option<u64>,
+    summary: Option<StorageScanSummary>,
+) {
+    let Ok((_, revision)) = app.state::<ControlStatusStore>().finish_operation(
+        app,
+        operation_id,
+        state,
+        message.clone(),
+        generation,
+        summary,
+    ) else {
+        return;
+    };
+    let _ = app.emit(
+        "control-scan-completed",
+        ControlScanCompletedEvent {
+            operation_id: operation_id.to_owned(),
+            revision,
+            state,
+            scan_generation: generation,
+            message,
+        },
+    );
+}
+
+pub(crate) fn tool_storage_summary(snapshot: &super::StoredScanSnapshot) -> StorageScanSummary {
+    storage_scan_summary(snapshot)
 }
 
 #[tauri::command]
@@ -1453,9 +1851,33 @@ fn handle_authenticated_request(
 ) -> ControlResponse {
     let request_id = request.request_id;
     let result = match request.command {
-        ControlCommand::AppStatus => app
-            .state::<ControlStatusStore>()
-            .snapshot()
+        ControlCommand::AppAction(request) => {
+            crate::app_tools::reject_replayed_mutation(app, &request_id, &request)
+                .map_err(|message| RequestFailure {
+                    code: "replayed_request",
+                    message,
+                    retryable: false,
+                })
+                .and_then(|()| {
+                    tauri::async_runtime::block_on(crate::app_tools::execute(
+                        app,
+                        &crate::app_tools::ToolScope::External,
+                        &request,
+                        shutdown,
+                    ))
+                    .map(|mut result| {
+                        result.presentation = None;
+                        result
+                    })
+                    .map_err(|message| RequestFailure {
+                        code: "app_action_failed",
+                        message,
+                        retryable: false,
+                    })
+                    .and_then(to_value)
+                })
+        }
+        ControlCommand::AppStatus => external_status(app)
             .map_err(|message| RequestFailure {
                 code: "status_unavailable",
                 message,
@@ -1466,8 +1888,12 @@ fn handle_authenticated_request(
         ControlCommand::SearchFiles(request) => search_files(app, request, shutdown),
         ControlCommand::SearchDocuments(request) => search_documents(app, request, shutdown),
         ControlCommand::StartStorageScan => start_storage_scan(app, &request_id),
-        ControlCommand::OperationStatus(reference) => operation_status(app, reference),
-        ControlCommand::CancelOperation(reference) => cancel_operation(app, reference),
+        ControlCommand::OperationStatus(reference) => {
+            operation_status(app, reference, &crate::app_tools::ToolScope::External)
+        }
+        ControlCommand::CancelOperation(reference) => {
+            cancel_operation(app, reference, &crate::app_tools::ToolScope::External)
+        }
         ControlCommand::CleanupCandidates(request) => cleanup_candidates(app, request),
         ControlCommand::CreateCleanupPlan(request) => create_cleanup_plan(app, request),
         ControlCommand::CleanupPlanStatus(reference) => cleanup_plan_status(app, reference),
@@ -1486,6 +1912,66 @@ fn handle_authenticated_request(
     }
 }
 
+/// Reuse legacy app-owned services without routing a new AppAction back into
+/// itself. This helper deliberately exposes neither approval nor configuration.
+pub(crate) fn dispatch_tool_control(
+    app: &AppHandle,
+    command: ControlCommand,
+    cancellation: Arc<AtomicBool>,
+) -> Result<Value, String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err("앱 조회 작업을 취소했습니다".to_owned());
+    }
+    #[allow(unreachable_patterns)] // Fail closed for newer control commands.
+    let result = match command {
+        ControlCommand::AppStatus => external_status(app)
+            .map_err(|message| RequestFailure {
+                code: "status_unavailable",
+                message,
+                retryable: true,
+            })
+            .and_then(to_value),
+        ControlCommand::SystemOverview => to_value(super::collect_system_overview()),
+        ControlCommand::SearchFiles(request) => search_files(app, request, cancellation),
+        ControlCommand::SearchDocuments(request) => search_documents(app, request, cancellation),
+        ControlCommand::StartStorageScan => {
+            let request_id = random_operation_id().map_err(|error| error.to_string())?;
+            start_storage_scan(app, &request_id)
+        }
+        ControlCommand::OperationStatus(reference) => {
+            operation_status(app, reference, &crate::app_tools::ToolScope::External)
+        }
+        ControlCommand::CancelOperation(reference) => {
+            cancel_operation(app, reference, &crate::app_tools::ToolScope::External)
+        }
+        ControlCommand::CleanupCandidates(request) => cleanup_candidates(app, request),
+        ControlCommand::CreateCleanupPlan(request) => create_cleanup_plan(app, request),
+        ControlCommand::CleanupPlanStatus(reference) => cleanup_plan_status(app, reference),
+        _ => return Err("이 명령은 기존 조회 서비스로 재호출할 수 없습니다".to_owned()),
+    };
+    result.map_err(|error| error.message)
+}
+
+/// Native callers must carry their actual saved-session identity. Legacy MCP
+/// uses dispatch_tool_control, which always acts as External and cannot become a
+/// native actor by forwarding a known operation ID.
+pub(crate) fn dispatch_operation_control(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    command: ControlCommand,
+    cancellation: Arc<AtomicBool>,
+) -> Result<Value, String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err("앱 조회 작업을 취소했습니다".to_owned());
+    }
+    let result = match command {
+        ControlCommand::OperationStatus(reference) => operation_status(app, reference, scope),
+        ControlCommand::CancelOperation(reference) => cancel_operation(app, reference, scope),
+        _ => return Err("작업 조회/취소 이외의 명령은 실행할 수 없습니다".to_owned()),
+    };
+    result.map_err(|error| error.message)
+}
+
 struct RequestFailure {
     code: &'static str,
     message: String,
@@ -1502,6 +1988,12 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
             retryable: true,
         })?
     {
+        authorize_operation(
+            app,
+            &crate::app_tools::ToolScope::External,
+            &operation.operation_id,
+            false,
+        )?;
         return to_value(operation);
     }
     let plan = status_store.scan_plan().map_err(|message| RequestFailure {
@@ -1546,7 +2038,12 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
         scan_generation: None,
         summary: None,
     };
-    let operation = match status_store.start_operation(app, operation) {
+    let authority = OperationAuthority {
+        actor: OperationActor::External,
+        session_root: None,
+        permission: OperationPermission::StorageScan(plan.canonical_root.clone()),
+    };
+    let operation = match status_store.start_operation(app, operation, authority) {
         Ok(operation) => operation,
         Err(message) => {
             drop(completion);
@@ -1618,8 +2115,10 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
 fn operation_status(
     app: &AppHandle,
     reference: OperationReference,
+    scope: &crate::app_tools::ToolScope,
 ) -> Result<Value, RequestFailure> {
     reference.validate().map_err(invalid_request)?;
+    authorize_operation(app, scope, &reference.operation_id, false)?;
     let operation = app
         .state::<ControlStatusStore>()
         .operation(&reference.operation_id)
@@ -1630,8 +2129,10 @@ fn operation_status(
 fn cancel_operation(
     app: &AppHandle,
     reference: OperationReference,
+    scope: &crate::app_tools::ToolScope,
 ) -> Result<Value, RequestFailure> {
     reference.validate().map_err(invalid_request)?;
+    let permission_current = authorize_operation(app, scope, &reference.operation_id, true)?;
     let status_store = app.state::<ControlStatusStore>();
     match app
         .state::<super::ScanRuntime>()
@@ -1654,13 +2155,23 @@ fn cancel_operation(
                         retryable: true,
                     })?,
             };
-            to_value(operation)
+            to_value(if permission_current {
+                operation
+            } else {
+                restricted_operation(operation)
+            })
         }
         super::ControlCancelOutcome::TooLate | super::ControlCancelOutcome::NotActive => {
             status_store
                 .operation(&reference.operation_id)
                 .map_err(operation_not_found)
-                .and_then(to_value)
+                .and_then(|operation| {
+                    to_value(if permission_current {
+                        operation
+                    } else {
+                        restricted_operation(operation)
+                    })
+                })
         }
     }
 }
@@ -2187,11 +2698,174 @@ mod tests {
 
         assert!(!status.search_access.files);
         assert!(!status.search_access.documents);
+        assert!(!status.inspection_allowed);
         assert!(!status.scan_access.enabled);
         assert!(status.scan_access.root.is_none());
         assert!(!status.cleanup_access.enabled);
         assert!(status.pending_review.is_none());
         assert_eq!(status.revision, 0);
+    }
+
+    fn native_authority(session: &str) -> OperationAuthority {
+        OperationAuthority {
+            actor: OperationActor::Native(session.to_owned()),
+            session_root: Some(PathBuf::from("selected")),
+            permission: OperationPermission::SelectedRoot,
+        }
+    }
+
+    #[test]
+    fn operation_owner_blocks_cross_session_and_legacy_external_forwarding() {
+        let authority = native_authority("session-a");
+        assert!(operation_authorized(
+            &authority,
+            &OperationActor::Native("session-a".to_owned()),
+            true,
+            false
+        ));
+        for cancelling in [false, true] {
+            assert!(!operation_authorized(
+                &authority,
+                &OperationActor::Native("session-b".to_owned()),
+                true,
+                cancelling
+            ));
+            // Both legacy OperationStatus/Cancel and legacy service forwarding
+            // have the External actor, even if they know the native job ID.
+            assert!(!operation_authorized(
+                &authority,
+                &OperationActor::External,
+                true,
+                cancelling
+            ));
+        }
+        assert_eq!(authority.actor.source(), ControlOperationSource::App);
+        assert!(!external_operation_visible(
+            &authority,
+            ControlOperationSource::App
+        ));
+        assert!(!external_operation_visible(
+            &authority,
+            ControlOperationSource::ChatCli
+        ));
+    }
+
+    #[test]
+    fn revoked_consent_allows_only_owner_stop_and_redacts_restricted_result() {
+        let authority = OperationAuthority {
+            actor: OperationActor::External,
+            session_root: None,
+            permission: OperationPermission::DocumentSearch(PathBuf::from("approved-documents")),
+        };
+        assert!(!operation_authorized(
+            &authority,
+            &OperationActor::External,
+            false,
+            false
+        ));
+        assert!(operation_authorized(
+            &authority,
+            &OperationActor::External,
+            false,
+            true
+        ));
+        assert!(!operation_authorized(
+            &authority,
+            &OperationActor::Native("session-a".to_owned()),
+            false,
+            true
+        ));
+        assert_eq!(authority.actor.source(), ControlOperationSource::ChatCli);
+        assert!(external_operation_visible(
+            &authority,
+            ControlOperationSource::ChatCli
+        ));
+        let restricted = restricted_operation(ControlOperationStatus {
+            operation_id: "a".repeat(32),
+            kind: "documentIndex".to_owned(),
+            source: ControlOperationSource::ChatCli,
+            state: ControlOperationState::Running,
+            cancellation_requested: true,
+            message: Some("private document name".to_owned()),
+            processed_items: Some(17),
+            processed_bytes: Some(99),
+            started_at_unix_ms: 1,
+            finished_at_unix_ms: None,
+            scan_generation: None,
+            summary: Some(StorageScanSummary {
+                root: "/private/source".to_owned(),
+                completed_at_unix_ms: 1,
+                duration_ms: 1,
+                total_files: 2,
+                total_logical_bytes: 3,
+                large_file_count: 1,
+                duplicate_group_count: 0,
+                duplicate_waste_bytes: 0,
+                unreadable_entries: 0,
+                issue_count: 0,
+                candidate_limit_reached: false,
+                hard_link_identity_limit_reached: false,
+            }),
+        });
+        assert_eq!(restricted.operation_id, "a".repeat(32));
+        assert!(restricted.cancellation_requested);
+        assert!(restricted.processed_items.is_none());
+        assert!(restricted.processed_bytes.is_none());
+        assert!(restricted.summary.is_none());
+        assert!(!restricted.message.unwrap().contains("private"));
+    }
+
+    #[test]
+    fn operation_root_identity_is_bound_to_the_started_job_not_a_new_grant() {
+        let authority = native_authority("session-a");
+        assert!(operation_root_matches(
+            &authority,
+            Some(Path::new("selected"))
+        ));
+        assert!(!operation_root_matches(
+            &authority,
+            Some(Path::new("another"))
+        ));
+        assert!(!operation_root_matches(&authority, None));
+        let external = OperationAuthority {
+            actor: OperationActor::External,
+            session_root: None,
+            permission: OperationPermission::FileSearch(PathBuf::from("original-approved")),
+        };
+        assert_eq!(
+            operation_bound_root(&external),
+            Some(Path::new("original-approved"))
+        );
+        assert_ne!(
+            operation_bound_root(&external),
+            Some(Path::new("new-approved"))
+        );
+    }
+
+    #[test]
+    fn operation_authority_history_is_bounded_and_drops_old_owners() {
+        let mut authorities = VecDeque::new();
+        for index in 0..MAX_OPERATION_AUTHORITIES + 4 {
+            remember_operation_authority(
+                &mut authorities,
+                format!("{index:032x}"),
+                native_authority("session-a"),
+            );
+        }
+        assert_eq!(authorities.len(), MAX_OPERATION_AUTHORITIES);
+        assert!(
+            !authorities
+                .iter()
+                .any(|(id, _)| id == &format!("{:032x}", 0))
+        );
+        let newest = authorities.front().unwrap().0.clone();
+        let store = ControlStatusStore {
+            operation_authorities: Mutex::new(authorities),
+            ..Default::default()
+        };
+        assert!(store.operation_authority(&newest).is_ok());
+        assert!(store.operation_authority(&format!("{:032x}", 0)).is_err());
+        assert!(store.operation_authority("unknown").is_err());
     }
 
     #[test]

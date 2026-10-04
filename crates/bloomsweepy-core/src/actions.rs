@@ -58,6 +58,13 @@ impl VerifiedTrashItem {
             _ => None,
         }
     }
+
+    pub fn directory_link_count(&self) -> u64 {
+        match &self.snapshot {
+            VerifiedSnapshot::Directory(snapshot) => snapshot.links,
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -82,6 +89,7 @@ struct DirectorySnapshot {
     modified: SystemTime,
     files: u64,
     directories: u64,
+    links: u64,
     logical_bytes: u64,
     fingerprint: [u8; 32],
 }
@@ -433,6 +441,176 @@ fn validate_directory_boundary(root: &Path, path: &Path) -> Result<(), ActionVal
     Ok(())
 }
 
+/// Stricter, read-only eligibility for the candidate tree. Ordinary folder
+/// review intentionally permits downloaded apps/repositories inside a folder;
+/// a tree promising protected unchecked descendants must never include them.
+pub fn validate_cleanup_tree_path(root: &Path, path: &Path) -> Result<(), ActionValidationError> {
+    if !root.is_absolute() || !path.is_absolute() || path == root || !path.starts_with(root) {
+        return Err(unsafe_path(path, "정리 트리 범위의 하위 항목만 처리합니다"));
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::CurDir
+        )
+    }) {
+        return Err(unsafe_path(path, "비정상 경로는 처리하지 않습니다"));
+    }
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy().to_lowercase();
+        if matches!(
+            name.as_str(),
+            "system"
+                | "library"
+                | "applications"
+                | "windows"
+                | "appdata"
+                | "program files"
+                | "program files (x86)"
+                | "programdata"
+                | "$recycle.bin"
+                | "system volume information"
+                | ".trash"
+                | ".trashes"
+                | ".git"
+        ) || [".app", ".bundle", ".framework"]
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+        {
+            return Err(unsafe_path(path, "운영체제·앱·저장소의 보호 항목입니다"));
+        }
+    }
+    #[cfg(unix)]
+    for protected in [
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/etc",
+        "/private/etc",
+        "/private/var/db",
+        "/private/var/root",
+    ] {
+        if path.starts_with(protected) {
+            return Err(unsafe_path(path, "운영체제 보호 경로입니다"));
+        }
+    }
+    crate::scan_policy::ensure_local_path(path).map_err(|error| unsafe_path(path, error))?;
+    let metadata = fs::symlink_metadata(path).map_err(|error| access_error(path, error))?;
+    if is_link_or_reparse_point(&metadata) || (!metadata.is_file() && !metadata.is_dir()) {
+        return Err(unsafe_path(
+            path,
+            "링크 또는 특수 항목은 트리 정리에서 제외됩니다",
+        ));
+    }
+    let root_metadata = fs::symlink_metadata(root).map_err(|error| access_error(root, error))?;
+    validate_directory_device(
+        path,
+        required_identity(root, &root_metadata)?.identity,
+        required_identity(path, &metadata)?.identity,
+    )?;
+    if metadata.is_dir() {
+        validate_directory_boundary(root, path)
+    } else {
+        let parent = path
+            .parent()
+            .ok_or_else(|| unsafe_path(path, "부모 폴더가 없습니다"))?;
+        if parent != root {
+            validate_directory_boundary(root, parent)?;
+        } else {
+            crate::validate_local_directory_path(root)
+                .map_err(|error| unsafe_path(root, error.to_string()))?;
+        }
+        validate_cleanup_path_boundary(path)
+    }
+}
+
+/// Opaque filesystem object identity for an ephemeral native tree scope.
+pub fn cleanup_tree_scope_identity(path: &Path) -> Result<(u64, u64), ActionValidationError> {
+    let canonical = crate::validate_local_directory_path(path)
+        .map_err(|error| unsafe_path(path, error.to_string()))?;
+    if canonical != path {
+        return Err(unsafe_path(path, "정리 트리 경계가 변경됐습니다"));
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|error| access_error(path, error))?;
+    let identity = required_identity(path, &metadata)?.identity;
+    Ok((identity.device, identity.index))
+}
+
+/// A node ID remains bound to the object observed by the trusted scan.
+pub fn validate_cleanup_tree_node_identity(
+    node: &crate::DirectoryNode,
+) -> Result<(), ActionValidationError> {
+    let path = Path::new(&node.path);
+    let metadata = fs::symlink_metadata(path).map_err(|error| access_error(path, error))?;
+    if is_link_or_reparse_point(&metadata)
+        || node.is_directory != metadata.is_dir()
+        || (!metadata.is_dir() && !metadata.is_file())
+        || node.scan_identity != Some(required_identity(path, &metadata)?)
+        || node.scan_modified_at.is_none()
+        || node.scan_modified_at != metadata.modified().ok()
+        || (!node.is_directory && node.logical_bytes != metadata.len())
+    {
+        return Err(ActionValidationError::Changed(node.path.clone()));
+    }
+    Ok(())
+}
+
+/// Validate the same trusted folder snapshot, then audit every descendant with
+/// the tree's strict protection policy. Unloaded UI children cannot bypass it.
+pub fn validate_cleanup_tree_trash_folder<C>(
+    report: &crate::DirectoryScanReport,
+    selected_path: &str,
+    should_cancel: C,
+) -> Result<VerifiedTrashItem, ActionValidationError>
+where
+    C: Fn() -> bool,
+{
+    let item = validate_directory_trash_folder(report, selected_path, &should_cancel)?;
+    let started = Instant::now();
+    let root = Path::new(&report.root);
+    let path = Path::new(selected_path);
+    validate_cleanup_tree_path(root, path)?;
+    let mut frames = vec![fs::read_dir(path).map_err(|error| access_error(path, error))?];
+    let mut entries = 0_u64;
+    let mut path_bytes = 0_usize;
+    while let Some(frame) = frames.last_mut() {
+        check_cancelled(&should_cancel)?;
+        crate::ensure_operation_memory().map_err(|error| unsafe_path(path, error))?;
+        if started.elapsed() > FOLDER_MAX_DURATION {
+            return Err(unsafe_path(
+                path,
+                "보호 항목 검사 시간 상한에 도달했습니다. 더 작은 폴더를 선택하세요",
+            ));
+        }
+        let Some(entry) = frame.next() else {
+            frames.pop();
+            continue;
+        };
+        let entry = entry.map_err(|error| access_error(path, error))?;
+        let child = entry.path();
+        entries += 1;
+        path_bytes = path_bytes.saturating_add(child.as_os_str().len());
+        if entries > FOLDER_MAX_ENTRIES || path_bytes > FOLDER_MAX_PATH_BYTES {
+            return Err(unsafe_path(
+                path,
+                "보호 항목 검사 상한에 도달했습니다. 더 작은 폴더를 선택하세요",
+            ));
+        }
+        validate_cleanup_tree_path(root, &child)?;
+        if fs::symlink_metadata(&child)
+            .map_err(|error| access_error(&child, error))?
+            .is_dir()
+        {
+            if frames.len() >= FOLDER_MAX_DEPTH {
+                return Err(unsafe_path(path, "보호 항목 검사 깊이 상한에 도달했습니다"));
+            }
+            frames.push(fs::read_dir(&child).map_err(|error| access_error(&child, error))?);
+        }
+    }
+    check_cancelled(&should_cancel)?;
+    Ok(item)
+}
+
 /// Review only a direct child in the trusted current map. This captures metadata,
 /// not file bodies; final validation cannot eliminate path-based OS races.
 pub fn validate_directory_trash_folder<C>(
@@ -493,6 +671,12 @@ fn folder_metadata_hash(
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_err(|_| unsafe_path(path, "수정 시각을 확인할 수 없습니다"))?;
     hasher.update(&modified.as_nanos().to_le_bytes());
+    // read_link reads the link itself, including broken/external targets. Never
+    // canonicalize or open a target: a parent folder Trash move carries the link.
+    if metadata.file_type().is_symlink() {
+        let target = fs::read_link(path).map_err(|error| access_error(path, error))?;
+        update_os_str(&mut hasher, target.as_os_str());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
@@ -546,6 +730,7 @@ where
     let mut fingerprints = vec![initial];
     let mut files = 0_u64;
     let mut directories = 1_u64;
+    let mut links = 0_u64;
     let mut logical_bytes = 0_u64;
     let mut path_bytes = 0_usize;
     while let Some(frame) = stack.last_mut() {
@@ -577,7 +762,7 @@ where
         };
         let entry = entry.map_err(|error| access_error(&frame.path, error))?;
         let entry_path = entry.path();
-        if files + directories >= FOLDER_MAX_ENTRIES {
+        if files + directories + links >= FOLDER_MAX_ENTRIES {
             return Err(unsafe_path(
                 path,
                 "폴더 검토 항목 상한(20,000개)에 도달했습니다. 더 작은 하위 폴더를 선택하세요",
@@ -588,11 +773,28 @@ where
             return Err(unsafe_path(path, "폴더 검토 경로 용량 상한에 도달했습니다"));
         }
         // Hidden files and nested downloaded apps/repositories are included, not
-        // silently skipped. Links and cloud/offline content fail the entire plan.
+        // silently skipped. Cloud/offline content fails the entire plan.
         crate::scan_policy::ensure_local_path(&entry_path)
             .map_err(|error| unsafe_path(&entry_path, error))?;
         let entry_metadata =
             fs::symlink_metadata(&entry_path).map_err(|error| access_error(&entry_path, error))?;
+        // POSIX symlinks inside a selected real folder are opaque entries. Their
+        // identity/target text is fingerprinted, but targets are never traversed
+        // or counted. Windows reparse/junction handling stays fail-closed.
+        #[cfg(unix)]
+        if entry_metadata.file_type().is_symlink() {
+            links += 1;
+            let relative = entry_path
+                .strip_prefix(path)
+                .ok()
+                .ok_or_else(|| unsafe_path(path, "폴더 경계가 변경됐습니다"))?;
+            fingerprints.push(folder_metadata_hash(
+                &entry_path,
+                relative,
+                &entry_metadata,
+            )?);
+            continue;
+        }
         if is_link_or_reparse_point(&entry_metadata)
             || (!entry_metadata.is_file() && !entry_metadata.is_dir())
         {
@@ -650,6 +852,7 @@ where
         modified,
         files,
         directories,
+        links,
         logical_bytes,
         fingerprint: *hasher.finalize().as_bytes(),
     })
@@ -1331,6 +1534,41 @@ mod tests {
     }
 
     #[test]
+    fn candidate_tree_strict_policy_blocks_protected_unloaded_descendants_without_changing_folder_policy()
+     {
+        let temp = action_tempdir();
+        let folder = temp.path().join("download");
+        fs::create_dir_all(folder.join("Example.app/Contents")).unwrap();
+        fs::create_dir(folder.join(".git")).unwrap();
+        fs::write(folder.join("normal.txt"), b"normal").unwrap();
+        fs::write(folder.join(".git/config"), b"repo").unwrap();
+        let report = directory_report(temp.path());
+        let canonical_root = Path::new(&report.root);
+        let canonical_folder = canonical_root.join("download");
+        assert!(
+            validate_directory_trash_folder(&report, &canonical_folder.to_string_lossy(), || false)
+                .is_ok()
+        );
+        assert!(
+            validate_cleanup_tree_trash_folder(
+                &report,
+                &canonical_folder.to_string_lossy(),
+                || false
+            )
+            .is_err()
+        );
+        assert!(
+            validate_cleanup_tree_path(canonical_root, &canonical_folder.join(".git/config"))
+                .is_err()
+        );
+        assert!(
+            validate_cleanup_tree_path(canonical_root, &canonical_folder.join("normal.txt"))
+                .is_ok()
+        );
+        assert!(folder.join(".git/config").exists());
+    }
+
+    #[test]
     fn directory_folder_review_rejects_new_content_replacement_unknown_root_and_cancel() {
         let temp = action_tempdir();
         let folder = temp.path().join("download");
@@ -1383,7 +1621,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn directory_folder_review_rejects_nested_links_parent_swap_and_unreadable_subtrees() {
+    fn directory_folder_review_rejects_new_links_parent_swap_and_unreadable_subtrees() {
         use std::os::unix::fs::{PermissionsExt, symlink};
         let temp = action_tempdir();
         let root = temp.path().join("root");
@@ -1409,6 +1647,54 @@ mod tests {
         fs::rename(&root, temp.path().join("root-original")).unwrap();
         symlink(temp.path().join("root-original"), &root).unwrap();
         assert!(revalidate_verified_trash_item(&item, || false).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_folder_review_keeps_nested_links_opaque_and_detects_retargeting() {
+        use std::os::unix::fs::symlink;
+        let temp = action_tempdir();
+        let root = temp.path().join("root");
+        let folder = root.join("project");
+        fs::create_dir_all(folder.join("node_modules/.bin")).unwrap();
+        fs::write(folder.join("local.txt"), b"local").unwrap();
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("keep.txt"), b"must stay outside").unwrap();
+        symlink(&outside, folder.join("external")).unwrap();
+        symlink("../tool", folder.join("node_modules/.bin/tool")).unwrap();
+        symlink("missing", folder.join("broken")).unwrap();
+        symlink(&folder, folder.join("cycle")).unwrap();
+        // Even a link to a cloud path is only a link; no stat/open of its target.
+        symlink(
+            "/Users/example/Library/CloudStorage/unknown",
+            folder.join("cloud-link"),
+        )
+        .unwrap();
+        let report = directory_report(&root);
+        let item =
+            validate_directory_trash_folder(&report, &report.children[0].path, || false).unwrap();
+        assert_eq!(item.logical_bytes(), 5);
+        assert_eq!(item.directory_counts(), Some((1, 3)));
+        assert_eq!(item.directory_link_count(), 5);
+        revalidate_verified_trash_item(&item, || false).unwrap();
+        fs::write(
+            outside.join("keep.txt"),
+            b"outside target may change independently",
+        )
+        .unwrap();
+        revalidate_verified_trash_item(&item, || false).unwrap();
+        fs::remove_file(folder.join("external")).unwrap();
+        symlink(&root, folder.join("external")).unwrap();
+        assert!(revalidate_verified_trash_item(&item, || false).is_err());
+        assert!(
+            validate_directory_trash_folder(
+                &directory_report(&root),
+                folder.join("external").to_str().unwrap(),
+                || false
+            )
+            .is_err()
+        );
     }
 
     #[test]

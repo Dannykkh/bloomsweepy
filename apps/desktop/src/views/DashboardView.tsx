@@ -897,6 +897,7 @@ function HistoryRow({ entry }: { entry: ActionHistoryEntry }) {
       : entry.actionKind === "emptyDirectories"
         ? t("빈 폴더 정리")
         : entry.actionKind === "directoryFolder" ? t("폴더 휴지통 이동")
+          : entry.actionKind === "assistantFiles" ? t("파일·폴더 관리")
           : entry.actionKind === "applicationBundle" ? t("앱 본체 휴지통 이동")
             : entry.actionKind === "applicationData" ? t("앱 관련 데이터 정리") : t("파일 정리");
   const status = entry.cancelled

@@ -63,7 +63,7 @@ function Fixture() {
         if (params.has("prepare-failure")) throw new Error("Fixture: folder review exceeded its resource limit");
         const node = report.children.find((node) => node.path === path)!;
         const next = { id: "fixture-folder-plan", generation, path, logicalBytes: node.logicalBytes,
-          fileCount: node.fileCount, directoryCount: node.directoryCount,
+          fileCount: node.fileCount, directoryCount: node.directoryCount, linkCount: 0,
           expiresAtUnixMs: Date.now() + (params.has("expired") ? -1 : 300_000) };
         setPlan(next);
         setActivity(`review:${path}`);

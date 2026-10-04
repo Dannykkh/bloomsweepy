@@ -138,6 +138,8 @@ pub(crate) async fn delete_assistant_session(
             .map_err(|error| format!("대화 삭제 작업이 중단됐습니다: {error}"))??;
     app.state::<crate::assistant_tools::AssistantToolsState>()
         .forget(&session_id)?;
+    app.state::<crate::assistant_files::AssistantFilesState>()
+        .forget(&session_id)?;
     Ok(deleted)
 }
 

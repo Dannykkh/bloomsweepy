@@ -24,6 +24,8 @@ import {
 } from "react";
 import { ControlStatusPanel } from "../components/ControlStatusPanel";
 import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../components/AssistantEmptyFolderCard";
+import { AssistantFileCard } from "../components/AssistantFileCard";
+import { AssistantAppToolCard } from "../components/AssistantAppToolCard";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
 import { useLanguage, type Translate } from "../i18n";
 import {
@@ -39,6 +41,11 @@ import {
   getAssistantEmptyWorkspace,
   selectAssistantEmptyCandidates,
   prepareAssistantEmptyPlan,
+  getAssistantFileWorkspace,
+  getAssistantDirectoryReport,
+  assistantFileAction,
+  selectAssistantFiles,
+  prepareAssistantFilePlan,
   cancelScan,
 } from "../lib/bridge";
 import { formatAssistantPlainText } from "../lib/assistantText";
@@ -48,7 +55,11 @@ import { formatBytes, formatCount, formatDate, formatDockerBytes } from "../lib/
 import { findVolumeForPath } from "../lib/volumePath";
 import type {
   AssistantChatTurn,
+  AppToolResult,
+  AppToolLocalCompletion,
   AssistantEmptyWorkspace,
+  AssistantFileWorkspace,
+  AssistantFileAction,
   TrashOperationResult,
   AssistantDockerContext,
   AssistantFolderSummary,
@@ -101,6 +112,15 @@ interface AssistantViewProps {
   onLaunchRequestHandled: () => void;
   onPickFolder: () => Promise<DirectoryScanReport | null>;
   onConfirmEmptyPlan: (sessionId: string, revision: string, planId: string) => Promise<TrashOperationResult>;
+  onConfirmFilePlan: (sessionId: string, revision: string, planId: string, nestedAck: boolean) => Promise<TrashOperationResult>;
+  onDirectoryReport: (report: DirectoryScanReport, open: boolean) => void;
+  onOpenCleanupTree?: (sessionId: string, revision: string) => void;
+  updatingInspectionAccess?: boolean;
+  inspectionAccessError?: string | null;
+  onToggleInspectionAccess?: () => void;
+  onAppToolView?: (result: AppToolResult) => void;
+  onAppToolReview?: (result: AppToolResult, sessionId: string) => void;
+  appToolCompletion?: AppToolLocalCompletion | null;
 }
 
 export function AssistantView({
@@ -129,11 +149,22 @@ export function AssistantView({
   onLaunchRequestHandled,
   onPickFolder,
   onConfirmEmptyPlan,
+  onConfirmFilePlan,
+  onDirectoryReport,
+  onOpenCleanupTree,
+  updatingInspectionAccess,
+  inspectionAccessError,
+  onToggleInspectionAccess,
+  onAppToolView,
+  onAppToolReview,
+  appToolCompletion,
 }: AssistantViewProps) {
   const { language, t } = useLanguage();
   const initialProviderPreference = useRef(readProviderPreference());
   const initialOllamaModelPreference = useRef(readOllamaModelPreference());
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
+  const [appToolResults, setAppToolResults] = useState<AppToolResult[]>([]);
+  const handledCompletion = useRef<number | null>(null);
   const [selectedProviderKind, setSelectedProviderKind] = useState<AssistantProviderKind>(
     initialProviderPreference.current ?? "codex",
   );
@@ -151,8 +182,8 @@ export function AssistantView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [emptyWorkspace, setEmptyWorkspace] = useState<AssistantEmptyWorkspace | null>(null);
+  const [fileWorkspace, setFileWorkspace] = useState<AssistantFileWorkspace | null>(null);
   const [emptyActionBusy, setEmptyActionBusy] = useState(false);
-  const [emptyMoving, setEmptyMoving] = useState(false);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [dockerContext, setDockerContext] = useState<AssistantDockerContext | null>(null);
@@ -185,19 +216,108 @@ export function AssistantView({
       && !sessionBusy,
   );
 
+  useEffect(() => { setAppToolResults([]); }, [activeSession?.session.id]);
+  useEffect(() => {
+    if (!appToolCompletion || appToolCompletion.sequence === handledCompletion.current || appToolCompletion.sessionId !== activeSession?.session.id) return;
+    handledCompletion.current = appToolCompletion.sequence;
+    setTurns((current) => [...current, { role: "assistant", content: appToolCompletion.message, providerLabel: "BroomSweepy" }]);
+    setAppToolResults((current) => current.filter((result) => result.status !== "review_required"));
+    if (appToolCompletion.trashResult) { setTrashResult(appToolCompletion.trashResult); setFileWorkspace(null); setEmptyWorkspace(null); }
+    void appendAssistantMessage({ sessionId: appToolCompletion.sessionId!, role: "assistant", content: appToolCompletion.message, provider: null, model: null })
+      .then((mutation) => updateSessionSummary(mutation.session))
+      .catch((reason) => setSessionError(t("AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(reason, t) })));
+  }, [appToolCompletion, activeSession?.session.id]);
+
   useEffect(() => {
     let disposed = false;
     const revision = ++emptyStateRevision.current;
     setEmptyWorkspace(null);
+    setFileWorkspace(null);
     setTrashResult(null);
     const sessionId = activeSession?.session.id;
     if (sessionId && activeSession.session.scopeKind === "folder") {
       void getAssistantEmptyWorkspace(sessionId).then((workspace) => {
         if (!disposed && revision === emptyStateRevision.current) setEmptyWorkspace(workspace);
       }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); });
+      void getAssistantFileWorkspace(sessionId).then((workspace) => {
+        if (!disposed && revision === emptyStateRevision.current) setFileWorkspace(workspace);
+      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); });
     }
     return () => { disposed = true; };
   }, [activeSession?.session.id]);
+
+  useEffect(() => {
+    const sessionId = activeSession?.session.id;
+    if (!sessionId || !fileWorkspace?.mapGeneration) return;
+    let disposed = false;
+    // Fetch the same generation, not a second disk scan. Older asynchronous replies cannot win.
+    void getAssistantDirectoryReport(sessionId, fileWorkspace.revision).then((report) => {
+      if (!disposed) onDirectoryReport(report, false);
+    }).catch(() => { /* Another scan can expire this snapshot; explicit opening reports the error. */ });
+    return () => { disposed = true; };
+  }, [activeSession?.session.id, fileWorkspace?.revision, fileWorkspace?.mapGeneration, onDirectoryReport]);
+
+  async function showFileMap() {
+    const sessionId = activeSession?.session.id;
+    if (!sessionId || !fileWorkspace || requestInFlight.current || sessionBusy || sending || cleanupAccessLocked) return;
+    requestInFlight.current = true;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const report = await getAssistantDirectoryReport(sessionId, fileWorkspace.revision);
+      onDirectoryReport(report, true);
+    } catch (reason) {
+      setSessionError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      requestInFlight.current = false;
+      setSessionBusy(false);
+    }
+  }
+
+  async function manageFiles(action: "select" | "prepare" | "confirm" | AssistantFileAction, ids?: string[], nestedAck = false) {
+    const sessionId = activeSession?.session.id;
+    if (!sessionId || requestInFlight.current || sessionBusy || sending || cleanupAccessLocked) return;
+    if (typeof action === "string" && !fileWorkspace) return;
+    requestInFlight.current = true;
+    ++emptyStateRevision.current;
+    setSessionBusy(true);
+    setEmptyActionBusy(true);
+    setSessionError(null);
+    try {
+      if (action === "confirm" && fileWorkspace?.plan) {
+        const result = await onConfirmFilePlan(sessionId, fileWorkspace.revision, fileWorkspace.plan.id, nestedAck);
+        setFileWorkspace(null); setEmptyWorkspace(null); setTrashResult(result);
+        const content = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })
+          + " " + t("추가 정리 전 파일·폴더를 다시 검사하세요.");
+        setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+        const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
+        updateSessionSummary(mutation.session);
+      } else {
+        const workspace = action === "select"
+          ? await selectAssistantFiles(sessionId, fileWorkspace!.revision, ids ?? [])
+          : action === "prepare"
+            ? await prepareAssistantFilePlan(sessionId, fileWorkspace!.revision)
+            : typeof action === "object" ? await assistantFileAction(sessionId, action) : null;
+        if (workspace) {
+          setFileWorkspace(workspace); setEmptyWorkspace(null); setTrashResult(null);
+          if (workspace.query === null && workspace.currentPath === activeScope) setActiveSession((current) => current?.session.id === sessionId
+            ? { ...current, folderSummary: workspace.summary } : current);
+          // Local navigation/review is evidence for the next AI turn, but paths remain local.
+          if (action !== "select") {
+            const content = fileWorkspaceMessage(workspace, t);
+            setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+            const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
+            updateSessionSummary(mutation.session);
+          }
+        }
+      }
+    } catch (reason) {
+      setSessionError(reason instanceof Error ? reason.message : String(reason));
+      try { setFileWorkspace(await getAssistantFileWorkspace(sessionId)); } catch { setFileWorkspace(null); }
+    } finally {
+      requestInFlight.current = false; setSessionBusy(false); setEmptyActionBusy(false);
+    }
+  }
 
   async function manageEmptyFolders(action: "select" | "prepare" | "confirm", ids?: string[]) {
     const sessionId = activeSession?.session.id;
@@ -206,7 +326,6 @@ export function AssistantView({
     ++emptyStateRevision.current;
     setSessionBusy(true);
     setEmptyActionBusy(true);
-    setEmptyMoving(action === "confirm");
     setSessionError(null);
     try {
       if (action === "select") {
@@ -232,7 +351,6 @@ export function AssistantView({
       requestInFlight.current = false;
       setSessionBusy(false);
       setEmptyActionBusy(false);
-      setEmptyMoving(false);
     }
   }
 
@@ -336,6 +454,7 @@ export function AssistantView({
     setDockerContext(null);
     setDockerPreview(null);
     setDockerReviewError(null);
+    setAppToolResults([]);
   }
 
   function updateSessionSummary(nextSession: AssistantSessionSummary) {
@@ -515,7 +634,11 @@ export function AssistantView({
         includeDockerStatus,
         responseLanguage: language,
       });
-      const assistantMessage = response.toolAction && response.emptyWorkspace
+      const assistantMessage = response.analysisComplete !== undefined || response.appToolResults?.length
+        ? formatAssistantPlainText(response.message)
+        : response.fileWorkspace
+        ? fileWorkspaceMessage(response.fileWorkspace, t)
+        : response.toolAction && response.emptyWorkspace
         ? (response.toolAction === "scan"
             ? t("앱 검사를 완료했습니다. 빈 폴더 {{count}}개를 검토할 수 있습니다.", { count: response.emptyWorkspace.candidates.length })
             : response.toolAction === "selection"
@@ -525,16 +648,23 @@ export function AssistantView({
         : formatAssistantPlainText(response.message);
       if (response.emptyWorkspace) {
         setEmptyWorkspace(response.emptyWorkspace);
+        setFileWorkspace(null);
         setTrashResult(null);
         setActiveSession((current) => current?.session.id === sessionId
           ? { ...current, folderSummary: response.emptyWorkspace!.summary } : current);
       }
+      if (response.fileWorkspace) {
+        setFileWorkspace(response.fileWorkspace); setEmptyWorkspace(null); setTrashResult(null);
+        if (response.fileWorkspace.query === null && response.fileWorkspace.currentPath === activeScope) setActiveSession((current) => current?.session.id === sessionId
+          ? { ...current, folderSummary: response.fileWorkspace!.summary } : current);
+      }
+      setAppToolResults((response.appToolResults ?? []).slice(-4));
       setTurns((current) => [
         ...current,
         {
           role: "assistant",
           content: assistantMessage,
-          providerLabel: response.toolAction ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
+          providerLabel: response.toolAction && !response.analysisComplete ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
         },
       ]);
       setDockerContext(response.dockerContext);
@@ -543,8 +673,8 @@ export function AssistantView({
           sessionId,
           role: "assistant",
           content: assistantMessage,
-          provider: response.toolAction ? null : response.provider,
-          model: response.toolAction ? null : response.model,
+          provider: response.toolAction && !response.analysisComplete ? null : response.provider,
+          model: response.toolAction && !response.analysisComplete ? null : response.model,
         });
         updateSessionSummary(assistantMutation.session);
       } catch (reason) {
@@ -563,6 +693,7 @@ export function AssistantView({
       } else {
         const detail = normalizeAssistantError(reason, t);
         try { setEmptyWorkspace(await getAssistantEmptyWorkspace(sessionId)); } catch { setEmptyWorkspace(null); }
+        try { setFileWorkspace(await getAssistantFileWorkspace(sessionId)); } catch { setFileWorkspace(null); }
         setProviderError(detail);
         if (isAssistantAuthenticationFailure(reason)) {
           setProviders((current) => current.map((candidate) => candidate.provider === selectedProviderKind
@@ -781,7 +912,7 @@ export function AssistantView({
             turns.map((turn, index) => (
               <article
                 className={`assistant-message is-${turn.role}`}
-                key={turn.sequence ? `${turn.role}-${turn.sequence}` : `${turn.role}-${index}`}
+                key={turn.sequence !== undefined ? `${turn.role}-saved-${turn.sequence}` : `${turn.role}-pending-${index}`}
               >
                 <span aria-hidden="true">
                   {turn.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
@@ -817,15 +948,28 @@ export function AssistantView({
                   })}
             </div>
           ) : null}
+          {appToolResults.map((result, index) => <AssistantAppToolCard key={`${result.capability}-${result.capturedAtUnixMs}-${index}`} result={result} busy={sending || sessionBusy || cleanupAccessLocked}
+            onView={onAppToolView} onReview={onAppToolReview && activeSession ? (prepared) => onAppToolReview(prepared, activeSession.session.id) : undefined} />)}
           {emptyWorkspace ? <AssistantEmptyFolderCard
             workspace={emptyWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
             onSelect={(ids) => void manageEmptyFolders("select", ids)}
             onPrepare={() => void manageEmptyFolders("prepare")}
             onConfirm={() => void manageEmptyFolders("confirm")}
           /> : null}
+          {fileWorkspace ? <AssistantFileCard workspace={fileWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
+            onOpenCleanupTree={onOpenCleanupTree && activeSession ? () => onOpenCleanupTree(activeSession.session.id, fileWorkspace.revision) : undefined}
+            onShowMap={() => void showFileMap()}
+            onAction={(action) => void manageFiles(action)}
+            onSelect={(ids) => void manageFiles("select", ids)}
+            onPrepare={() => void manageFiles("prepare")}
+            onConfirm={(nestedAck) => void manageFiles("confirm", undefined, nestedAck)}
+          /> : activeSession && activeScopeKind === "folder" && !emptyWorkspace ? <button type="button" className="secondary-button"
+            disabled={sending || sessionBusy || cleanupAccessLocked} onClick={() => void manageFiles({ kind: "scan" })}>
+            <FolderOpen size={16} aria-hidden="true" />{t("대화 폴더 파일·폴더 검사")}
+          </button> : null}
           {emptyActionBusy ? <div className="assistant-thinking" role="status">
             <LoaderCircle size={17} aria-hidden="true" />{t("앱에서 후보 확인 또는 휴지통 이동을 처리하고 있습니다.")}
-            {emptyMoving ? <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button> : null}
+            <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button>
           </div> : null}
           {trashResult ? <AssistantTrashResultCard result={trashResult} /> : null}
           {dockerContext?.enabled ? (
@@ -904,6 +1048,7 @@ export function AssistantView({
             ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
             : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}
         </p>
+        <p className="assistant-composer-note">{t("로컬 문서 검색은 외부로 보내지 않습니다. AI 문서 검색을 허용하면 문서 이름과 일치 본문 일부가 선택한 AI에 전달됩니다.")}</p>
       </section>
 
       <details className="assistant-access-details">
@@ -919,7 +1064,7 @@ export function AssistantView({
           <p>
             {activeScopeKind === "docker"
               ? t("Docker 조회는 BroomSweepy가 수행합니다. 앱은 범주별 사용량과 정리 가능 참고 상한만 선택한 AI CLI의 질문 입력으로 보냅니다.")
-              : t("폴더 선택과 읽기 검사는 BroomSweepy가 수행합니다. 앱은 파일 내용과 전체 경로를 빼고 제한된 요약만 선택한 AI CLI의 질문 입력으로 보냅니다.")}
+              : t("조회·검색·측정은 BroomSweepy가 수행합니다. AI는 제한된 실제 목록을 받아 분석하며, 허용한 문서 검색에서만 일치 본문 일부가 전달됩니다.")}
           </p>
           <p>
             {providerPermissionDetail(provider, t)} {t("아래 설정은 별도 터미널 제어용입니다.")}
@@ -943,6 +1088,9 @@ export function AssistantView({
           cleanupAccessError={cleanupAccessError}
           onToggleCleanupAccess={onToggleCleanupAccess}
           onReviewPending={onReviewPending}
+          updatingInspectionAccess={updatingInspectionAccess}
+          inspectionAccessError={inspectionAccessError}
+          onToggleInspectionAccess={onToggleInspectionAccess}
         />
       </details>
 
@@ -1295,4 +1443,20 @@ function providerUnavailableMessage(provider: AssistantProviderStatus, t: Transl
 
 function normalizeAssistantError(reason: unknown, t: Translate): string {
   return assistantFailureMessage(reason) ?? t("AI CLI 응답을 받지 못했습니다");
+}
+
+function fileWorkspaceMessage(workspace: AssistantFileWorkspace, t: Translate): string {
+  const result = workspace.plan
+    ? t("일반 파일·폴더 {{count}}개의 최종 검토를 준비했습니다. 정확한 경로와 포함 항목을 확인한 뒤 아래 버튼으로 휴지통에 보낼 수 있습니다.", { count: formatCount(workspace.plan.entries.length) })
+    : workspace.query
+      ? t("앱에서 이름 검색을 완료했습니다. 결과 {{count}}개를 아래 카드에서 확인하세요. 삭제할 항목을 선택해 최종 검토할 수 있습니다.", { count: formatCount(workspace.totalEntries) })
+      : t("앱에서 파일·폴더 검사를 완료했습니다. 현재 목록 {{count}}개에서 하위 항목 확인·열기·선택 정리를 할 수 있습니다.", { count: formatCount(workspace.totalEntries) });
+  const ranked = !workspace.plan && workspace.sizeRanked
+    ? t("현재 폴더의 직계 항목을 용량순으로 검사했습니다. 폴더 용량은 하위 항목의 합계입니다.") + "\n"
+      + workspace.entries.slice(0, 5).map((entry) => `${entry.number}. ${entry.name.slice(0, 240)} — ${formatBytes(entry.logicalBytes ?? 0)}`).join("\n")
+      + "\n" + t("용량만으로 삭제 안전성을 판단할 수 없습니다. 하위 항목·필요 여부·백업을 먼저 확인하세요.")
+    : result;
+  return ranked + " " + (workspace.truncated ? t("검사 상한에 도달한 부분 결과입니다.") + " " : "")
+    + (workspace.unreadableEntries ? t("읽지 못한 항목이 있어 검사 결과가 완전하지 않을 수 있습니다.") + " " : "")
+    + t("아직 휴지통으로 이동한 항목은 없습니다.");
 }

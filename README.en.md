@@ -15,7 +15,23 @@ BroomSweepy is a project building a **conversational file management system** fo
 
 **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
+## Current development build — conversational files and folders
+
+**Cleanup candidates → Folder tree** supports expanding folders and selecting all or individual items. Parent selection includes descendants; excluding a child prevents moving the parent itself. Enter from the storage map or a measured AI file list, then review exact targets before moving them to Trash. Whole-folder review on this new page strictly checks hidden protected items, links, clouds, and device boundaries. State is capped at 2,048 nodes and rendering at 200 rows; unmeasured, partial, and expired results remain explicit. This Mac's new installation passed three temporary targets/209B moved to Trash, child preservation, cancellation, rescan, local AI-card entry, and history after restart. Windows, external-model investigation end-to-end, and long-duration memory tests remain pending. [Tree QA](docs/qa/2026-10-05-cleanup-tree.md) · [Native Mac QA](docs/qa/2026-10-05-cleanup-tree-native.md)
+
+Ask “What is the largest folder or data here? Can I delete it?” to freshly measure and rank direct items in the current folder. Folder sizes include descendants; size alone does not establish deletion safety. **View the same results on the storage map** reuses that scan in the treemap. Name-only folder matches remain unmeasured until inspected. Partial results, read failures, and expired snapshots are distinguished. This question neither selects deletion targets nor deletes anything.
+
+Ask the assistant to scan files, find a name, or delete a named folder such as `promo-video`. Rust performs the actual name search, size scan, child-folder browsing, and trash review, including nonempty folders. The same conversation's local cards provide Open, Reveal, selection, final confirmation, and per-item results. Models request app operations; they never receive deletion authority.
+
+Search retains at most 200 results, model/UI pages contain 24, and a trash review allows 100 selected items. Search-only folder sizes are unmeasured, not zero. Ambiguous names or incomplete searches never auto-select a target. Review exact local paths, contents, and logical sizes; folders require acknowledgment of all nested contents. Plans are single-use, expire after five minutes, and revalidate changes, links, clouds, and protected paths before OS Trash. Permanent deletion, arbitrary shell commands, conversational renaming, ordinary moves, and folder creation are not provided.
+
+These source/development additions are not in the existing GitHub v1.7.0 downloads. Real Codex scan/nonempty-folder review requests and native macOS Trash moves of synthetic items have been tested. Windows runtime and long-duration resource validation remain pending.
+
+On macOS, symlinks inside a real folder (such as `node_modules/.bin`) move only as links; targets are never followed. Review displays a separate link count and detects retargeting. Linked targets/ancestors, clouds, mount boundaries, and special files remain protected; Windows reparse points/junctions remain blocked. [Development QA](docs/qa/2026-10-04-conversational-files.md)
+
 ## v1.7.0 — Conversational tools and resource safeguards
+
+The scope and pending checks below describe the published v1.7.0 release. See above for current development additions and verification.
 
 [Stable release and downloads](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.7.0) · [Changelog](CHANGELOG.md)
 

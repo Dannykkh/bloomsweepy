@@ -9780,3 +9780,22 @@ dialog.empty-trash-dialog {
 .assistant-empty-review button { white-space: normal; }
 .assistant-empty-review .text-button { min-height: 44px; background: none; border: 0; color: inherit; padding: 6px 4px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .assistant-empty-review button:disabled { opacity: .45; cursor: not-allowed; }
+.cleanup-source-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.cleanup-source-toolbar__modes,
+.cleanup-source-toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cleanup-source-toolbar__modes button,
+.cleanup-source-toolbar__actions button { min-height: 44px; }
+.cleanup-source-toolbar p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-muted);
+}

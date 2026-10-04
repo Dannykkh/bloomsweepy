@@ -8,7 +8,11 @@ import type {
   EmptyTrashOutcome,
   AssistantChatRequest,
   AssistantEmptyWorkspace,
+  AssistantFileWorkspace,
+  AssistantFileAction,
   AssistantChatResponse,
+  AppToolResult,
+  AppToolCompletedEvent,
   AssistantSessionSummary,
   AssistantSessionDetail,
   CreateAssistantSessionRequest,
@@ -67,6 +71,8 @@ import type {
   McpClientRegistrationStatus,
 } from "../types";
 import type { LanguagePreference } from "../i18n/preference";
+export { openCleanupTree, getCleanupTree, loadCleanupTreeChildren, updateCleanupTreeSelection,
+  prepareCleanupTreePlan, confirmCleanupTreePlan, dismissCleanupTreePlan } from "./cleanupTreeBridge";
 
 export function setApplicationLanguage(language: LanguagePreference): Promise<void> {
   return invoke<void>("set_application_language", { language });
@@ -100,6 +106,26 @@ export function cancelAssistant(): Promise<boolean> {
 
 export function getAssistantEmptyWorkspace(sessionId: string): Promise<AssistantEmptyWorkspace | null> {
   return invoke("get_assistant_empty_workspace", { sessionId });
+}
+
+export function getAssistantFileWorkspace(sessionId: string): Promise<AssistantFileWorkspace | null> {
+  return invoke("get_assistant_file_workspace", { sessionId });
+}
+export function getAssistantDirectoryReport(sessionId: string, revision: string): Promise<DirectoryScanReport> {
+  return invoke<DirectoryScanReport>("get_assistant_directory_report", { sessionId, revision });
+}
+export function assistantFileAction(sessionId: string, operation: AssistantFileAction): Promise<AssistantFileWorkspace> {
+  return invoke("assistant_file_action", { sessionId, operation });
+}
+export function selectAssistantFiles(sessionId: string, revision: string, ids: string[]): Promise<AssistantFileWorkspace> {
+  return invoke("select_assistant_files", { sessionId, revision, ids });
+}
+export function prepareAssistantFilePlan(sessionId: string, revision: string): Promise<AssistantFileWorkspace> {
+  return invoke("prepare_assistant_file_plan", { sessionId, revision });
+}
+// UI confirmation only; deliberately unavailable to the model protocol.
+export function confirmAssistantFilePlan(sessionId: string, revision: string, planId: string, nestedContentsAcknowledged: boolean): Promise<TrashOperationResult> {
+  return invoke("confirm_assistant_file_plan", { sessionId, revision, planId, nestedContentsAcknowledged });
 }
 
 export function selectAssistantEmptyCandidates(sessionId: string, revision: string, candidateIds: string[]): Promise<AssistantEmptyWorkspace> {
@@ -415,6 +441,18 @@ export function listenToControlStatus(
   return listen<ControlStatus>("control-status-changed", (event) =>
     handler(event.payload),
   );
+}
+
+export function configureControlInspectionAccess(enabled: boolean): Promise<ControlStatus> {
+  return invoke<ControlStatus>("configure_control_inspection_access", { enabled });
+}
+
+export function listenToAppToolReview(handler: (result: AppToolResult) => void): Promise<UnlistenFn> {
+  return listen<AppToolResult>("app-tool-review", (event) => handler(event.payload));
+}
+
+export function listenToAppToolCompleted(handler: (result: AppToolCompletedEvent) => void): Promise<UnlistenFn> {
+  return listen<AppToolCompletedEvent>("app-tool-completed", (event) => handler(event.payload));
 }
 
 export function listenToControlScanProgress(

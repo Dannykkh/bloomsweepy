@@ -26,6 +26,7 @@ pub(crate) struct FolderReviewPlan {
     logical_bytes: u64,
     file_count: u64,
     directory_count: u64,
+    link_count: u64,
     expires_at_unix_ms: u64,
 }
 
@@ -63,6 +64,7 @@ impl FolderActionsState {
             logical_bytes: item.logical_bytes(),
             file_count,
             directory_count,
+            link_count: item.directory_link_count(),
             expires_at_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()

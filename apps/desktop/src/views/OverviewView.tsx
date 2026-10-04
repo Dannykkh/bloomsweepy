@@ -62,6 +62,7 @@ interface OverviewViewProps {
   onOpenLargeFiles: () => void;
   onOpenDuplicates: () => void;
   onOpenCleanup: () => void;
+  onOpenCleanupTree?: (generation: number) => void;
 }
 
 export function OverviewView({
@@ -99,6 +100,7 @@ export function OverviewView({
   onOpenLargeFiles,
   onOpenDuplicates,
   onOpenCleanup,
+  onOpenCleanupTree,
 }: OverviewViewProps) {
   const { t } = useLanguage();
   const scanning = state === "scanning";
@@ -114,6 +116,10 @@ export function OverviewView({
 
   return (
     <div className="view-stack storage-overview">
+      {directoryReport && onOpenCleanupTree ? <div className="storage-detail-action">
+        <span><strong>{t("정리 후보에서 검토")}</strong><small>{t("용량만으로 삭제 안전성을 판단할 수 없습니다. 하위 항목·필요 여부·백업을 먼저 확인하세요.")}</small></span>
+        <button type="button" className="secondary-button" disabled={blocked || scanning || driveScanning || mapScanning} onClick={() => onOpenCleanupTree(directoryReport.generation)}>{t("검사 결과에서 후보 열기")}</button>
+      </div> : null}
       <StorageTreemapPanel
         root={root}
         report={directoryReport}

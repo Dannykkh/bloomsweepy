@@ -1,0 +1,19 @@
+flowchart TD
+  A[지도 결과 또는 AI 파일 목록 또는 폴더 검사] --> B[현재 generation 또는 session revision 검증]
+  B --> C[bounded 트리 workspace 생성 - 선택 없음]
+  C --> D[하위 목록 펼치기 - 지도 generation 유지]
+  D --> E[opaque ID include exclude 규칙 저장]
+  E --> F{하위 제외 또는 보호 항목 있는가}
+  F -->|없음| G[중복 없는 전체 노드 후보]
+  F -->|있음| H[상위 자체 제외 - 선택 하위 frontier 계산]
+  H --> I{불완전 분기 또는 한도 초과}
+  I -->|예| J[검토 차단 - 재검사 안내]
+  I -->|아니오| K[신원 및 strict 보호 하위 재검사]
+  G --> K
+  K --> L[단발 만료 계획 - 정확한 경로와 논리 용량]
+  L --> M{사용자가 앱에서 최종 확인}
+  M -->|취소| E
+  M -->|확인| N[revision source 신원 재검증]
+  N --> O[기존 journaled 휴지통 엔진]
+  O --> P[이동 실패 생략 결과 - 재시도 자동 금지]
+  P --> Q[검사 결과 무효화 및 실제 결과 표시]

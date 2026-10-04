@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "macos")]
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-use tauri::State;
+use tauri::{State, WebviewWindow};
 
 #[cfg(target_os = "macos")]
 const OBSERVATION_SETTLE_TIME: Duration = Duration::from_millis(50);
@@ -102,12 +102,22 @@ impl AppMemoryCleanupState {
 
 #[tauri::command]
 pub(crate) async fn clean_app_memory(
+    window: WebviewWindow,
     state: State<'_, Arc<AppMemoryCleanupState>>,
 ) -> Result<AppMemoryCleanupResult, String> {
+    require_main_window(window.label())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.clean())
         .await
         .map_err(|error| format!("앱 메모리 정리 작업을 완료하지 못했습니다: {error}"))
+}
+
+fn require_main_window(label: &str) -> Result<(), String> {
+    if label == "main" {
+        Ok(())
+    } else {
+        Err("앱의 기본 창에서만 BroomSweepy 메모리를 정리할 수 있습니다".to_owned())
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -173,6 +183,13 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_allocator_cleanup_is_restricted_to_main_window() {
+        assert!(require_main_window("main").is_ok());
+        assert!(require_main_window("mcp").is_err());
+        assert!(require_main_window("assistant").is_err());
+    }
 
     #[test]
     fn cleanup_lease_blocks_overlap_and_resets_when_dropped() {

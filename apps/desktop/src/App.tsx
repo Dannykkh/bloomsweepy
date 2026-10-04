@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { AppShell } from "./components/AppShell";
 import { SafetyActionDialog } from "./components/SafetyActionDialog";
@@ -7,14 +7,21 @@ import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice
 import { FileSectionNav } from "./components/FileSectionNav";
 import { StorageSectionNav } from "./components/StorageSectionNav";
 import { EmptyTrashControl } from "./components/EmptyTrashControl";
+import { CleanupTreePanel } from "./components/CleanupTreePanel";
+import type { CleanupTreeSource, CleanupTreeView } from "./types/cleanupTree";
 import { ApplicationsView } from "./views/ApplicationsView";
+import { AssistantAppToolReview, appToolView, type AppToolReviewCompletion } from "./components/AssistantAppToolCard";
 import {
   cancelScan,
   confirmAssistantEmptyPlan,
+  confirmAssistantFilePlan,
   clearFileCatalog,
   configureControlScanAccess,
   configureControlSearchAccess,
   configureControlCleanupAccess,
+  configureControlInspectionAccess,
+  listenToAppToolReview,
+  listenToAppToolCompleted,
   getActionHistory,
   getActionRecoveryStatus,
   getControlStatus,
@@ -53,6 +60,13 @@ import {
   dismissDirectoryFolderPlan,
   approveCleanupPlan,
   rejectCleanupPlan,
+  openCleanupTree,
+  loadCleanupTreeChildren,
+  updateCleanupTreeSelection,
+  prepareCleanupTreePlan,
+  confirmCleanupTreePlan,
+  dismissCleanupTreePlan,
+  inspectFile,
 } from "./lib/bridge";
 import type {
   CleanupTrashRequest,
@@ -85,6 +99,8 @@ import type {
   ControlStatus,
   DockerManagementStatus,
   PendingCleanupPlanDetail,
+  AppToolResult,
+  AppToolLocalCompletion,
 } from "./types";
 import { DEFAULT_SCAN_CONFIG } from "./types";
 import { DuplicatesView } from "./views/DuplicatesView";
@@ -128,6 +144,7 @@ const unavailableControlStatus: ControlStatus = {
   searchAccess: { files: false, documents: false },
   scanAccess: { enabled: false, root: null, approvedAtUnixMs: null },
   cleanupAccess: { enabled: false, approvedAtUnixMs: null },
+  inspectionAllowed: false,
 };
 
 function App() {
@@ -149,10 +166,30 @@ function App() {
   const [directoryScanState, setDirectoryScanState] = useState<ScanUiState>("idle");
   const [directoryError, setDirectoryError] = useState<string | null>(null);
   const [directoryBreadcrumbs, setDirectoryBreadcrumbs] = useState<DirectoryBreadcrumb[]>([]);
+  const latestDirectoryGeneration = useRef(0);
+  const acceptAssistantDirectoryReport = useCallback((nextReport: DirectoryScanReport, open: boolean) => {
+    if (nextReport.generation < latestDirectoryGeneration.current) return;
+    latestDirectoryGeneration.current = nextReport.generation;
+    setDirectoryReport(nextReport);
+    setDirectoryScanState("success");
+    setDirectoryProgress(null);
+    setDirectoryError(null);
+    setDirectoryBreadcrumbs([{ name: nextReport.name, path: nextReport.root }]);
+    // Sharing a result must not change the global scan scope or navigate away from the chat.
+    if (open) setActiveView("overview");
+  }, []);
   const [cleanupReport, setCleanupReport] = useState<CleanupScanReport | null>(null);
   const [cleanupProgress, setCleanupProgress] = useState<CleanupScanProgress | null>(null);
   const [cleanupScanState, setCleanupScanState] = useState<ScanUiState>("idle");
   const [cleanupError, setCleanupError] = useState<string | null>(null);
+  const [cleanupMode, setCleanupMode] = useState<"tree" | "system">("tree");
+  const [cleanupTree, setCleanupTree] = useState<CleanupTreeView | null>(null);
+  const [cleanupTreeSource, setCleanupTreeSource] = useState<CleanupTreeSource | null>(null);
+  const [cleanupTreeBusy, setCleanupTreeBusy] = useState(false);
+  const [cleanupTreeError, setCleanupTreeError] = useState<string | null>(null);
+  const cleanupTreeEpoch = useRef(0);
+  const cleanupTreeInFlight = useRef(false);
+  const cleanupTreeRoot = useRef<string | null>(null);
   const [documentIndex, setDocumentIndex] = useState<DocumentIndexStatus | null>(null);
   const [documentBuild, setDocumentBuild] = useState<DocumentIndexReport | null>(null);
   const [documentProgress, setDocumentProgress] = useState<DocumentIndexProgress | null>(null);
@@ -176,7 +213,7 @@ function App() {
   const [applicationsVisited, setApplicationsVisited] = useState(false);
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
-  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | "overview" | "assistant" | null>(null);
+  const [trashResultSource, setTrashResultSource] = useState<"duplicates" | "cleanup" | "cleanup-tree" | "overview" | "assistant" | null>(null);
   const [trashError, setTrashError] = useState<string | null>(null);
   const [recoveryReport, setRecoveryReport] = useState<ActionRecoveryReport | null>(null);
   const [recoveryChecking, setRecoveryChecking] = useState(true);
@@ -195,6 +232,13 @@ function App() {
   const [controlScanAccessError, setControlScanAccessError] = useState<string | null>(null);
   const [controlCleanupAccessUpdating, setControlCleanupAccessUpdating] = useState(false);
   const [controlCleanupAccessError, setControlCleanupAccessError] = useState<string | null>(null);
+  const [inspectionUpdating, setInspectionUpdating] = useState(false);
+  const [inspectionError, setInspectionError] = useState<string | null>(null);
+  const [appToolReview, setAppToolReview] = useState<{result: AppToolResult; sessionId: string | null} | null>(null);
+  const appToolReviewRef = useRef<{result: AppToolResult; sessionId: string | null} | null>(null);
+  const appToolReviewTrigger = useRef<HTMLElement | null>(null);
+  const [appToolCompletion, setAppToolCompletion] = useState<AppToolLocalCompletion | null>(null);
+  const [appToolNotice, setAppToolNotice] = useState<string | null>(null);
   const [pendingCleanupPlan, setPendingCleanupPlan] =
     useState<PendingCleanupPlanDetail | null>(null);
   const [pendingCleanupPlanLoading, setPendingCleanupPlanLoading] = useState(false);
@@ -374,6 +418,53 @@ function App() {
         t("채팅에서 요청한 검사를 완료하지 못했습니다"),
       );
     }
+  }
+
+  function acceptAppToolPresentation(presentation: Record<string, unknown> | null | undefined) {
+    if (!presentation) return;
+    if (presentation.kind === "indexStatus") {
+      if (presentation.source === "files") {
+        setFileCatalog((presentation.index as FileCatalogStatus | null) ?? null);
+        setFileCatalogState(presentation.index ? "success" : "idle");
+        setFileCatalogStale(false);
+      } else if (presentation.source === "documents") {
+        setDocumentIndex((presentation.index as DocumentIndexStatus | null) ?? null);
+        setDocumentIndexState(presentation.index ? "success" : "idle");
+      }
+    } else if (presentation.kind === "cleanupScan" && presentation.result) {
+      setCleanupReport(presentation.result as CleanupScanReport);
+      setCleanupScanState("success"); setCleanupProgress(null); setCleanupError(null);
+    } else if (presentation.overview) setSystem(presentation.overview as SystemOverview);
+  }
+
+  function openAppToolReview(result: AppToolResult, sessionId: string | null = null) {
+    if (result.status !== "review_required" || !result.presentation) return;
+    if (result.presentation.kind === "cleanupReview") { void openPendingCleanupReview(); return; }
+    if (appToolReviewRef.current) return;
+    appToolReviewTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const review = { result, sessionId };
+    appToolReviewRef.current = review; setAppToolReview(review); setAppToolNotice(null);
+  }
+  function closeAppToolReview() {
+    appToolReviewRef.current = null; setAppToolReview(null);
+    window.requestAnimationFrame(() => { if (appToolReviewTrigger.current?.isConnected) appToolReviewTrigger.current.focus({ preventScroll: true }); });
+  }
+  function completedAppToolReview(completion: AppToolReviewCompletion) {
+    setAppToolNotice(completion.message);
+    setAppToolCompletion({ sequence: Date.now(), sessionId: appToolReviewRef.current?.sessionId ?? null, message: completion.message, trashResult: completion.trashResult });
+    if (completion.dockerStatus) setDockerStatus(completion.dockerStatus);
+    if (completion.mutated) {
+      invalidateAnalysisReports(); setFileCatalogStale(true);
+      if (completion.trashResult) { setTrashResult(completion.trashResult); setTrashResultSource("assistant"); }
+      void getSystemOverview().then(setSystem).catch(() => {});
+      void getActionHistory().then(setActionHistory).catch(() => {});
+    }
+  }
+  function showAppToolView(result: AppToolResult) {
+    acceptAppToolPresentation(result.presentation);
+    const view = appToolView(result);
+    if (view === "cleanup") setCleanupMode("system");
+    if (view) navigate(view);
   }
 
   useEffect(() => {
@@ -574,6 +665,7 @@ function App() {
       try {
         const cleanup = await listenToControlScanCompleted((event) => {
           if (disposed || event.revision < controlStatusRevision.current) return;
+          if (event.kind && event.kind !== "storageScan") return;
           controlStatusRevision.current = event.revision;
           handleControlScanCompletion(
             event.operationId,
@@ -616,6 +708,14 @@ function App() {
       unlistenControlScanProgress?.();
       unlistenControlScanCompleted?.();
     };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    const listeners: (() => void)[] = [];
+    void listenToAppToolReview((result) => { if (!disposed) openAppToolReview(result); }).then((stop) => disposed ? stop() : listeners.push(stop)).catch(() => {});
+    void listenToAppToolCompleted((event) => { if (!disposed) acceptAppToolPresentation(event.presentation); }).then((stop) => disposed ? stop() : listeners.push(stop)).catch(() => {});
+    return () => { disposed = true; listeners.forEach((stop) => stop()); };
   }, []);
 
   async function refreshDashboard() {
@@ -739,7 +839,7 @@ function App() {
   async function toggleControlCleanupAccess() {
     if (controlCleanupAccessUpdating || !controlStatus.bridgeAvailable) return;
     const enabled = controlStatus.cleanupAccess.enabled;
-    if (!enabled && !report && !cleanupReport) return;
+    if (selectionBlocked) return;
 
     setControlCleanupAccessUpdating(true);
     setControlCleanupAccessError(null);
@@ -755,6 +855,14 @@ function App() {
     } finally {
       setControlCleanupAccessUpdating(false);
     }
+  }
+
+  async function toggleInspectionAccess() {
+    if (inspectionUpdating || !controlStatus.bridgeAvailable) return;
+    setInspectionUpdating(true); setInspectionError(null);
+    try { applyControlStatus(await configureControlInspectionAccess(controlStatus.inspectionAllowed !== true)); }
+    catch (reason) { setInspectionError(normalizeError(reason)); }
+    finally { setInspectionUpdating(false); }
   }
 
   async function openPendingCleanupReview() {
@@ -820,6 +928,7 @@ function App() {
     [report?.root, root, system?.volumes],
   );
   const selectionBlocked =
+    cleanupTreeBusy ||
     recoveryChecking ||
     applicationRunning ||
     emptyTrashRunning ||
@@ -883,6 +992,11 @@ function App() {
     }
 
     setRoot(selected);
+    cleanupTreeEpoch.current += 1;
+    setCleanupTree(null);
+    setCleanupTreeSource(null);
+    cleanupTreeRoot.current = null;
+    setCleanupTreeError(null);
     setReport(null);
     setProgress(null);
     setScanState("idle");
@@ -902,7 +1016,7 @@ function App() {
     return true;
   }
 
-  async function pickFolder(): Promise<string | null> {
+  async function pickFolder(onError?: (message: string) => void): Promise<string | null> {
     if (selectionBlocked) return null;
     try {
       const selected = await selectDirectory(t("스캔할 폴더 선택"));
@@ -910,18 +1024,121 @@ function App() {
       return selected;
     } catch (reason) {
       setError(normalizeError(reason));
+      onError?.(normalizeError(reason));
       setScanState("error");
       return null;
     }
   }
 
   async function pickStorageFolder(
-    options: { stayOnView?: boolean } = {},
+    options: { stayOnView?: boolean; onError?: (message: string) => void } = {},
   ): Promise<DirectoryScanReport | null> {
-    const selected = await pickFolder();
+    const selected = await pickFolder(options.onError);
     if (!selected) return null;
     return runDirectoryScan(selected, undefined, options);
   }
+
+  async function openCandidateTree(source: CleanupTreeSource): Promise<CleanupTreeView | null> {
+    if (selectionBlocked || cleanupTreeInFlight.current) return null;
+    cleanupTreeInFlight.current = true;
+    const epoch = ++cleanupTreeEpoch.current;
+    const sameSource = cleanupTreeSource?.kind === source.kind && (
+      source.kind === "directory"
+        ? cleanupTreeSource.kind === "directory" && cleanupTreeSource.generation === source.generation
+        : cleanupTreeSource.kind === "assistant" && cleanupTreeSource.sessionId === source.sessionId && cleanupTreeSource.revision === source.revision
+    );
+    if (!sameSource) cleanupTreeRoot.current = null;
+    setCleanupMode("tree");
+    setCleanupTreeSource(source);
+    setCleanupTree(null);
+    setCleanupTreeError(null);
+    setCleanupTreeBusy(true);
+    setTrashResult(null);
+    setTrashError(null);
+    navigate("cleanup");
+    try {
+      const next = await openCleanupTree(source);
+      if (epoch !== cleanupTreeEpoch.current) return null;
+      cleanupTreeRoot.current = next.rootPath;
+      setCleanupTree(next);
+      return next;
+    } catch (reason) {
+      if (epoch === cleanupTreeEpoch.current) setCleanupTreeError(normalizeError(reason));
+      return null;
+    } finally {
+      cleanupTreeInFlight.current = false;
+      setCleanupTreeBusy(false);
+    }
+  }
+
+  async function changeCandidateTree(action: (tree: CleanupTreeView) => Promise<CleanupTreeView>) {
+    if (!cleanupTree || selectionBlocked || cleanupTreeInFlight.current) return;
+    cleanupTreeInFlight.current = true;
+    const epoch = cleanupTreeEpoch.current;
+    const treeId = cleanupTree.treeId;
+    setCleanupTreeBusy(true);
+    setCleanupTreeError(null);
+    try {
+      const next = await action(cleanupTree);
+      if (epoch === cleanupTreeEpoch.current && next.treeId === treeId) setCleanupTree(next);
+    } catch (reason) {
+      if (epoch === cleanupTreeEpoch.current) setCleanupTreeError(normalizeError(reason));
+      throw reason;
+    } finally {
+      cleanupTreeInFlight.current = false;
+      setCleanupTreeBusy(false);
+    }
+  }
+
+  async function inspectCandidateFolder() {
+    if (selectionBlocked || cleanupTreeInFlight.current) return;
+    setCleanupTreeError(null);
+    const next = await pickStorageFolder({ stayOnView: true, onError: setCleanupTreeError });
+    if (next) await openCandidateTree({ kind: "directory", generation: next.generation });
+  }
+
+  async function refreshCandidateTree() {
+    if (selectionBlocked || cleanupTreeInFlight.current) return;
+    setCleanupTreeError(null);
+    if (cleanupTreeSource?.kind === "assistant") {
+      // Trash execution invalidates the assistant revision. Refresh the same
+      // locally reviewed folder rather than replaying an obsolete session ID.
+      if (cleanupTreeRoot.current) {
+        const next = await runDirectoryScan(cleanupTreeRoot.current, undefined, { stayOnView: true, onError: setCleanupTreeError });
+        if (next) await openCandidateTree({ kind: "directory", generation: next.generation });
+      } else {
+        await openCandidateTree(cleanupTreeSource);
+      }
+    } else if (directoryReport) {
+      await openCandidateTree({ kind: "directory", generation: directoryReport.generation });
+    } else if (cleanupTreeRoot.current) {
+      const next = await runDirectoryScan(cleanupTreeRoot.current, undefined, { stayOnView: true, onError: setCleanupTreeError });
+      if (next) await openCandidateTree({ kind: "directory", generation: next.generation });
+    } else {
+      await inspectCandidateFolder();
+    }
+  }
+
+  async function moveCandidateTree(nestedContentsAcknowledged: boolean) {
+    if (!cleanupTree?.plan || selectionBlocked || cleanupTreeInFlight.current) return;
+    const { treeId, selectionRevision, plan } = cleanupTree;
+    cleanupTreeInFlight.current = true;
+    setCleanupTreeBusy(true);
+    setCleanupTreeError(null);
+    try {
+      return await runTrashAction("cleanup-tree", () => confirmCleanupTreePlan(treeId, selectionRevision, plan.id, nestedContentsAcknowledged));
+    } finally {
+      cleanupTreeInFlight.current = false;
+      setCleanupTreeBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    if (activeView === "cleanup" && cleanupMode === "tree") return;
+    if (!cleanupTree?.plan || cleanupTreeBusy || trashRunning || cleanupTreeInFlight.current) return;
+    // Leaving review never preserves an executable approval for later navigation.
+    void changeCandidateTree((tree) => dismissCleanupTreePlan(tree.treeId, tree.plan!.id)).catch(() => {});
+  }, [activeView, cleanupMode, cleanupTree?.plan?.id, cleanupTreeBusy, trashRunning]);
 
   async function runDashboardScan(nextVolume: VolumeInfo) {
     if (selectionBlocked || !(await useSelectedRoot(nextVolume.mountPoint))) return;
@@ -1084,7 +1301,7 @@ function App() {
   async function runDirectoryScan(
     scanRoot: string,
     nextBreadcrumbs?: DirectoryBreadcrumb[],
-    options: { stayOnView?: boolean } = {},
+    options: { stayOnView?: boolean; onError?: (message: string) => void } = {},
   ): Promise<DirectoryScanReport | null> {
     if (
       !scanRoot ||
@@ -1112,6 +1329,7 @@ function App() {
 
     try {
       const nextReport = await startDirectoryScan(scanRoot);
+      latestDirectoryGeneration.current = nextReport.generation;
       setDirectoryReport(nextReport);
       setDirectoryScanState("success");
       setDirectoryProgress(null);
@@ -1127,6 +1345,7 @@ function App() {
       return nextReport;
     } catch (reason) {
       const message = normalizeError(reason);
+      options.onError?.(message);
       if (message.toLocaleLowerCase("en-US").includes("cancel")) {
         setDirectoryScanState("cancelled");
         setDirectoryError(null);
@@ -1403,6 +1622,8 @@ function App() {
   }
 
   function invalidateAnalysisReports() {
+    cleanupTreeEpoch.current += 1;
+    setCleanupTree(null);
     setReport(null);
     setProgress(null);
     setScanState("idle");
@@ -1419,7 +1640,7 @@ function App() {
   }
 
   async function runTrashAction(
-    source: "duplicates" | "cleanup" | "overview" | "assistant",
+    source: "duplicates" | "cleanup" | "cleanup-tree" | "overview" | "assistant",
     action: () => Promise<TrashOperationResult>,
   ): Promise<TrashOperationResult> {
     if (
@@ -1530,11 +1751,16 @@ function App() {
     }
   }
 
-  return (
+  return <>
+    <div style={{ display: "contents" }} inert={appToolReview !== null}>
     <AppShell
       activeView={activeView}
       root={
-        activeView === "documents"
+        activeView === "overview"
+          ? directoryReport?.root ?? root
+          : activeView === "large-files" || activeView === "duplicates"
+            ? report?.root ?? root
+          : activeView === "documents"
           ? root ?? documentIndex?.root ?? null
           : activeView === "files"
             ? root ?? fileCatalog?.root ?? volume?.mountPoint ?? null
@@ -1670,7 +1896,7 @@ function App() {
       {activeView === "overview" ? (
         <OverviewView
           platform={system?.platform ?? null}
-          root={root}
+          root={directoryBreadcrumbs[0]?.path ?? root}
           volume={volume}
           report={report}
           progress={progress}
@@ -1686,6 +1912,7 @@ function App() {
           directoryError={directoryError}
           directoryBreadcrumbs={directoryBreadcrumbs}
           blocked={
+            cleanupTreeBusy ||
             recoveryChecking ||
             cleanupScanState === "scanning" ||
             documentIndexState === "scanning" ||
@@ -1694,7 +1921,7 @@ function App() {
             trashRunning
           }
           onPickFolder={() => void pickStorageFolder()}
-          onStartScan={() => void runScan()}
+          onStartScan={() => void runScan({ rootOverride: directoryReport?.root })}
           onCancelScan={() => void stopScan()}
           onStartDriveScan={() => void runDriveScan()}
           onCancelDriveScan={() => void stopDriveScan()}
@@ -1711,7 +1938,8 @@ function App() {
           trashProgress={trashResultSource === "overview" ? trashProgress : null}
           onOpenLargeFiles={() => navigate("large-files")}
           onOpenDuplicates={() => navigate("duplicates")}
-          onOpenCleanup={() => navigate("cleanup")}
+          onOpenCleanup={() => { setCleanupMode("system"); navigate("cleanup"); }}
+          onOpenCleanupTree={(generation) => void openCandidateTree({ kind: "directory", generation })}
         />
       ) : null}
       {activeView === "large-files" ? (
@@ -1793,7 +2021,7 @@ function App() {
           updatingScanAccess={controlScanAccessUpdating}
           scanAccessError={controlScanAccessError}
           onToggleScanAccess={() => void toggleControlScanAccess()}
-          canEnableCleanup={Boolean(report || cleanupReport)}
+          canEnableCleanup={controlStatus.bridgeAvailable && !selectionBlocked}
           cleanupAccessLocked={selectionBlocked}
           updatingCleanupAccess={controlCleanupAccessUpdating}
           cleanupAccessError={controlCleanupAccessError}
@@ -1807,17 +2035,54 @@ function App() {
           onLaunchRequestHandled={() => setAssistantLaunchRequest(null)}
           onPickFolder={() => pickStorageFolder({ stayOnView: true })}
           onConfirmEmptyPlan={(sessionId, revision, planId) => runTrashAction("assistant", () => confirmAssistantEmptyPlan(sessionId, revision, planId))}
+          onConfirmFilePlan={(sessionId, revision, planId, nestedAck) => runTrashAction("assistant", () => confirmAssistantFilePlan(sessionId, revision, planId, nestedAck))}
+          onDirectoryReport={acceptAssistantDirectoryReport}
+          onOpenCleanupTree={(sessionId, revision) => void openCandidateTree({ kind: "assistant", sessionId, revision })}
+          updatingInspectionAccess={inspectionUpdating}
+          inspectionAccessError={inspectionError}
+          onToggleInspectionAccess={() => void toggleInspectionAccess()}
+          onAppToolView={showAppToolView}
+          onAppToolReview={openAppToolReview}
+          appToolCompletion={appToolCompletion}
         />
       ) : null}
       {activeView === "performance" ? <PerformanceView /> : null}
       {activeView === "cleanup" ? (
-        <CleanupView
+        <div className="view-stack">
+          <section className="cleanup-source-toolbar" aria-label={t("정리 후보")}>
+            <div className="cleanup-source-toolbar__modes">
+              <button type="button" className={cleanupMode === "tree" ? "secondary-button is-active" : "text-button"} aria-pressed={cleanupMode === "tree"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("tree")}>{t("폴더 트리")}</button>
+              <button type="button" className={cleanupMode === "system" ? "secondary-button is-active" : "text-button"} aria-pressed={cleanupMode === "system"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("system")}>{t("시스템 후보")}</button>
+            </div>
+            {cleanupMode === "tree" ? <div className="cleanup-source-toolbar__actions">
+              {directoryReport ? <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void openCandidateTree({ kind: "directory", generation: directoryReport.generation })}>{t("검사 결과에서 후보 열기")}</button> : null}
+              <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void inspectCandidateFolder()}>{t("폴더를 선택해 후보 검사")}</button>
+            </div> : null}
+            <p>{t("폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.")}</p>
+          </section>
+          {cleanupMode === "tree" ? <CleanupTreePanel
+            tree={cleanupTree}
+            busy={selectionBlocked}
+            error={cleanupTreeError ?? (trashResultSource === "cleanup-tree" ? trashError : null)}
+            result={trashResultSource === "cleanup-tree" ? trashResult : null}
+            progress={trashResultSource === "cleanup-tree" ? trashProgress : null}
+            onLoadChildren={(parentId, offset) => changeCandidateTree((tree) => loadCleanupTreeChildren(tree.treeId, parentId, offset))}
+            onSelectionChange={(includeIds, excludeIds) => changeCandidateTree((tree) => updateCleanupTreeSelection(tree.treeId, tree.selectionRevision, includeIds, excludeIds))}
+            onPrepare={() => changeCandidateTree((tree) => prepareCleanupTreePlan(tree.treeId, tree.selectionRevision))}
+            onConfirm={moveCandidateTree}
+            onDismissPlan={() => changeCandidateTree((tree) => tree.plan ? dismissCleanupTreePlan(tree.treeId, tree.plan.id) : Promise.resolve(tree))}
+            onRefresh={refreshCandidateTree}
+            onCancel={() => { void cancelScan().catch((reason) => setCleanupTreeError(normalizeError(reason))); }}
+            onOpen={(path) => inspectFile(path)}
+            onReveal={revealPath}
+          /> : <CleanupView
           platform={system?.platform ?? null}
           report={cleanupReport}
           progress={cleanupProgress}
           state={cleanupScanState}
           error={cleanupError}
           blocked={
+            cleanupTreeBusy ||
             scanState === "scanning" ||
             driveScanState === "scanning" ||
             directoryScanState === "scanning" ||
@@ -1835,7 +2100,8 @@ function App() {
           onCancel={() => void stopCleanupScan()}
           onMoveToTrash={moveCleanupCandidates}
           onCancelAction={() => void stopTrashAction()}
-        />
+        />}
+        </div>
       ) : null}
       {activeView === "duplicates" ? (
         <DuplicatesView
@@ -1866,9 +2132,7 @@ function App() {
       <SafetyActionDialog
         open={Boolean(pendingCleanupPlan)}
         title={
-          pendingCleanupPlan?.source === "duplicateFiles"
-            ? t("외부 AI가 제안한 중복 파일 정리")
-            : t("외부 AI가 제안한 정리 후보")
+          t("휴지통 이동 최종 확인")
         }
         itemCount={pendingCleanupPlan?.itemCount ?? 0}
         logicalBytes={pendingCleanupPlan?.totalBytes ?? 0}
@@ -1876,7 +2140,7 @@ function App() {
         busy={trashRunning}
         progress={trashProgress}
         error={pendingCleanupPlanError ?? trashError}
-        intro={t("외부 AI는 익명 후보 번호와 용량 요약만 보고 이 계획을 만들었습니다. 아래 정확한 경로는 이 앱 안에서만 표시되며, 지금 확인해야 파일 이동을 시작합니다.")}
+        intro={t("AI에는 종류와 용량 요약만 전달하고, 파일 이동은 앱에서 다시 확인합니다.")}
         items={(pendingCleanupPlan?.items ?? []).map((item) => ({
           path: displayPath(item.path),
           logicalBytes: item.logicalBytes,
@@ -1895,7 +2159,7 @@ function App() {
       {controlStatus.pendingReview && !pendingCleanupPlan && !selectionBlocked ? (
         <div className="scan-status-dock mcp-review-dock">
           <span>
-            <strong>{t("외부 AI 정리 계획 확인 대기")}</strong>
+            <strong>{t("최종 확인 대기")}</strong>
             <small>
               {pendingCleanupPlanError ??
                 t("{{count}}개 · 앱에서 정확한 경로를 확인해야 실행됩니다.", {
@@ -1913,7 +2177,7 @@ function App() {
         </div>
       ) : null}
 
-      {(trashRunning && activeView !== trashResultSource) ||
+      {(trashRunning && activeView !== (trashResultSource === "cleanup-tree" ? "cleanup" : trashResultSource)) ||
       (!trashRunning &&
         (scanState === "scanning" ||
           driveScanState === "scanning" ||
@@ -1989,7 +2253,10 @@ function App() {
         </div>
       ) : null}
     </AppShell>
-  );
+    </div>
+    {appToolReview ? <AssistantAppToolReview key={`${appToolReview.result.capability}-${appToolReview.result.capturedAtUnixMs}`} result={appToolReview.result} busy={selectionBlocked} onBusyChange={setApplicationRunning} onClose={closeAppToolReview} onCompleted={completedAppToolReview} /> : null}
+    {appToolNotice && !appToolReview ? <div className="scan-status-dock"><p role="status">{appToolNotice}</p><button type="button" onClick={() => setAppToolNotice(null)}>{t("닫기")}</button></div> : null}
+  </>;
 }
 
 function displayPath(path: string): string {

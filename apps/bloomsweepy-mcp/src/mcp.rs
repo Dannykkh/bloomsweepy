@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use bloomsweepy_control::{
-    CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
+    AppToolRequest, CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
     CreateCleanupPlanRequest, DEFAULT_CLEANUP_RESULTS, DEFAULT_TIMEOUT, DocumentSearchRequest,
     FileEntryKind, FileSearchRequest, FileSearchSort, OperationReference, ProtocolError, call,
 };
@@ -20,6 +20,27 @@ pub struct BroomSweepyMcp;
 
 #[tool_router]
 impl BroomSweepyMcp {
+    #[tool(
+        name = "app_capabilities",
+        description = "Read BroomSweepy's canonical app capability contract, examples, permissions and limits. Use app_action for app-owned lookups and follow-up queries; provider shell/file tools must not replace the app."
+    )]
+    async fn app_capabilities(&self) -> Result<Json<Value>, Json<McpToolError>> {
+        bridge_app_action(AppToolRequest::Capabilities {}).await
+    }
+
+    #[tool(
+        name = "app_action",
+        description = "Invoke a typed BroomSweepy app capability from app_capabilities and analyze the actual bounded app result. Follow up with queries if needed. No paths, shell, approval or final execution are accepted. Review-required and permission-required results require local user action."
+    )]
+    async fn app_action(
+        &self,
+        Parameters(arguments): Parameters<AppActionArguments>,
+    ) -> Result<Json<Value>, Json<McpToolError>> {
+        let request = parse_app_action(arguments.request)
+            .map_err(|error| Json(McpToolError::from_protocol(&error)))?;
+        bridge_app_action(request).await
+    }
+
     #[tool(
         name = "status",
         description = "Check whether the BroomSweepy app is connected and inspect its current work status."
@@ -174,8 +195,8 @@ impl BroomSweepyMcp {
 
 #[tool_handler(
     name = "bloomsweepy",
-    version = "1.6.1",
-    instructions = "Bridge to the running BroomSweepy app. Cleanup tools return bounded summaries from currently completed reports and can prepare a review plan, but file operations happen only after final user approval inside the app. No approval or direct cleanup tool is exposed."
+    version = "1.7.0",
+    instructions = "Operate the running BroomSweepy app through its canonical app_capabilities and app_action contract. All actual lookups, searches and measurements come from the app engines. Read bounded app results, request follow-up queries and analyze only observed evidence. Provider shell/file tools must not substitute for BroomSweepy. Reviews stop at local final approval; no approval or direct execution tool is exposed. Legacy tools remain compatible."
 )]
 impl ServerHandler for BroomSweepyMcp {}
 
@@ -183,6 +204,29 @@ pub async fn run_stdio() -> Result<(), Box<dyn Error + Send + Sync>> {
     let service = BroomSweepyMcp.serve(rmcp::transport::stdio()).await?;
     service.waiting().await?;
     Ok(())
+}
+
+fn parse_app_action(value: Value) -> Result<AppToolRequest, ProtocolError> {
+    let request: AppToolRequest = serde_json::from_value(value).map_err(|_| {
+        ProtocolError::InvalidRequest(
+            "앱 기능 요청 형식이 올바르지 않습니다. app_capabilities의 입력 예제를 확인해 주세요"
+                .to_owned(),
+        )
+    })?;
+    request.validate()?;
+    Ok(request)
+}
+
+async fn bridge_app_action(request: AppToolRequest) -> Result<Json<Value>, Json<McpToolError>> {
+    let Json(mut result) = bridge(ControlCommand::AppAction(request)).await?;
+    strip_local_presentation(&mut result);
+    Ok(Json(result))
+}
+
+fn strip_local_presentation(value: &mut Value) {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("presentation");
+    }
 }
 
 async fn bridge(command: ControlCommand) -> Result<Json<Value>, Json<McpToolError>> {
@@ -236,6 +280,15 @@ struct FileSearchArguments {
     timezone_offset_minutes: i32,
     #[serde(default)]
     sort: SearchSort,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AppActionArguments {
+    #[schemars(
+        description = "A typed request from app_capabilities: snake_case kind, camelCase fields; bounded lookup or review only."
+    )]
+    request: Value,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -356,7 +409,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_exactly_ten_tools_without_direct_cleanup_actions() {
+    fn preserves_ten_legacy_tools_and_adds_catalog_and_typed_app_action() {
         let mut names: Vec<String> = BroomSweepyMcp::tool_router()
             .list_all()
             .iter()
@@ -366,6 +419,8 @@ mod tests {
         assert_eq!(
             names,
             [
+                "app_action",
+                "app_capabilities",
                 "cancel_operation",
                 "cleanup_candidates",
                 "cleanup_plan_status",
@@ -384,6 +439,45 @@ mod tests {
                 .iter()
                 .all(|forbidden| !name.contains(forbidden))
         }));
+    }
+
+    #[test]
+    fn common_catalog_examples_are_accepted_by_mcp_parser() {
+        let catalog = bloomsweepy_control::capability_catalog();
+        for item in catalog["capabilities"].as_array().expect("capabilities") {
+            let request =
+                parse_app_action(item["requestExample"].clone()).expect("typed app action");
+            assert_eq!(request.capability_id(), item["id"]);
+        }
+        assert!(
+            parse_app_action(serde_json::json!({"kind":"performance", "maxResults":25})).is_err()
+        );
+        assert!(
+            parse_app_action(serde_json::json!({"kind":"storage_scan", "path":"/private"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn external_results_never_include_local_presentation() {
+        let mut result = serde_json::to_value(
+            bloomsweepy_control::AppToolResult::completed(
+                "applications.list",
+                serde_json::json!({"applications":[]}),
+            )
+            .with_presentation(serde_json::json!({"localPath":"private"})),
+        )
+        .expect("result");
+        strip_local_presentation(&mut result);
+        assert!(result.get("presentation").is_none());
+        assert_eq!(result["source"], "broomsweepy");
+        assert!(result.get("data").is_some());
+        assert!(
+            serde_json::from_value::<AppActionArguments>(
+                serde_json::json!({"request":{"kind":"capabilities"}, "approve":true})
+            )
+            .is_err()
+        );
     }
 
     #[test]

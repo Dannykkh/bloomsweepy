@@ -92,8 +92,54 @@ export interface AssistantChatResponse {
   message: string;
   dockerContext: AssistantDockerContext | null;
   emptyWorkspace: AssistantEmptyWorkspace | null;
-  toolAction: "scan" | "list" | "selection" | null;
+  fileWorkspace: AssistantFileWorkspace | null;
+  toolAction: "scan" | "list" | "selection" | "files" | "app" | null;
+  appToolResults?: AppToolResult[];
+  analysisComplete?: boolean;
 }
+
+export type AppToolStatus = "completed" | "running" | "review_required" | "permission_required" | "unsupported" | "failed";
+export interface AppToolResult {
+  capability: string;
+  source: "broomsweepy";
+  status: AppToolStatus;
+  capturedAtUnixMs: number;
+  data: Record<string, unknown>;
+  truncated: boolean;
+  presentation?: Record<string, unknown> | null;
+}
+export interface AppToolCompletedEvent {
+  operationId: string;
+  presentation: Record<string, unknown>;
+}
+export interface AppToolLocalCompletion {
+  sequence: number;
+  sessionId: string | null;
+  message: string;
+  trashResult?: TrashOperationResult;
+}
+
+export interface AssistantFileEntry {
+  id: string; number: number; name: string; path: string; isDirectory: boolean;
+  logicalBytes: number | null; fileCount: number | null; directoryCount: number | null; linkCount?: number | null; modifiedAtUnixMs: number | null;
+}
+export interface AssistantFileWorkspace {
+  revision: string; currentPath: string; currentName: string; canGoUp: boolean; query: string | null;
+  sizeRanked: boolean; mapGeneration: number | null;
+  summary: AssistantFolderSummary; totalEntries: number; truncated: boolean; unreadableEntries: number;
+  offset: number; nextOffset: number | null; entries: AssistantFileEntry[]; selectedIds: string[];
+  plan: { id: string; entries: AssistantFileEntry[]; logicalBytes: number; requiresNestedAck: boolean; expiresAtUnixMs: number } | null;
+}
+export type AssistantFileAction =
+  | { kind: "scan" }
+  | { kind: "largest" }
+  | { kind: "search"; query: string }
+  | { kind: "review_named"; name: string }
+  | { kind: "browse"; revision: string; entryId: string }
+  | { kind: "parent"; revision: string }
+  | { kind: "page"; revision: string; offset: number }
+  | { kind: "select"; revision: string; includeIds: string[]; excludeIds: string[] }
+  | { kind: "review"; revision: string; ids: string[] };
 
 export interface AssistantEmptyWorkspace {
   revision: string;
@@ -324,6 +370,7 @@ export interface ControlStatus {
   searchAccess: ControlSearchAccess;
   scanAccess: ControlScanAccess;
   cleanupAccess: ControlCleanupAccess;
+  inspectionAllowed?: boolean;
 }
 
 export interface ControlSearchAccess {
@@ -410,6 +457,7 @@ export interface ControlScanCompletedEvent {
   state: "completed" | "failed" | "cancelled";
   scanGeneration: number | null;
   message: string;
+  kind?: string;
 }
 
 export interface ScanReportSnapshot {
@@ -891,10 +939,11 @@ export interface FolderReviewPlan {
   logicalBytes: number;
   fileCount: number;
   directoryCount: number;
+  linkCount: number;
   expiresAtUnixMs: number;
 }
 
-export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "directoryFile" | "directoryFolder" | "emptyDirectories" | "applicationBundle" | "applicationData" | "unknown";
+export type ActionHistoryKind = "duplicateFiles" | "cleanupCandidates" | "directoryFile" | "directoryFolder" | "assistantFiles" | "emptyDirectories" | "applicationBundle" | "applicationData" | "unknown";
 
 export interface ActionHistoryEntry {
   operationId: string;

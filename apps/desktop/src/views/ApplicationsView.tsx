@@ -16,7 +16,7 @@ interface ApplicationsViewProps {
   onBusyChange?: (busy: boolean) => void;
 }
 
-interface ReviewTarget {
+export interface ReviewTarget {
   application: ApplicationInventoryEntry;
   inventoryId: string;
   kind: "bundle" | "data";
@@ -297,9 +297,10 @@ function ApplicationResult({ result }: { result: TrashOperationResult }) {
   </section>;
 }
 
-function ApplicationReview({ target, busy, onBusyChange, onClose, onCompleted }: {
+export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, onClose, onCompleted }: {
   target: ReviewTarget;
   busy: boolean;
+  preparedPlan?: ApplicationTrashPlan;
   onBusyChange?: (busy: boolean) => void;
   onClose: () => void;
   onCompleted: (target: ReviewTarget, plan: ApplicationTrashPlan, result: TrashOperationResult | null) => void;
@@ -309,8 +310,8 @@ function ApplicationReview({ target, busy, onBusyChange, onClose, onCompleted }:
   const cancelRef = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
   const consumedRef = useRef(false);
-  const [plan, setPlan] = useState<ApplicationTrashPlan | null>(null);
-  const [preparing, setPreparing] = useState(true);
+  const [plan, setPlan] = useState<ApplicationTrashPlan | null>(preparedPlan ?? null);
+  const [preparing, setPreparing] = useState(!preparedPlan);
   const [running, setRunning] = useState(false);
   const [consumed, setConsumed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -331,6 +332,7 @@ function ApplicationReview({ target, busy, onBusyChange, onClose, onCompleted }:
     // with (and discard) its own first review.
     const preparation = Promise.resolve().then(() => {
       if (disposed) return null;
+      if (preparedPlan) return preparedPlan;
       return target.kind === "bundle"
         ? prepareApplicationTrash(target.inventoryId, target.application.id)
         : prepareApplicationDataTrash(target.inventoryId, target.application.id, target.candidateIds);
@@ -350,7 +352,7 @@ function ApplicationReview({ target, busy, onBusyChange, onClose, onCompleted }:
       if (issued && !consumedRef.current) void dismissApplicationPlan(issued.planId).catch(() => {});
       dialog?.close();
     };
-  }, [target]);
+  }, [target, preparedPlan]);
 
   useEffect(() => { if (consumed && !running) cancelRef.current?.focus(); }, [consumed, running]);
 

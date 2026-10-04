@@ -181,7 +181,7 @@ const titles: Record<
   cleanup: {
     eyebrow: "용량 관리",
     title: "정리 후보",
-    description: "오래된 임시 파일과 삭제 후 남은 흔적을 근거별로 검토합니다.",
+    description: "폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.",
   },
   applications: {
     eyebrow: "앱 관리",

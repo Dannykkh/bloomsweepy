@@ -49,6 +49,19 @@ pub struct DirectoryNode {
     pub(crate) scan_modified_at: Option<SystemTime>,
 }
 
+impl DirectoryNode {
+    /// In-process identity comparison; serialized names/paths are never authority.
+    pub fn same_entry_as(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.is_directory == other.is_directory
+            && self.scan_identity.is_some()
+            && self.scan_identity == other.scan_identity
+            && self.scan_modified_at.is_some()
+            && self.scan_modified_at == other.scan_modified_at
+            && (self.is_directory || self.logical_bytes == other.logical_bytes)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EmptyDirectory {

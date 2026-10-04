@@ -9,7 +9,7 @@ use sysinfo::{
     CpuRefreshKind, MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate,
     System, Uid, UpdateKind,
 };
-use tauri::State;
+use tauri::{State, WebviewWindow};
 
 const SNAPSHOT_TTL: Duration = Duration::from_secs(60);
 const PREVIEW_TTL: Duration = Duration::from_secs(30);
@@ -21,7 +21,7 @@ const TOP_PER_SORT: usize = 20;
 const MAX_PARENT_DEPTH: usize = 32;
 const REFRESH_AFTER_MS: u64 = 2_000;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PerformanceSnapshot {
     snapshot_id: String,
@@ -263,17 +263,27 @@ pub(crate) async fn prepare_graceful_process_termination(
 
 #[tauri::command]
 pub(crate) async fn execute_graceful_process_termination(
+    window: WebviewWindow,
     state: State<'_, Arc<PerformanceMonitorState>>,
     request: ExecuteTerminationRequest,
 ) -> Result<TerminationResult, String> {
+    require_main_window(window.label())?;
     let state = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || state.execute_termination(request))
         .await
         .map_err(|error| format!("앱 종료 요청을 완료하지 못했습니다: {error}"))?
 }
 
+fn require_main_window(label: &str) -> Result<(), String> {
+    if label == "main" {
+        Ok(())
+    } else {
+        Err("앱의 기본 창에서만 정상 종료를 요청할 수 있습니다".to_owned())
+    }
+}
+
 impl PerformanceMonitorState {
-    fn collect_snapshot(&self) -> Result<PerformanceSnapshot, String> {
+    pub(crate) fn collect_snapshot(&self) -> Result<PerformanceSnapshot, String> {
         let snapshot_id = generate_id("성능 측정")?;
         let (
             captured_at_unix_ms,
@@ -355,7 +365,7 @@ impl PerformanceMonitorState {
         })
     }
 
-    fn prepare_termination(
+    pub(crate) fn prepare_termination(
         &self,
         snapshot_id: &str,
         target_id: &str,
@@ -1003,6 +1013,13 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn final_termination_is_restricted_to_main_window() {
+        assert!(require_main_window("main").is_ok());
+        assert!(require_main_window("mcp").is_err());
+        assert!(require_main_window("assistant").is_err());
+    }
 
     fn candidate(cpu: f32, memory: u64, pid: u32) -> UsageCandidate {
         UsageCandidate {

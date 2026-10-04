@@ -25,10 +25,15 @@ const BACKGROUND_ARG: &str = "--background";
 
 mod action_recovery;
 mod app_memory_cleanup;
+mod app_tools;
+mod app_tools_search;
+mod app_tools_system;
 mod application_actions;
+mod assistant_files;
 mod assistant_provider;
 mod assistant_sessions;
 mod assistant_tools;
+mod cleanup_tree;
 mod control_server;
 mod docker_tools;
 mod empty_trash;
@@ -1797,7 +1802,10 @@ pub fn run() {
         .manage(ScanRuntime::default())
         .manage(StoredReports::default())
         .manage(assistant_provider::AssistantProviderState::default())
+        .manage(app_tools::RequestHistory::default())
         .manage(assistant_tools::AssistantToolsState::default())
+        .manage(assistant_files::AssistantFilesState::default())
+        .manage(cleanup_tree::CleanupTreeState::default())
         .manage(folder_actions::FolderActionsState::default())
         .manage(empty_trash::EmptyTrashState::default())
         .manage(application_actions::ApplicationActionsState::default())
@@ -1840,6 +1848,7 @@ pub fn run() {
             control_server::configure_control_search_access,
             control_server::configure_control_scan_access,
             control_server::configure_control_cleanup_access,
+            control_server::configure_control_inspection_access,
             control_server::get_pending_cleanup_plan,
             control_server::approve_cleanup_plan,
             control_server::reject_cleanup_plan,
@@ -1858,6 +1867,19 @@ pub fn run() {
             assistant_tools::select_assistant_empty_candidates,
             assistant_tools::prepare_assistant_empty_plan,
             assistant_tools::confirm_assistant_empty_plan,
+            assistant_files::get_assistant_file_workspace,
+            assistant_files::get_assistant_directory_report,
+            assistant_files::assistant_file_action,
+            assistant_files::select_assistant_files,
+            assistant_files::prepare_assistant_file_plan,
+            assistant_files::confirm_assistant_file_plan,
+            cleanup_tree::open_cleanup_tree,
+            cleanup_tree::get_cleanup_tree,
+            cleanup_tree::load_cleanup_tree_children,
+            cleanup_tree::update_cleanup_tree_selection,
+            cleanup_tree::prepare_cleanup_tree_plan,
+            cleanup_tree::confirm_cleanup_tree_plan,
+            cleanup_tree::dismiss_cleanup_tree_plan,
             docker_tools::get_docker_management_status,
             docker_tools::set_docker_management_enabled,
             docker_tools::create_docker_cleanup_preview,

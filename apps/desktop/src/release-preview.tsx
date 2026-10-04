@@ -143,7 +143,8 @@ function Preview() {
       updatingCleanupAccess={false} cleanupAccessError={null} onToggleCleanupAccess={noop} onReviewPending={noop}
       directoryProgress={null} directoryState="success" volumes={volumes} dockerStatus={null}
       launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null}
-      onConfirmEmptyPlan={async () => { throw new Error("Documentation preview only"); }} /> : null}
+      onConfirmEmptyPlan={async () => { throw new Error("Documentation preview only"); }}
+      onConfirmFilePlan={async () => { throw new Error("Documentation preview only"); }} onDirectoryReport={() => undefined} /> : null}
     {view === "settings" ? <SettingsView config={config} onConfigChange={setConfig} dockerStatus={null}
       dockerLoading={false} dockerChanging={false} dockerError={null} onDockerEnabledChange={async () => {}}
       onOpenDocker={noop} /> : null}

@@ -15,6 +15,7 @@ mod document_worker;
 mod drive;
 mod file_catalog;
 mod index_budget;
+mod local_search;
 mod resource_guard;
 mod scan_policy;
 mod streaming_walk;
@@ -33,8 +34,10 @@ pub fn is_online_only_metadata(metadata: &Metadata) -> bool {
 }
 
 pub use actions::{
-    ActionValidationError, VerifiedTrashItem, revalidate_verified_trash_item,
-    validate_cleanup_trash_candidate, validate_directory_trash_file,
+    ActionValidationError, VerifiedTrashItem, cleanup_tree_scope_identity,
+    revalidate_verified_trash_item, validate_cleanup_trash_candidate,
+    validate_cleanup_tree_node_identity, validate_cleanup_tree_path,
+    validate_cleanup_tree_trash_folder, validate_directory_trash_file,
     validate_directory_trash_folder, validate_duplicate_trash_selection,
     validate_empty_directory_trash,
 };
@@ -67,6 +70,7 @@ pub use file_catalog::{
     FileCatalogStatus, build_file_catalog, clear_file_catalog, file_catalog_status,
     recent_file_catalog_entries, search_file_catalog, search_file_catalog_with_cancellation,
 };
+pub use local_search::{LocalSearchReport, search_local_entries, validate_local_directory_path};
 
 const HASH_CHUNK_BYTES: usize = 64 * 1024;
 const COMPARE_CHUNK_BYTES: usize = 256 * 1024;

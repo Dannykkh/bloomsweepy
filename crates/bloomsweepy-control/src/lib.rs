@@ -9,6 +9,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
+mod capabilities;
+pub use capabilities::{
+    AppToolRequest, AppToolResult, AppToolStatus, AppToolView, ApplicationReviewKind,
+    ApplicationSort, DockerCleanupCategory, IndexSource, UsageSort, capability_catalog,
+    native_prompt_catalog,
+};
+
 pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 pub const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -144,6 +151,7 @@ impl ControlRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum ControlCommand {
+    AppAction(AppToolRequest),
     AppStatus,
     SystemOverview,
     SearchFiles(FileSearchRequest),
@@ -323,7 +331,7 @@ pub struct ControlOperationStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSearchRequest {
     pub query: String,
     #[serde(default)]
@@ -368,7 +376,7 @@ pub enum FileSearchSort {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DocumentSearchRequest {
     pub query: String,
     #[serde(default)]

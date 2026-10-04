@@ -1,0 +1,18 @@
+.assistant-app-tool-card { padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface-subtle); min-width: 0; }
+.assistant-app-tool-card header, .assistant-app-tool-card footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.assistant-app-tool-card h3 { margin: 0; font-size: 1.125rem; }
+.assistant-app-tool-card p { overflow-wrap: anywhere; }
+.assistant-app-tool-meta, .assistant-app-tool-state { color: var(--text-muted); font-size: .875rem; }
+.assistant-app-tool-metrics { display: flex; flex-wrap: wrap; gap: 16px 24px; }
+.assistant-app-tool-metrics dt { color: var(--text-muted); }
+.assistant-app-tool-metrics dd { margin: 4px 0 0; font-family: "JetBrains Mono", monospace; }
+.assistant-app-tool-list { list-style: decimal; padding-left: 20px; margin: 16px 0; }
+.assistant-app-tool-list li { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.assistant-app-tool-list li > div { min-width: 0; }
+.assistant-app-tool-list strong, .assistant-app-tool-list span { display: block; overflow-wrap: anywhere; font-size: .875rem; }
+.assistant-app-tool-list p { margin: 6px 0; color: var(--text-muted); font-size: .875rem; }
+.assistant-app-tool-values { text-align: right; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.assistant-app-tool-warning { color: var(--warning); }
+.assistant-app-tool-card footer button { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; }
+@media (max-width: 480px) { .assistant-app-tool-card { padding: 16px; } .assistant-app-tool-list li { flex-direction: column; } .assistant-app-tool-values { text-align: left; } }
+@media (prefers-reduced-motion: reduce) { .assistant-app-tool-card * { transition: none; } }
