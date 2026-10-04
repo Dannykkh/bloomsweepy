@@ -1,0 +1,10 @@
+# Architecture index
+
+기존 단일본 [architecture.md](../architecture.md)는 보존한다. 이번 작업의 번호 항목만 이 인덱스로 연결한다.
+
+- [001 — 일반 파일 대화 작업 공간](001-conversational-file-workspace.md): 공급자 중립 요청과 앱 실행/최종 승인 분리.
+- [002 — POSIX 내부 링크의 불투명 폴더 이동](002-opaque-folder-symlinks.md): 원본을 따라가지 않고 링크 자체를 검토/이동.
+- [003 — 큰 항목 발견과 지도 공유](003-conversational-storage-map.md): 읽기 전용 용량순 발견, 삭제 판단 분리, 단일 generation 공유.
+- [004 — 앱 기능 정본·LLM 조사](004-app-tool-investigation.md): 앱 조회 선택→실제 결과 분석→추가 조회, 동의/최종 승인 분리.
+- [005 — 정리 후보 트리](005-cleanup-candidate-tree.md): 상속 체크·하위 제외·중복 없는 frontier·보호 하위 검증. 이 맥 설치형209B 실제 이동/보존/취소 확인.
+- [006 — 프로젝트 기록 Git 공유](006-project-record-versioning.md): 사용자가 메모리·대화·docs 공유를 승인. 정제 기록은 추적하고 원시 관찰/중복 상태는 로컬 유지.

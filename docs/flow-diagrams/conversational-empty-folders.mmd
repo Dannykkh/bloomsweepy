@@ -1,0 +1,23 @@
+flowchart TD
+    question([선택 폴더에 대한 질문]) --> interpret[최소 요약과 후보 페이지로 AI 요청]
+    interpret --> valid{허용된 구조화 응답?}
+    valid -->|아니오| error[작업 없이 오류 표시]
+    valid -->|예| action{요청 종류}
+    action -->|답변| answer([텍스트 응답])
+    action -->|검사| scan[세션 폴더 로컬 검사와 기존 계획 무효화]
+    scan -->|실패 또는 취소| error
+    scan -->|성공| candidates[보호 경로 제외 및 서버 소유 후보 생성]
+    action -->|목록 또는 선택 수정| revise[검사 번호와 후보 번호 검증]
+    revise -->|불일치| error
+    revise -->|일치| card[채팅 안의 후보 검토 카드]
+    candidates --> card
+    card -->|사용자 선택 변경| revise
+    card -->|확인 계획 요청| plan[정확한 경로 목록과 5분 계획 표시]
+    plan -->|취소 또는 선택 변경| card
+    plan -->|사용자 최종 확인 버튼| claim{세션과 계획이 유효한 일회용 요청?}
+    claim -->|아니오| error
+    claim -->|예| verify[변경 여부와 실제 비어 있음 재검사]
+    verify -->|실패 또는 취소| result[성공 실패 건너뜀 결과와 로컬 작업 기록]
+    verify -->|통과| trash[OS 휴지통 이동]
+    trash --> result
+    result --> answer

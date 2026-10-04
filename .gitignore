@@ -18,13 +18,15 @@ build/
 # Claude Code
 .claude/
 
-# Local agent state
+# Local agent runtime state (project Markdown records are tracked)
 /.orchestrator/
 /.playwright-mcp/
 /.termsnap/
-/MEMORY.md
-/memory/
-/conversations/
+/.mnemo-root
+/memory/.mnemo-*
+/memory/**/observations*.jsonl
+/conversations/.mnemo-*
+/conversations/*.jsonl
 /docs/ui-audit/screenshots/
 /codemap/LINT_REPORT.md
 

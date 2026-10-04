@@ -1,0 +1,21 @@
+flowchart TD
+    openStart([명시적 열기 또는 위치 표시]) --> openLock{열기 작업 잠금}
+    openLock -->|중복 요청| openError[오류 표시 실행 없음]
+    openLock -->|획득| openGate[주 창 요청과 로컬 절대 경로 검증]
+    openGate -->|잘못된 경로| openError[오류 표시 실행 없음]
+    openGate -->|통과| openMetadata[실제 종류와 링크 및 클라우드 검사]
+    openMetadata -->|접근 불가 또는 온라인 전용 또는 부모 링크| openError
+    openMetadata --> openIntent{명시적 위치 표시 요청}
+    openIntent -->|예| openReveal
+    openIntent -->|아니오| openKind{실제 항목 종류}
+    openKind -->|일반 폴더| openDirectory[파일 탐색기 동작 선택]
+    openKind -->|링크 또는 별칭 또는 프로그램 패키지| openReveal[위치만 표시 - 링크는 부모 폴더]
+    openKind -->|일반 파일| openAllowed{허용 문서이며 실행형 아님}
+    openAllowed -->|예| openDocument[기본 앱 열기 동작 선택]
+    openAllowed -->|아니오| openReveal
+    openDirectory --> openRecheck{실행 직전 신원 재검증}
+    openDocument --> openRecheck
+    openReveal --> openRecheck
+    openRecheck -->|변경| openError
+    openRecheck -->|통과| openRequest[검증된 경로로 OS 요청]
+    openRequest --> openResult[요청됨 또는 오류 표시]

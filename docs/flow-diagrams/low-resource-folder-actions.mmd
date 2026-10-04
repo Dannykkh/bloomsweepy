@@ -1,0 +1,27 @@
+flowchart TD
+    request([검사 또는 폴더 검토 요청]) --> budget{단일 작업과 자원 및 범위 허용?}
+    budget -->|아니오| stop[이유 표시와 사용자 자료 보존]
+    budget -->|예| kind{작업 종류}
+    kind -->|조회| scan[제한된 스트리밍 탐색과 집계]
+    scan -->|일반 접근 오류| issue[제한된 문제 목록에 기록]
+    issue --> scan
+    scan -->|완료 또는 명시된 결과 수 제한| result([결과 표시])
+    scan -->|자원 고갈 또는 취소| stop
+    kind -->|색인| index[SQL 트랜잭션 안에서 스트리밍 색인]
+    index -->|PDF 또는 Office| extract[격리 문서 도구: 할당과 시간 및 출력 제한]
+    extract -->|텍스트 또는 문서 자체 손상 기록| index
+    extract -->|도구 실패 또는 자원 고갈| rollback[롤백과 이전 FTS 보존]
+    index -->|취소 또는 RAM 및 디스크 예산 초과| rollback
+    rollback --> stop
+    index -->|최종 예산 검사 통과| commit[COMMIT 후 WAL 회수 시도]
+    commit --> result
+    kind -->|폴더 검토| capture[루트 및 장치 경계 확인과 제한된 메타데이터 검토]
+    capture -->|실패 또는 취소| stop
+    capture -->|성공| plan[전체 경로와 포함 항목을 표시하는 5분 계획]
+    plan -->|닫기 또는 만료| stop
+    plan -->|하위 항목 체크와 앱 최종 버튼| valid{세대와 계획 일치 및 미사용?}
+    valid -->|아니오| stop
+    valid -->|예: 원자적 소진| recheck[폴더 메타데이터와 보호 경계 재검증]
+    recheck -->|실패 또는 취소| stop
+    recheck -->|통과| trash[작업 기록과 OS 휴지통 이동]
+    trash -->|성공 또는 중단 또는 부분 실패| result

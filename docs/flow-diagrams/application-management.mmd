@@ -1,0 +1,28 @@
+flowchart TD
+    appStart([설치된 앱 조회]) --> appInventory[제한된 독립 목록과 검색 페이지]
+    appInventory --> appPlatform{플랫폼}
+    appPlatform -->|Windows| appSettings[고정 OS 제거 화면 열기]
+    appSettings --> appExternal[완료 판단은 OS와 사용자에게 맡김]
+    appPlatform -->|지원 안 함| appBlocked[이유 표시 실행 없음]
+    appPlatform -->|Mac| appVendor[전용 제거기 우선 안내와 위치 표시]
+    appVendor --> appReview{일반 앱 본체 검토 가능}
+    appReview -->|아니오 또는 오류| appBlocked
+    appReview -->|예| appPlan[본체만 이동 일회용 검토]
+    appPlan --> appConfirm{전용 제거기 없음과 범위 확인}
+    appConfirm -->|취소 또는 만료| appBlocked
+    appConfirm -->|확인| appValidate[잠금과 실행 중 여부 및 신원 재검증]
+    appValidate -->|실패| appBlocked
+    appValidate -->|통과| appTrash[기록 후 OS Trash 이동]
+    appTrash -->|확인된 결과| appResult[실제 결과 표시]
+    appTrash -->|OS 오류 또는 기록 불확실| appInspect[점검 필요 잠금 - 새로고침도 재시도 금지]
+    appInspect --> appInspectionEnd([휴지통과 원본 및 작업 기록 수동 점검])
+    appResult --> appData[관련 데이터 한정 후보 별도 표시]
+    appData --> appSelect{사용자가 후보 선택}
+    appSelect -->|선택 안 함| appEnd([데이터 유지])
+    appSelect -->|선택| dataPlan[별도 계획과 최종 확인]
+    dataPlan -->|취소 또는 오류| appEnd
+    dataPlan -->|확인| dataValidate[한정 경로와 알려진 앱 루트의 제한된 소유관계 재검증]
+    dataValidate -->|실패 또는 불완전한 조회| appBlocked
+    dataValidate -->|통과| appTrash
+    appData -->|화면 이동| dataRetain[한정 후보 유지 - 명시적 새로고침은 무효화]
+    dataRetain --> appSelect
