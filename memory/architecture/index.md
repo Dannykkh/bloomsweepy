@@ -9,3 +9,6 @@
 - [005 — 정리 후보 트리](005-cleanup-candidate-tree.md): 상속 체크·하위 제외·중복 없는 frontier·보호 하위 검증. 이 맥 설치형209B 실제 이동/보존/취소 확인.
 - [006 — 프로젝트 기록 Git 공유](006-project-record-versioning.md): 사용자가 메모리·대화·docs 공유를 승인. 정제 기록은 추적하고 원시 관찰/중복 상태는 로컬 유지.
 - [007 — 네이티브 제목줄·글래스 합성](007-native-window-material.md): Visible OS chrome, 단일 wash, 중복 blur 제거, 웹·Windows opaque 유지. 이 맥 설치형 검증.
+- [008 — 대화 중심 작업면](008-conversation-workbench.md): 하단 입력·실제 단계·접힌 근거·Settings/Dialog 공유. 권한과 최종 실행은 유지.
+- [009 — 선택적 권한 유지](009-opt-in-permission-lifetime.md): 기본 session, 명시적 remember, 정확한 폴더·기준 재검증과 영속 철회. 계획·최종 승인은 제외.
+- [010 — 선택 폴더 검사](010-selected-folder-inspection.md): 검사 스위치 없이 앱 폴더 선택으로 범위 연결. 외부 임의 경로·자동 삭제는 불가.

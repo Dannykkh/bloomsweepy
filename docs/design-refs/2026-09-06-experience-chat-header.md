@@ -1,5 +1,10 @@
 # Experience Contract: Chat header overlap delta
 
+Layout policy superseded on 2026-10-05 by
+[Conversation-first workbench](2026-10-05-experience-chat-workbench.md).
+The no-overlap requirement remains; the chat now uses bounded, non-overlapping
+header/transcript/composer rows instead of a sole main-page scroller.
+
 ## Source Mode
 
 - Mode: product-derived; approved local layout correction.

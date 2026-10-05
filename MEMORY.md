@@ -5,7 +5,7 @@
 | 목표 | 상태 |
 |------|------|
 | 대화형 파일관리 BroomSweepy | 트리 맥 설치 확인; LLM·Windows·장시간 검증 남음 |
-| 현재 8 GiB 맥북에서 RAM·디스크 부족 시에도 안전하게 동작 | 자원 보호 소스·합성 회귀 완료, 설치형 전체 계측 남음 |
+| 8 GiB 맥의 RAM·디스크 보호 | 소스·합성 회귀 완료, 설치형 전체 계측 남음 |
 
 ---
 
@@ -17,16 +17,18 @@
 | rust, tauri, macos, sidecar, cargo-test | [memory/gotchas.md](memory/gotchas.md) |
 | cli-discovery, authentication-status, claude-safe-mode, chat-qa | [memory/gotchas.md](memory/gotchas.md) |
 | oauth-expiry, stdout-errors, standalone-cli | [memory/gotchas.md](memory/gotchas.md) |
-| codex-install, arm64, cli-0.153.4, chat-success, normal-flow, macos-install, adhoc-signing | [memory/gotchas.md](memory/gotchas.md) |
+| codex-install, arm64, cli-0.153.4 | [gotchas](memory/gotchas.md) |
 | response-quality, conversation-restore, chat-header-overlap | [memory/gotchas.md](memory/gotchas.md) |
-| app-capabilities, app-owned-results, llm-investigation | [004 앱 기능 정본](memory/architecture/004-app-tool-investigation.md) |
-| cleanup-tree, child-exclusion, inherited-selection | [005 정리 후보 트리](memory/architecture/005-cleanup-candidate-tree.md) |
+| app-capabilities, app-owned-results, llm-investigation | [004](memory/architecture/004-app-tool-investigation.md) |
+| cleanup-tree, child-exclusion, inherited-selection | [005](memory/architecture/005-cleanup-candidate-tree.md) |
 | claude-arm64, rosetta, startup-latency, macos-soak | [memory/gotchas.md](memory/gotchas.md) |
 | cloud-exclusion, jwalk, codex-common-flow, scan-safety | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.6.0, screenshots, https-push, adhoc-dmg | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.6.1, tauri-config, windows-ci, private-api | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.7.0, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
 | native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
+| chat-workbench, actual-progress, bottom-input | [008](memory/architecture/008-conversation-workbench.md) |
+| permissions, folder-scan | [009](memory/architecture/009-opt-in-permission-lifetime.md), [010](memory/architecture/010-selected-folder-inspection.md) |
 | multi-drive, drive-deck, flip-animation, scan-root | [memory/architecture.md](memory/architecture.md) |
 | macos, disk-image, hdiutil, volume-filter | [memory/architecture.md](memory/architecture.md) |
 | performance-monitor, sysinfo, appkit, graceful-termination | [memory/architecture.md](memory/architecture.md) |
@@ -34,7 +36,7 @@
 | dual-rings, cpu, ram, scoped-cleanup | [memory/architecture.md](memory/architecture.md) |
 | smooth-metrics, css-transition, reduced-motion | [memory/architecture.md](memory/architecture.md) |
 | treemap-actions, file-reveal, scan-identity, os-trash | [memory/architecture.md](memory/architecture.md) |
-| conversational-file-management, product-direction, ai-tools, readme | [memory/architecture.md](memory/architecture.md) |
+| conversational-file-management, ai-tools | [memory/architecture.md](memory/architecture.md) |
 | empty-folder-tools, one-shot-plan, structured-envelope, token-privacy | [memory/architecture.md](memory/architecture.md) |
 | conversational-files, app-owned-tools, bounded-search | [001 일반 파일 대화](memory/architecture/001-conversational-file-workspace.md) |
 | largest-items, shared-treemap, read-only-advice | [003 지도 공유](memory/architecture/003-conversational-storage-map.md) |
@@ -45,7 +47,7 @@
 | streaming-walk, document-worker, folder-review, resource-guards | [memory/architecture.md](memory/architecture.md) |
 | worker-failure-rollback, os-resource-errors, mount-root-guard | [memory/gotchas.md](memory/gotchas.md) |
 | empty-system-trash, irreversible-confirmation, finder, one-shot-nonce | [memory/architecture.md](memory/architecture.md) |
-| node-x64, rust-arm64, explicit-target, application-management-pending | [memory/gotchas.md](memory/gotchas.md) |
+| node-x64, rust-arm64 | [memory/gotchas.md](memory/gotchas.md) |
 | application-management, windows-uninstall, related-data, file-open | [memory/architecture.md](memory/architecture.md) |
 | release-allocator-probe, allocation-elision, heap-budget | [memory/gotchas.md](memory/gotchas.md) |
 | navigation-order, dashboard, performance, applications-nav | [memory/architecture.md](memory/architecture.md) |
