@@ -88,7 +88,7 @@ const MAX_DUPLICATE_CANDIDATE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ISSUES: usize = 1_000;
 const MAX_TRACKED_HARD_LINK_IDENTITIES: usize = 250_000;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ScanConfig {
     pub min_large_file_bytes: u64,

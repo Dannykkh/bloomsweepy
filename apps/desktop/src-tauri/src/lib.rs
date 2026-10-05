@@ -42,6 +42,7 @@ mod file_inspection;
 mod folder_actions;
 mod mcp_registration;
 mod menu_bar;
+mod permission_settings;
 mod system_inventory;
 mod system_memory;
 mod system_performance;
@@ -1830,6 +1831,7 @@ pub fn run() {
                 windows_tray::log_setup_failure(&error);
             }
             let app_handle = app.handle().clone();
+            control_server::restore_permission_settings(&app_handle);
             match control_server::start(app_handle.clone()) {
                 Ok(server) => {
                     app.manage(server);
@@ -1849,6 +1851,7 @@ pub fn run() {
             control_server::configure_control_scan_access,
             control_server::configure_control_cleanup_access,
             control_server::configure_control_inspection_access,
+            control_server::configure_control_permission_lifetime,
             control_server::get_pending_cleanup_plan,
             control_server::approve_cleanup_plan,
             control_server::reject_cleanup_plan,

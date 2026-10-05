@@ -520,7 +520,7 @@ fn start_storage_scan(
             Ok(raw) => Ok(operation_result("storage.scan", raw)),
             Err(_) => Ok(permission(
                 "storage.scan",
-                "앱에서 이 실행의 검사 폴더/설정을 먼저 허용해 주세요",
+                "앱에서 검사할 폴더를 먼저 선택해 주세요",
             )),
         };
     }

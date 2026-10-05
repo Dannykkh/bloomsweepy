@@ -7,6 +7,7 @@ import type {
   EmptyTrashPlan,
   EmptyTrashOutcome,
   AssistantChatRequest,
+  AssistantProgress,
   AssistantEmptyWorkspace,
   AssistantFileWorkspace,
   AssistantFileAction,
@@ -54,6 +55,7 @@ import type {
   FileCatalogStatus,
   FileCatalogRecentReport,
   ControlStatus,
+  PermissionLifetime,
   ControlSearchAccessRequest,
   ControlScanAccessRequest,
   ControlScanProgressEvent,
@@ -102,6 +104,10 @@ export function askAssistant(
 
 export function cancelAssistant(): Promise<boolean> {
   return invoke<boolean>("cancel_assistant");
+}
+
+export function listenToAssistantProgress(handler: (progress: AssistantProgress) => void): Promise<UnlistenFn> {
+  return listen<AssistantProgress>("assistant-progress", (event) => handler(event.payload));
 }
 
 export function getAssistantEmptyWorkspace(sessionId: string): Promise<AssistantEmptyWorkspace | null> {
@@ -191,6 +197,10 @@ export function cancelDockerCleanup(): Promise<boolean> {
 
 export function getControlStatus(): Promise<ControlStatus> {
   return invoke<ControlStatus>("get_control_status");
+}
+
+export function configureControlPermissionLifetime(lifetime: PermissionLifetime): Promise<ControlStatus> {
+  return invoke<ControlStatus>("configure_control_permission_lifetime", { lifetime });
 }
 
 export function configureControlSearchAccess(

@@ -1,15 +1,18 @@
 // Synthetic UI integration fixture. No provider, filesystem, or native operation runs.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { createRoot } from "react-dom/client";
 import { useCallback, useState } from "react";
 import { AssistantView } from "./views/AssistantView";
+import { AppShell } from "./components/AppShell";
+import { SettingsView } from "./views/SettingsView";
 import { StorageTreemapPanel } from "./components/StorageTreemapPanel";
 import { AssistantAppToolReview } from "./components/AssistantAppToolCard";
 import { LanguageProvider } from "./i18n";
 import { LANGUAGE_STORAGE_KEY } from "./i18n/preference";
 import { confirmAssistantEmptyPlan, confirmAssistantFilePlan } from "./lib/bridge";
 import { DEFAULT_SCAN_CONFIG } from "./types";
-import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantSessionDetail, ControlStatus, DirectoryScanReport, TrashOperationResult } from "./types";
+import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
 import "./App.css";
 
 const params = new URLSearchParams(window.location.search);
@@ -24,6 +27,16 @@ const session: AssistantSessionDetail = {
     createdAtUnixMs: now, updatedAtUnixMs: now, messageCount: 0, lastProvider: "codex", lastModel: null },
   folderSummary: summary, messages: [],
 };
+const layoutState = params.get("state");
+if (layoutState && layoutState !== "empty") {
+  session.messages = Array.from({ length: layoutState === "short" ? 2 : 16 }, (_, index) => ({
+    sequence: index + 1, role: index % 2 ? "assistant" : "user", provider: index % 2 ? "codex" : null,
+    providerLabel: index % 2 ? "Codex · QA mock" : null, model: null, createdAtUnixMs: now,
+    content: index % 2 ? "이 답변은 합성 QA입니다. 실제 파일이나 AI 전송 없이 긴 대화를 확인합니다.\n\n".repeat(8)
+      : "가장 큰 폴더를 찾아서 정리할 수 있는지 검토해줘.",
+  }));
+  session.session.messageCount = session.messages.length;
+}
 const seed: AssistantEmptyWorkspace = {
   revision: "fixture-revision", summary, totalFound: 3, omittedCount: 0,
   candidates: ["Empty draft", "Keep this folder", "Long folder name ".repeat(12)].map((name, index) => ({
@@ -44,6 +57,7 @@ const fileSeed: AssistantFileWorkspace = {
 let fileWorkspace: AssistantFileWorkspace | null = null;
 let executions = 0;
 let preparations = 0;
+let cancelPending: (() => void) | null = null;
 const appToolsMode = params.has("app-tools");
 const clone = <T,>(value: T): T => structuredClone(value);
 const control: ControlStatus = { revision: 1, bridgeAvailable: true, connectedClients: 0,
@@ -82,8 +96,32 @@ mockIPC((command, raw) => {
     session.session.messageCount = session.messages.length;
     return clone({ session: session.session, message });
   }
+  if (command === "cancel_assistant") { cancelPending?.(); return true; }
   if (command === "ask_assistant") {
-    const request = args.request as { message: string };
+    const request = args.request as { message: string; progressId?: string; sessionId?: string };
+    if (layoutState) return new Promise((resolve, reject) => {
+      const timers: ReturnType<typeof setTimeout>[] = [];
+      const cleanup = () => { timers.forEach(clearTimeout); cancelPending = null; };
+      cancelPending = () => { cleanup(); reject(new Error("테스트 응답을 취소했습니다")); };
+      const stage = (phase: string, round: number, capability: string | null) => void emit("assistant-progress", {
+        progressId: request.progressId, sessionId: request.sessionId, phase, round, capability,
+      });
+      stage("preparing", 0, null);
+      timers.push(setTimeout(() => stage("analyzing", 0, null), 500));
+      timers.push(setTimeout(() => stage("querying", 0, "applications.list"), 1800));
+      timers.push(setTimeout(() => stage("analyzing", 1, null), 3400));
+      timers.push(setTimeout(() => {
+        cleanup();
+        if (layoutState === "error") { reject(new Error("합성 QA 오류입니다. 질문을 다시 보낼 수 있습니다.")); return; }
+        fileWorkspace = clone(fileSeed);
+        resolve({ provider: "codex", label: "Codex · QA mock", model: null,
+          message: "앱에서 확인한 목록을 분석했습니다. 이 결과는 합성 QA이며 실제 파일 작업과 외부 전송은 없습니다.",
+          analysisComplete: true, dockerContext: null, emptyWorkspace: null, fileWorkspace: clone(fileWorkspace), toolAction: "app",
+          appToolResults: [{ source: "broomsweepy", capability: "applications.list", status: "completed", capturedAtUnixMs: Date.now(),
+            truncated: true, data: { matchedCount: 59, returnedCount: 24, items: Array.from({ length: 24 }, (_, index) => ({ displayName: `Synthetic app ${index + 1}`, estimatedBytes: 100_000_000 + index * 100_000 })) } }],
+        });
+      }, layoutState === "loading" ? 15000 : 5500));
+    });
     if (appToolsMode) {
       const common = { source: "broomsweepy" as const, status: "completed" as const, capturedAtUnixMs: now, truncated: false };
       const performance: AppToolResult = { ...common, capability: "performance.inspect", data: { cpuUsagePercent: 12.5, memory: { usedBytes: 6_000_000_000, totalBytes: 8_000_000_000, availableBytes: 2_000_000_000 }, items: [{ displayName: "Editor <script>noop</script>", residentBytes: 2_000_000_000, cpuMachinePercent: 5.2 }], sourceProcessesTruncated: true }, truncated: true, presentation: { view: "performance" } };
@@ -173,30 +211,41 @@ function prepareFiles() {
 }
 const noop = () => undefined;
 function Fixture() {
+  const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, permissionLifetime: params.has("remember") ? "remember" : "session" });
+  const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [view, setView] = useState<ViewId>(params.get("view") === "settings" ? "settings" : "assistant");
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [appReview, setAppReview] = useState<AppToolResult | null>(null);
   const [localNotice, setLocalNotice] = useState("");
   const [map, setMap] = useState<DirectoryScanReport | null>(null);
   const [showMap, setShowMap] = useState(false);
   const acceptMap = useCallback((report: DirectoryScanReport, open: boolean) => { setMap(report); if (open) setShowMap(true); }, []);
-  return <main style={{ maxWidth: 1100, margin: "0 auto", padding: 20 }}>
-    <div style={{ display: "contents" }} inert={appReview !== null}>
-    <p role="note">합성 QA · 실제 파일 검사/이동 및 AI 전송 없음 · “검사”, “2번 보관”을 사용</p>
+  const controlSettings = { status: permissionStatus, canEnableSearch: false, updatingSearchAccess: false, searchAccessError: null,
+    permissionLifetimeError: permissionError, onPermissionLifetimeChange: (lifetime: PermissionLifetime) => {
+      if (params.has("permission-save-error")) { setPermissionError("합성 저장 실패 · 기존 유지 방식은 바꾸지 않았습니다."); return; }
+      setPermissionError(null); setPermissionStatus(current => ({ ...current, permissionLifetime: lifetime }));
+    }, onToggleInspectionAccess: () => setPermissionStatus(current => ({ ...current, inspectionAllowed: !current.inspectionAllowed })),
+    onToggleSearchAccess: noop, scanAccessError: null, canEnableCleanup: false,
+    cleanupAccessLocked: false, updatingCleanupAccess: false, cleanupAccessError: null, onToggleCleanupAccess: noop,
+    onReviewPending: noop };
+  return <><div style={{ display: "contents" }} inert={appReview !== null}>
+    <AppShell activeView={view} root={null} report={null} volume={null} mobileNavigationOpen={mobileOpen}
+      selectionBlocked={false} dockerEnabled={false} onMobileNavigationChange={setMobileOpen} onNavigate={setView} onPickFolder={noop}>
+    <p role="note" style={{ margin: "4px 0", fontSize: 14 }}>합성 QA · 실제 파일 작업/AI 전송 없음</p>
     <output id="fixture-executions">Mock executions: 0</output>
     <output>Shared map: {map?.root ?? "none"} · {map?.totalLogicalBytes ?? 0} B</output>
     {showMap ? <><button type="button" className="secondary-button" onClick={() => setShowMap(false)}>대화로 돌아가기</button>
       <StorageTreemapPanel root={map?.root ?? null} report={map} progress={null} state="success" error={null}
         breadcrumbs={map ? [{ path: map.root, name: map.name }] : []} blocked={false} showAction={false}
         onPickFolder={noop} onStart={noop} onCancel={noop} onReveal={async () => undefined} />
-    </> : <AssistantView status={control} canEnableSearch={false} updatingSearchAccess={false} searchAccessError={null}
-      onToggleSearchAccess={noop} scanRoot={session.session.scopeRoot} scanConfig={DEFAULT_SCAN_CONFIG} canEnableScan={false}
-      updatingScanAccess={false} scanAccessError={null} onToggleScanAccess={noop} canEnableCleanup={false}
-      cleanupAccessLocked={false} updatingCleanupAccess={false} cleanupAccessError={null} onToggleCleanupAccess={noop}
-      onReviewPending={noop} directoryProgress={null} directoryState="success" volumes={[]} dockerStatus={null}
+    </> : view === "settings" ? <SettingsView controlSettings={controlSettings} config={DEFAULT_SCAN_CONFIG} onConfigChange={noop}
+      dockerStatus={null} dockerLoading={false} dockerChanging={false} dockerError={null} onDockerEnabledChange={async () => undefined} onOpenDocker={noop} />
+    : <AssistantView controlSettings={controlSettings} directoryProgress={null} directoryState="success" volumes={[]} dockerStatus={null}
       launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null} onConfirmEmptyPlan={confirmAssistantEmptyPlan} onConfirmFilePlan={confirmAssistantFilePlan} onDirectoryReport={acceptMap}
       onAppToolReview={(prepared) => setAppReview(prepared)} onAppToolView={(result) => setLocalNotice(`Explicit navigation: ${result.capability}`)} />}
-    </div>
+    </AppShell></div>
     {appReview ? <AssistantAppToolReview result={appReview} onClose={() => setAppReview(null)} onCompleted={(result) => setLocalNotice(result.message)} /> : null}
     <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions}</output>
-  </main>;
+  </>;
 }
 createRoot(document.getElementById("root")!).render(<LanguageProvider><Fixture /></LanguageProvider>);

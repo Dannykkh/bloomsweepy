@@ -10,7 +10,8 @@ import { DockerCleanupDialog } from "./DockerCleanupDialog";
 import { ProcessTerminationDialog } from "./ProcessTerminationDialog";
 import "./AssistantAppToolCard.css";
 
-const titles: Record<string, MessageKey> = {
+export const appToolTitles: Record<string, MessageKey> = {
+  "files.workspace": "파일 검사", "empty.workspace": "빈 폴더",
   "storage.overview": "드라이브 사용량", "performance.inspect": "시스템 성능",
   "applications.list": "설치된 앱", "applications.inspect": "관련 데이터 검토",
   "applications.review": "앱 본체 정리 검토", "processes.review": "정상 종료 요청",
@@ -20,7 +21,7 @@ const titles: Record<string, MessageKey> = {
   "cleanup.plan_status": "정리 후보", "operations.status": "요청한 작업", "operations.cancel": "요청한 작업",
   "docker.status": "Docker 용량", "docker.review": "Docker 정리 검토", "ui.view": "앱 화면",
 };
-const statusKeys: Record<AppToolResult["status"], MessageKey> = {
+export const appToolStatusKeys: Record<AppToolResult["status"], MessageKey> = {
   completed: "완료", running: "진행 중", review_required: "최종 확인 대기",
   permission_required: "허용 안 됨", unsupported: "지원하지 않음", failed: "완료하지 못함",
 };
@@ -60,7 +61,7 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview }:
   const view = appToolView(result);
   const measuredAt = number(data.capturedAtUnixMs) ?? result.capturedAtUnixMs;
   return <section className="assistant-app-tool-card" aria-label={t("앱에서 확인한 결과")}>
-    <header><div><p className="eyebrow">BroomSweepy</p><h3>{t(titles[result.capability] ?? "앱에서 확인한 결과")}</h3></div><span className="assistant-app-tool-state">{t(statusKeys[result.status])}</span></header>
+    <header><div><p className="eyebrow">BroomSweepy</p><h3>{t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}</h3></div><span className="assistant-app-tool-state">{t(appToolStatusKeys[result.status])}</span></header>
     <p className="assistant-app-tool-meta">{t("실제 앱 조회 · {{date}}", { date: formatDate(measuredAt) })}</p>
     {result.capability === "performance.inspect" ? <dl className="assistant-app-tool-metrics">
       <div><dt>CPU</dt><dd>{number(data.cpuUsagePercent)?.toFixed(1) ?? "—"}%</dd></div>

@@ -2,6 +2,8 @@ import { X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { AppShell } from "./components/AppShell";
+import type { ControlStatusPanelProps } from "./components/ControlStatusPanel";
+import { bindSelectedScanScope } from "./lib/selectedScanScope";
 import { SafetyActionDialog } from "./components/SafetyActionDialog";
 import { RecoveryCheckNotice, RecoveryNotice } from "./components/RecoveryNotice";
 import { FileSectionNav } from "./components/FileSectionNav";
@@ -20,6 +22,7 @@ import {
   configureControlSearchAccess,
   configureControlCleanupAccess,
   configureControlInspectionAccess,
+  configureControlPermissionLifetime,
   listenToAppToolReview,
   listenToAppToolCompleted,
   getActionHistory,
@@ -78,6 +81,7 @@ import type {
   DriveScanProgress,
   DriveScanReport,
   ScanConfig,
+  PermissionLifetime,
   ScanProgress,
   ScanReport,
   ScanUiState,
@@ -234,6 +238,9 @@ function App() {
   const [controlCleanupAccessError, setControlCleanupAccessError] = useState<string | null>(null);
   const [inspectionUpdating, setInspectionUpdating] = useState(false);
   const [inspectionError, setInspectionError] = useState<string | null>(null);
+  const [permissionLifetimeUpdating, setPermissionLifetimeUpdating] = useState(false);
+  const [permissionLifetimeError, setPermissionLifetimeError] = useState<string | null>(null);
+  const restoredPermissionScope = useRef(false);
   const [appToolReview, setAppToolReview] = useState<{result: AppToolResult; sessionId: string | null} | null>(null);
   const appToolReviewRef = useRef<{result: AppToolResult; sessionId: string | null} | null>(null);
   const appToolReviewTrigger = useRef<HTMLElement | null>(null);
@@ -685,7 +692,18 @@ function App() {
 
       try {
         const status = await getControlStatus();
-        if (!disposed) applyControlStatus(status);
+        if (!disposed) {
+          applyControlStatus(status);
+          if (!restoredPermissionScope.current) {
+            restoredPermissionScope.current = true;
+            if (status.permissionLifetime === "remember" && status.scanAccess.enabled && status.scanAccess.root && status.scanAccess.config) {
+              const approvedRoot = status.scanAccess.root;
+              const approvedConfig = status.scanAccess.config;
+              setRoot(current => current ?? approvedRoot);
+              setConfig(current => current === DEFAULT_SCAN_CONFIG ? approvedConfig : current);
+            }
+          }
+        }
       } catch {
         if (!disposed && controlStatusRevision.current === 0)
           setControlStatus(unavailableControlStatus);
@@ -785,6 +803,7 @@ function App() {
   }
 
   async function toggleControlSearchAccess() {
+    if (permissionLifetimeUpdating) return;
     if (controlAccessUpdating || !controlStatus.bridgeAvailable) return;
     const enabled =
       controlStatus.searchAccess.files || controlStatus.searchAccess.documents;
@@ -827,16 +846,8 @@ function App() {
     }
   }
 
-  async function toggleControlScanAccess() {
-    if (controlStatus.scanAccess.enabled) {
-      await updateControlScanAccess(null, null);
-      return;
-    }
-    if (!root || selectionBlocked) return;
-    await updateControlScanAccess(root, config);
-  }
-
   async function toggleControlCleanupAccess() {
+    if (permissionLifetimeUpdating) return;
     if (controlCleanupAccessUpdating || !controlStatus.bridgeAvailable) return;
     const enabled = controlStatus.cleanupAccess.enabled;
     if (selectionBlocked) return;
@@ -858,11 +869,25 @@ function App() {
   }
 
   async function toggleInspectionAccess() {
+    if (permissionLifetimeUpdating) return;
     if (inspectionUpdating || !controlStatus.bridgeAvailable) return;
     setInspectionUpdating(true); setInspectionError(null);
     try { applyControlStatus(await configureControlInspectionAccess(controlStatus.inspectionAllowed !== true)); }
     catch (reason) { setInspectionError(normalizeError(reason)); }
     finally { setInspectionUpdating(false); }
+  }
+
+  async function changePermissionLifetime(lifetime: PermissionLifetime) {
+    if (permissionLifetimeUpdating || selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating || !controlStatus.bridgeAvailable) return;
+    setPermissionLifetimeUpdating(true);
+    setPermissionLifetimeError(null);
+    try {
+      applyControlStatus(await configureControlPermissionLifetime(lifetime));
+    } catch (reason) {
+      setPermissionLifetimeError(normalizeError(reason));
+    } finally {
+      setPermissionLifetimeUpdating(false);
+    }
   }
 
   async function openPendingCleanupReview() {
@@ -916,9 +941,9 @@ function App() {
   }
 
   async function updateScanConfig(nextConfig: ScanConfig) {
-    if (controlStatus.scanAccess.enabled) {
-      const revoked = await updateControlScanAccess(null, null);
-      if (!revoked) return;
+    if (root && controlStatus.bridgeAvailable) {
+      const updated = await updateControlScanAccess(root, nextConfig);
+      if (!updated) return;
     }
     setConfig(nextConfig);
   }
@@ -985,11 +1010,9 @@ function App() {
   }
 
   async function useSelectedRoot(selected: string): Promise<boolean> {
+    if (!await bindSelectedScanScope(root, selected, config,
+      controlStatus.scanAccess.enabled, controlStatus.bridgeAvailable, updateControlScanAccess)) return false;
     if (selected === root) return true;
-    if (controlStatus.scanAccess.enabled) {
-      const revoked = await updateControlScanAccess(null, null);
-      if (!revoked) return false;
-    }
 
     setRoot(selected);
     cleanupTreeEpoch.current += 1;
@@ -1751,6 +1774,29 @@ function App() {
     }
   }
 
+  const controlSettings: ControlStatusPanelProps = {
+    status: controlStatus,
+    updatingPermissionLifetime: permissionLifetimeUpdating,
+    permissionLifetimeError,
+    permissionControlsLocked: permissionLifetimeUpdating,
+    permissionLifetimeLocked: selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating,
+    onPermissionLifetimeChange: lifetime => void changePermissionLifetime(lifetime),
+    canEnableSearch: Boolean(fileCatalog || documentIndex),
+    updatingSearchAccess: controlAccessUpdating,
+    searchAccessError: controlAccessError,
+    onToggleSearchAccess: () => void toggleControlSearchAccess(),
+    scanAccessError: controlScanAccessError,
+    canEnableCleanup: controlStatus.bridgeAvailable && !selectionBlocked,
+    cleanupAccessLocked: selectionBlocked,
+    updatingCleanupAccess: controlCleanupAccessUpdating,
+    cleanupAccessError: controlCleanupAccessError,
+    onToggleCleanupAccess: () => void toggleControlCleanupAccess(),
+    onReviewPending: () => void openPendingCleanupReview(),
+    updatingInspectionAccess: inspectionUpdating,
+    inspectionAccessError: inspectionError,
+    onToggleInspectionAccess: () => void toggleInspectionAccess(),
+  };
+
   return <>
     <div style={{ display: "contents" }} inert={appToolReview !== null}>
     <AppShell
@@ -2010,23 +2056,7 @@ function App() {
       ) : null}
       {activeView === "assistant" ? (
         <AssistantView
-          status={controlStatus}
-          canEnableSearch={Boolean(fileCatalog || documentIndex)}
-          updatingSearchAccess={controlAccessUpdating}
-          searchAccessError={controlAccessError}
-          onToggleSearchAccess={() => void toggleControlSearchAccess()}
-          scanRoot={root}
-          scanConfig={config}
-          canEnableScan={Boolean(root) && !selectionBlocked}
-          updatingScanAccess={controlScanAccessUpdating}
-          scanAccessError={controlScanAccessError}
-          onToggleScanAccess={() => void toggleControlScanAccess()}
-          canEnableCleanup={controlStatus.bridgeAvailable && !selectionBlocked}
-          cleanupAccessLocked={selectionBlocked}
-          updatingCleanupAccess={controlCleanupAccessUpdating}
-          cleanupAccessError={controlCleanupAccessError}
-          onToggleCleanupAccess={() => void toggleControlCleanupAccess()}
-          onReviewPending={() => void openPendingCleanupReview()}
+          controlSettings={controlSettings}
           directoryProgress={directoryProgress}
           directoryState={directoryScanState}
           volumes={system?.volumes ?? []}
@@ -2038,9 +2068,6 @@ function App() {
           onConfirmFilePlan={(sessionId, revision, planId, nestedAck) => runTrashAction("assistant", () => confirmAssistantFilePlan(sessionId, revision, planId, nestedAck))}
           onDirectoryReport={acceptAssistantDirectoryReport}
           onOpenCleanupTree={(sessionId, revision) => void openCandidateTree({ kind: "assistant", sessionId, revision })}
-          updatingInspectionAccess={inspectionUpdating}
-          inspectionAccessError={inspectionError}
-          onToggleInspectionAccess={() => void toggleInspectionAccess()}
           onAppToolView={showAppToolView}
           onAppToolReview={openAppToolReview}
           appToolCompletion={appToolCompletion}
@@ -2118,6 +2145,7 @@ function App() {
       ) : null}
       {activeView === "settings" ? (
         <SettingsView
+          controlSettings={controlSettings}
           config={config}
           dockerStatus={dockerStatus}
           dockerLoading={dockerStatusLoading}

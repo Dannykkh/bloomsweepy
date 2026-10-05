@@ -180,8 +180,8 @@ impl AppToolRequest {
         }
     }
 
-    /// External callers must separately opt into system/app inspection. Search,
-    /// scan and cleanup requests retain their existing, independent consent gates.
+    /// External callers must separately opt into system/app inspection. Search
+    /// and cleanup retain consent gates; scans use the root selected in the app.
     pub fn requires_inspection_access(&self) -> bool {
         matches!(
             self,
@@ -514,7 +514,7 @@ pub fn capability_catalog() -> Value {
                 source: IndexSource::Files,
             },
             "Ask the app to build/refresh its index within an already authorized root.",
-            "native selected root or corresponding external search/scan consent",
+            "native selected root or corresponding external search consent",
             "No caller-supplied path. App resource bounds, cloud exclusions, cancellation and index budgets apply.",
             &[
                 "이 폴더의 파일 목록을 갱신해줘",
@@ -524,7 +524,7 @@ pub fn capability_catalog() -> Value {
         entry(
             AppToolRequest::StorageScan {},
             "Ask the app storage engine to scan the authorized folder with app-owned settings.",
-            "native selected root or external scan consent",
+            "native session root or external app-selected scan root; no separate scan permission switch",
             "No caller path. Asynchronous: operation ID is not completion. App scan limits and exclusions apply.",
             &["중복과 큰 파일을 검사해줘"],
         ),

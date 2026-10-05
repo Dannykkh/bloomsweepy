@@ -1,5 +1,6 @@
 import {
   Bot,
+  ArrowDown,
   Boxes,
   ChevronDown,
   FolderOpen,
@@ -8,10 +9,12 @@ import {
   MessageSquarePlus,
   RefreshCw,
   Send,
+  Settings2,
   ShieldCheck,
   Square,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
 import {
   useEffect,
@@ -21,16 +24,19 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
-import { ControlStatusPanel } from "../components/ControlStatusPanel";
+import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../components/AssistantEmptyFolderCard";
 import { AssistantFileCard } from "../components/AssistantFileCard";
-import { AssistantAppToolCard } from "../components/AssistantAppToolCard";
+import { AssistantAppToolCard, appToolTitles, appToolStatusKeys } from "../components/AssistantAppToolCard";
+import "./AssistantView.css";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
 import { useLanguage, type Translate } from "../i18n";
 import {
   appendAssistantMessage,
   askAssistant,
+  listenToAssistantProgress,
   cancelAssistant,
   createAssistantSession,
   createDockerCleanupPreview,
@@ -49,12 +55,14 @@ import {
   cancelScan,
 } from "../lib/bridge";
 import { formatAssistantPlainText } from "../lib/assistantText";
+import { elapsedLabel, matchesAssistantProgress } from "../lib/assistantProgress";
 import { assistantFailureMessage, assistantProviderStatusKey, isAssistantAuthenticationFailure } from "../lib/assistantProviderStatus";
 import { isDockerManagementQuestion } from "../lib/dockerIntent";
 import { formatBytes, formatCount, formatDate, formatDockerBytes } from "../lib/format";
 import { findVolumeForPath } from "../lib/volumePath";
 import type {
   AssistantChatTurn,
+  AssistantProgress,
   AppToolResult,
   AppToolLocalCompletion,
   AssistantEmptyWorkspace,
@@ -68,12 +76,10 @@ import type {
   AssistantScopeKind,
   AssistantSessionDetail,
   AssistantSessionSummary,
-  ControlStatus,
   DirectoryScanProgress,
   DirectoryScanReport,
   DockerCleanupPreview,
   DockerManagementStatus,
-  ScanConfig,
   ScanUiState,
   VolumeInfo,
 } from "../types";
@@ -87,23 +93,7 @@ const providerPreferenceKey = "bloomsweepy.assistant-provider";
 const ollamaModelPreferenceKey = "bloomsweepy.ollama-model";
 
 interface AssistantViewProps {
-  status: ControlStatus;
-  canEnableSearch: boolean;
-  updatingSearchAccess: boolean;
-  searchAccessError: string | null;
-  onToggleSearchAccess: () => void;
-  scanRoot: string | null;
-  scanConfig: ScanConfig;
-  canEnableScan: boolean;
-  updatingScanAccess: boolean;
-  scanAccessError: string | null;
-  onToggleScanAccess: () => void;
-  canEnableCleanup: boolean;
-  cleanupAccessLocked: boolean;
-  updatingCleanupAccess: boolean;
-  cleanupAccessError: string | null;
-  onToggleCleanupAccess: () => void;
-  onReviewPending: () => void;
+  controlSettings: ControlStatusPanelProps;
   directoryProgress: DirectoryScanProgress | null;
   directoryState: ScanUiState;
   volumes: VolumeInfo[];
@@ -115,32 +105,13 @@ interface AssistantViewProps {
   onConfirmFilePlan: (sessionId: string, revision: string, planId: string, nestedAck: boolean) => Promise<TrashOperationResult>;
   onDirectoryReport: (report: DirectoryScanReport, open: boolean) => void;
   onOpenCleanupTree?: (sessionId: string, revision: string) => void;
-  updatingInspectionAccess?: boolean;
-  inspectionAccessError?: string | null;
-  onToggleInspectionAccess?: () => void;
   onAppToolView?: (result: AppToolResult) => void;
   onAppToolReview?: (result: AppToolResult, sessionId: string) => void;
   appToolCompletion?: AppToolLocalCompletion | null;
 }
 
 export function AssistantView({
-  status,
-  canEnableSearch,
-  updatingSearchAccess,
-  searchAccessError,
-  onToggleSearchAccess,
-  scanRoot,
-  scanConfig,
-  canEnableScan,
-  updatingScanAccess,
-  scanAccessError,
-  onToggleScanAccess,
-  canEnableCleanup,
-  cleanupAccessLocked,
-  updatingCleanupAccess,
-  cleanupAccessError,
-  onToggleCleanupAccess,
-  onReviewPending,
+  controlSettings,
   directoryProgress,
   directoryState,
   volumes,
@@ -152,14 +123,15 @@ export function AssistantView({
   onConfirmFilePlan,
   onDirectoryReport,
   onOpenCleanupTree,
-  updatingInspectionAccess,
-  inspectionAccessError,
-  onToggleInspectionAccess,
   onAppToolView,
   onAppToolReview,
   appToolCompletion,
 }: AssistantViewProps) {
   const { language, t } = useLanguage();
+  const { cleanupAccessLocked } = controlSettings;
+  const [connectionOpen, setConnectionOpen] = useState(false);
+  const connectionDialog = useRef<HTMLDialogElement>(null);
+  const connectionTrigger = useRef<HTMLButtonElement>(null);
   const initialProviderPreference = useRef(readProviderPreference());
   const initialOllamaModelPreference = useRef(readOllamaModelPreference());
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
@@ -181,6 +153,12 @@ export function AssistantView({
   const [turns, setTurns] = useState<AssistantDisplayTurn[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [requestProgress, setRequestProgress] = useState<AssistantProgress | null>(null);
+  const [savingResponse, setSavingResponse] = useState(false);
+  const [requestStarted, setRequestStarted] = useState(0);
+  const [clockNow, setClockNow] = useState(0);
+  const activeProgressId = useRef<string | null>(null);
+  const progressUnlisten = useRef<(() => void) | null>(null);
   const [emptyWorkspace, setEmptyWorkspace] = useState<AssistantEmptyWorkspace | null>(null);
   const [fileWorkspace, setFileWorkspace] = useState<AssistantFileWorkspace | null>(null);
   const [emptyActionBusy, setEmptyActionBusy] = useState(false);
@@ -191,6 +169,9 @@ export function AssistantView({
   const [dockerReviewLoading, setDockerReviewLoading] = useState(false);
   const [dockerReviewError, setDockerReviewError] = useState<string | null>(null);
   const transcriptEnd = useRef<HTMLDivElement>(null);
+  const transcript = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
   const requestInFlight = useRef(false);
   const sessionLoadRevision = useRef(0);
   const emptyStateRevision = useRef(0);
@@ -586,8 +567,33 @@ export function AssistantView({
   }
 
   useEffect(() => {
-    transcriptEnd.current?.scrollIntoView({ block: "nearest" });
-  }, [sending, turns]);
+    followLatest.current = true;
+    setShowLatest(false);
+  }, [activeSession?.session.id]);
+
+  useEffect(() => {
+    if (followLatest.current && transcript.current) {
+      transcript.current.scrollTop = transcript.current.scrollHeight;
+    }
+  }, [activeSession?.session.id, sending, turns, appToolResults, fileWorkspace, emptyWorkspace]);
+
+  useEffect(() => {
+    const dialog = connectionDialog.current;
+    if (connectionOpen && dialog && !dialog.open) dialog.showModal();
+    else if (!connectionOpen && dialog?.open) dialog.close();
+  }, [connectionOpen]);
+
+  useEffect(() => {
+    if (!sending) return;
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [sending]);
+
+  useEffect(() => () => {
+    activeProgressId.current = null;
+    progressUnlisten.current?.();
+    progressUnlisten.current = null;
+  }, []);
 
   useEffect(() => {
     if (selectedOllamaModel) writeOllamaModelPreference(selectedOllamaModel);
@@ -601,11 +607,19 @@ export function AssistantView({
     const includeDockerStatus = activeScopeKind === "docker" || isDockerManagementQuestion(message);
 
     requestInFlight.current = true;
+    followLatest.current = true;
+    setShowLatest(false);
     ++emptyStateRevision.current;
     const previousTurns = boundedConversationHistory(turns);
     setTurns((current) => [...current, { role: "user", content: message }]);
     setDraft("");
     setSending(true);
+    const progressId = crypto.randomUUID();
+    activeProgressId.current = progressId;
+    setRequestProgress(null);
+    setSavingResponse(false);
+    setRequestStarted(Date.now());
+    setClockNow(Date.now());
     setProviderError(null);
     setSessionError(null);
     setDockerContext(null);
@@ -614,6 +628,14 @@ export function AssistantView({
     let userMessageSaved = false;
 
     try {
+      // Observability is best-effort; a missing event channel must not block chat.
+      try {
+        const unlisten = await listenToAssistantProgress((progress) => {
+          if (matchesAssistantProgress(progress, activeProgressId.current, sessionId)) setRequestProgress(progress);
+        });
+        if (activeProgressId.current === progressId) progressUnlisten.current = unlisten;
+        else unlisten();
+      } catch { /* Older hosts still provide elapsed time and cancellation. */ }
       const userMutation = await appendAssistantMessage({
         sessionId,
         role: "user",
@@ -624,6 +646,7 @@ export function AssistantView({
       userMessageSaved = true;
       updateSessionSummary(userMutation.session);
       const response = await askAssistant({
+        progressId,
         sessionId,
         provider: selectedProviderKind,
         model: selectedProviderKind === "ollama" ? selectedOllamaModel : null,
@@ -668,6 +691,7 @@ export function AssistantView({
         },
       ]);
       setDockerContext(response.dockerContext);
+      setSavingResponse(true);
       try {
         const assistantMutation = await appendAssistantMessage({
           sessionId,
@@ -688,7 +712,7 @@ export function AssistantView({
     } catch (reason) {
       if (!userMessageSaved) {
         setTurns((current) => current.slice(0, -1));
-        setDraft(message);
+        setDraft((current) => current.trim() ? current : message);
         setSessionError(normalizeAssistantError(reason, t));
       } else {
         const detail = normalizeAssistantError(reason, t);
@@ -702,6 +726,9 @@ export function AssistantView({
         }
       }
     } finally {
+      activeProgressId.current = null;
+      progressUnlisten.current?.();
+      progressUnlisten.current = null;
       requestInFlight.current = false;
       setSending(false);
       setCancelling(false);
@@ -751,13 +778,15 @@ export function AssistantView({
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || sending) return;
     event.preventDefault();
     void submitQuestion();
   }
 
   return (
     <div className="assistant-workspace">
+      <header className="assistant-heading">
+      <h1>{t("대화")}</h1>
       <section className="assistant-session-toolbar" aria-label={t("대화 기록 관리")}>
         <button
           type="button"
@@ -815,8 +844,7 @@ export function AssistantView({
           <span>{t("삭제")}</span>
         </button>
       </section>
-
-      {sessionError ? <p className="assistant-session-error" role="alert">{sessionError}</p> : null}
+      </header>
 
       <section className="assistant-scope" aria-label={t("현재 대화 대상")}>
         <button
@@ -846,6 +874,10 @@ export function AssistantView({
           <span className="assistant-scope__change">
             {activeScopeKind === "docker" ? t("새 Docker 대화") : t("새 폴더 대화")}
           </span>
+        </button>
+        <button type="button" ref={connectionTrigger} className="assistant-connections-button" aria-label={t("연결과 권한")}
+          title={t("연결과 권한")} onClick={() => setConnectionOpen(true)}>
+          <Settings2 size={18} aria-hidden="true" />
         </button>
         <div
           className={`assistant-provider-picker ${provider?.available ? "is-ready" : ""} ${provider?.provider === "ollama" ? "has-model" : ""}`}
@@ -892,22 +924,15 @@ export function AssistantView({
         </div>
       </section>
 
-      {provider ? (
-        <section className={`assistant-cli-diagnostics ${provider.available ? "is-ready" : ""}`} aria-label={t("CLI 연결 상태")}>
-          <strong>{providerOptionLabel(provider, t)}</strong>
-          <p>{provider.detail}</p>
-          {provider.executablePath ? (
-            <details>
-              <summary>{t("실행 경로와 버전")}</summary>
-              <code>{provider.executablePath}</code>
-              <span>{t("CLI 버전: {{version}}", { version: provider.version ?? t("확인 불가") })}</span>
-            </details>
-          ) : null}
-        </section>
-      ) : null}
-
       <section className="assistant-chat" aria-label={activeScopeKind === "docker" ? t("Docker 용량 대화") : t("폴더 분석 대화")}>
-        <div className="assistant-transcript">
+        <div className="assistant-transcript" ref={transcript} tabIndex={0} aria-label={t("대화 기록")}
+          onScroll={(event) => {
+            const pane = event.currentTarget;
+            const nearBottom = pane.scrollHeight - pane.scrollTop - pane.clientHeight < 80;
+            followLatest.current = nearBottom;
+            setShowLatest(!nearBottom);
+          }}>
+          <div className="assistant-transcript__content">
           {turns.length > 0 ? (
             turns.map((turn, index) => (
               <article
@@ -937,40 +962,38 @@ export function AssistantView({
               t={t}
             />
           )}
-          {sending ? (
-            <div className="assistant-thinking" role="status">
-              <LoaderCircle size={17} aria-hidden="true" />
-              {provider?.provider === "ollama"
-                ? t("{{provider}} 응답 생성 중 · 언제든 취소할 수 있습니다", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
-                : t("{{provider}}가 앱의 {{summary}}을 읽고 있습니다", {
-                    provider: providerConversationLabel(provider, selectedOllamaModel, t),
-                    summary: activeScopeKind === "docker" ? t("Docker 요약") : t("폴더 요약"),
-                  })}
-            </div>
-          ) : null}
-          {appToolResults.map((result, index) => <AssistantAppToolCard key={`${result.capability}-${result.capturedAtUnixMs}-${index}`} result={result} busy={sending || sessionBusy || cleanupAccessLocked}
-            onView={onAppToolView} onReview={onAppToolReview && activeSession ? (prepared) => onAppToolReview(prepared, activeSession.session.id) : undefined} />)}
-          {emptyWorkspace ? <AssistantEmptyFolderCard
+          {appToolResults.map((result, index) => <AssistantEvidence key={`${result.capability}-${result.capturedAtUnixMs}-${index}`}
+            title={t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}
+            status={t(appToolStatusKeys[result.status]) + (typeof (result.data.returnedCount ?? result.data.matchedCount) === "number"
+              ? ` · ${t("{{count}}개", { count: Number(result.data.returnedCount ?? result.data.matchedCount) })}` : "")}
+            forceOpen={result.status !== "completed"}
+            warning={result.truncated || result.data.truncated === true || result.data.sourceMayBeIncomplete === true ? t("일부 결과만 표시합니다.") : undefined}>
+            <AssistantAppToolCard result={result} busy={sending || sessionBusy || cleanupAccessLocked}
+              onView={onAppToolView} onReview={onAppToolReview && activeSession ? (prepared) => onAppToolReview(prepared, activeSession.session.id) : undefined} />
+          </AssistantEvidence>)}
+          {emptyWorkspace ? <AssistantEvidence title={t("빈 폴더")} status={t("{{count}}개", { count: emptyWorkspace.candidates.length })}
+            warning={emptyWorkspace.omittedCount > 0 ? t("일부 결과만 표시합니다.") : undefined}
+            forceOpen={Boolean(emptyWorkspace.plan || emptyWorkspace.selectedIds.length)}>
+            <AssistantEmptyFolderCard
             workspace={emptyWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
             onSelect={(ids) => void manageEmptyFolders("select", ids)}
             onPrepare={() => void manageEmptyFolders("prepare")}
             onConfirm={() => void manageEmptyFolders("confirm")}
-          /> : null}
-          {fileWorkspace ? <AssistantFileCard workspace={fileWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
+          /></AssistantEvidence> : null}
+          {fileWorkspace ? <AssistantEvidence title={t("앱에서 확인한 결과")} status={t("{{count}}개", { count: fileWorkspace.totalEntries })}
+            warning={fileWorkspace.truncated || fileWorkspace.unreadableEntries > 0 ? t("일부 결과만 표시합니다.") : undefined}
+            forceOpen={Boolean(fileWorkspace.plan || fileWorkspace.selectedIds.length)}>
+            <AssistantFileCard workspace={fileWorkspace} busy={sending || sessionBusy || cleanupAccessLocked}
             onOpenCleanupTree={onOpenCleanupTree && activeSession ? () => onOpenCleanupTree(activeSession.session.id, fileWorkspace.revision) : undefined}
             onShowMap={() => void showFileMap()}
             onAction={(action) => void manageFiles(action)}
             onSelect={(ids) => void manageFiles("select", ids)}
             onPrepare={() => void manageFiles("prepare")}
             onConfirm={(nestedAck) => void manageFiles("confirm", undefined, nestedAck)}
-          /> : activeSession && activeScopeKind === "folder" && !emptyWorkspace ? <button type="button" className="secondary-button"
+          /></AssistantEvidence> : activeSession && activeScopeKind === "folder" && !emptyWorkspace ? <button type="button" className="assistant-query-action text-button"
             disabled={sending || sessionBusy || cleanupAccessLocked} onClick={() => void manageFiles({ kind: "scan" })}>
             <FolderOpen size={16} aria-hidden="true" />{t("대화 폴더 파일·폴더 검사")}
           </button> : null}
-          {emptyActionBusy ? <div className="assistant-thinking" role="status">
-            <LoaderCircle size={17} aria-hidden="true" />{t("앱에서 후보 확인 또는 휴지통 이동을 처리하고 있습니다.")}
-            <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button>
-          </div> : null}
           {trashResult ? <AssistantTrashResultCard result={trashResult} /> : null}
           {dockerContext?.enabled ? (
             <aside
@@ -1009,18 +1032,44 @@ export function AssistantView({
             <p className="assistant-docker-error" role="alert">{dockerReviewError}</p>
           ) : null}
           <div ref={transcriptEnd} />
+          </div>
         </div>
-
+        <div className="assistant-dock">
+        {showLatest ? <button type="button" className="assistant-latest" onClick={() => {
+          followLatest.current = true;
+          if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
+          setShowLatest(false);
+        }}><ArrowDown size={16} aria-hidden="true" />{t("최신 메시지로")}</button> : null}
+        {sessionError ? <p className="assistant-session-error" role="alert">{sessionError}</p> : null}
         {providerError ? <p className="assistant-chat__error" role="alert">{providerError}</p> : null}
+        {provider && !provider.available ? <button type="button" className="assistant-connection-warning" onClick={() => setConnectionOpen(true)}>
+          {providerOptionLabel(provider, t)} · {t("연결과 권한")}
+        </button> : null}
+        {sending ? <div className="assistant-working">
+          <span role="status" aria-live="polite"><LoaderCircle className="is-spinning" size={16} aria-hidden="true" />
+            {cancelling ? t("취소 요청 중…") : savingResponse ? t("대화 기록 저장 중…")
+              : requestProgress?.phase === "querying"
+                ? t("앱에서 {{task}} 확인 중", { task: t(appToolTitles[requestProgress.capability ?? ""] ?? "파일 검사") })
+                : requestProgress?.phase === "analyzing"
+                  ? requestProgress.round > 0 ? t("{{provider}} · 앱 결과 분석 중", { provider: provider?.label ?? "AI" })
+                    : t("{{provider}} · 응답 대기 중", { provider: provider?.label ?? "AI" })
+                  : t("질문 저장 및 CLI 준비 중…")}
+          </span>
+          <span className="assistant-working__time" aria-label={t("경과 시간")}>{elapsedLabel(requestStarted, clockNow)}</span>
+        </div> : null}
+        {emptyActionBusy ? <div className="assistant-working">
+          <span role="status"><LoaderCircle className="is-spinning" size={16} aria-hidden="true" />{t("앱에서 후보 확인 또는 휴지통 이동을 처리하고 있습니다.")}</span>
+          <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button>
+        </div> : null}
 
         <form className="assistant-composer" onSubmit={(event) => void submitQuestion(event)}>
           <textarea
             value={draft}
             maxLength={2_000}
-            rows={2}
+            rows={1}
             name="assistantQuestion"
             autoComplete="off"
-            disabled={!summary || !provider?.available || !providerModelReady || sending || sessionBusy}
+            disabled={!summary || !provider?.available || !providerModelReady || sessionBusy}
             aria-label={activeScopeKind === "docker" ? t("Docker 용량에 관해 질문") : t("선택한 폴더에 관해 질문")}
             placeholder={composerPlaceholder(
               sessionBusy,
@@ -1043,23 +1092,28 @@ export function AssistantView({
             </button>
           )}
         </form>
-        <p className="assistant-composer-note">
-          {activeScopeKind === "docker"
-            ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
-            : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}
+        <p className="assistant-composer-note">{t("앱이 조회하고 AI가 분석합니다. 실행은 별도 확인합니다.")}
+          <button type="button" onClick={() => setConnectionOpen(true)}>{t("전송 범위")}</button>
         </p>
-        <p className="assistant-composer-note">{t("로컬 문서 검색은 외부로 보내지 않습니다. AI 문서 검색을 허용하면 문서 이름과 일치 본문 일부가 선택한 AI에 전달됩니다.")}</p>
+        </div>
       </section>
-
-      <details className="assistant-access-details">
-        <summary>
+      <dialog className="assistant-connection-dialog" ref={connectionDialog} aria-labelledby="assistant-connection-title"
+        onCancel={() => setConnectionOpen(false)} onClose={() => {
+          setConnectionOpen(false);
+          // WKWebView can return focus to its container instead of the opener.
+          connectionTrigger.current?.focus();
+        }}>
+        <header>
           <ShieldCheck size={17} aria-hidden="true" />
-          <span>
-            <strong>{t("연결과 권한")}</strong>
-            <small>{t("외부 터미널 제어와 전송 범위 확인")}</small>
-          </span>
-          <ChevronDown size={17} aria-hidden="true" />
-        </summary>
+          <h2 id="assistant-connection-title">{t("연결과 권한")}</h2>
+          <button type="button" aria-label={t("닫기")} onClick={() => setConnectionOpen(false)}><X size={20} aria-hidden="true" /></button>
+        </header>
+        {connectionOpen ? <div className="assistant-connection-dialog__body">
+        {provider ? <section className={`assistant-cli-diagnostics ${provider.available ? "is-ready" : ""}`} aria-label={t("CLI 연결 상태")}>
+          <strong>{providerOptionLabel(provider, t)}</strong><p>{provider.detail}</p>
+          {provider.executablePath ? <details><summary>{t("실행 경로와 버전")}</summary><code>{provider.executablePath}</code>
+            <span>{t("CLI 버전: {{version}}", { version: provider.version ?? t("확인 불가") })}</span></details> : null}
+        </section> : null}
         <div className="assistant-access-details__copy">
           <p>
             {activeScopeKind === "docker"
@@ -1069,30 +1123,14 @@ export function AssistantView({
           <p>
             {providerPermissionDetail(provider, t)} {t("아래 설정은 별도 터미널 제어용입니다.")}
           </p>
+          <p>{activeScopeKind === "docker"
+            ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
+            : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}</p>
+          <p>{t("로컬 문서 검색은 외부로 보내지 않습니다. AI 문서 검색을 허용하면 문서 이름과 일치 본문 일부가 선택한 AI에 전달됩니다.")}</p>
         </div>
-        <ControlStatusPanel
-          status={status}
-          canEnableSearch={canEnableSearch}
-          updatingSearchAccess={updatingSearchAccess}
-          searchAccessError={searchAccessError}
-          onToggleSearchAccess={onToggleSearchAccess}
-          scanRoot={scanRoot}
-          scanConfig={scanConfig}
-          canEnableScan={canEnableScan}
-          updatingScanAccess={updatingScanAccess}
-          scanAccessError={scanAccessError}
-          onToggleScanAccess={onToggleScanAccess}
-          canEnableCleanup={canEnableCleanup}
-          cleanupAccessLocked={cleanupAccessLocked}
-          updatingCleanupAccess={updatingCleanupAccess}
-          cleanupAccessError={cleanupAccessError}
-          onToggleCleanupAccess={onToggleCleanupAccess}
-          onReviewPending={onReviewPending}
-          updatingInspectionAccess={updatingInspectionAccess}
-          inspectionAccessError={inspectionAccessError}
-          onToggleInspectionAccess={onToggleInspectionAccess}
-        />
-      </details>
+        <ControlStatusPanel {...controlSettings} onReviewPending={() => { setConnectionOpen(false); controlSettings.onReviewPending(); }} />
+        </div> : null}
+      </dialog>
 
       <DockerCleanupDialog
         preview={dockerPreview}
@@ -1101,6 +1139,21 @@ export function AssistantView({
       />
     </div>
   );
+}
+
+function AssistantEvidence({ title, status, warning, forceOpen, children }: {
+  title: string; status: string; warning?: string; forceOpen: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(forceOpen);
+  useEffect(() => { if (forceOpen) setOpen(true); }, [forceOpen]);
+  return <section className={`assistant-evidence${open ? " is-open" : ""}`}>
+    <button type="button" className="assistant-evidence__summary" aria-expanded={open}
+      onClick={() => setOpen((current) => !current)}>
+      <ChevronDown size={16} aria-hidden="true" /><strong>{title}</strong><span>{status}</span>
+      {warning ? <small>{warning}</small> : null}
+    </button>
+    {open ? <div className="assistant-evidence__body">{children}</div> : null}
+  </section>;
 }
 
 function FolderScopeMetrics({

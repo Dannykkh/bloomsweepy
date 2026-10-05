@@ -74,6 +74,7 @@ export interface AssistantFolderSummary {
 }
 
 export interface AssistantChatRequest {
+  progressId?: string;
   sessionId?: string;
   provider: AssistantProviderKind;
   model: string | null;
@@ -83,6 +84,14 @@ export interface AssistantChatRequest {
   scopeKind: AssistantScopeKind;
   includeDockerStatus: boolean;
   responseLanguage: AssistantResponseLanguage;
+}
+
+export interface AssistantProgress {
+  progressId: string;
+  sessionId: string | null;
+  phase: "preparing" | "analyzing" | "querying";
+  round: number;
+  capability: string | null;
 }
 
 export interface AssistantChatResponse {
@@ -371,7 +380,11 @@ export interface ControlStatus {
   scanAccess: ControlScanAccess;
   cleanupAccess: ControlCleanupAccess;
   inspectionAllowed?: boolean;
+  permissionLifetime?: PermissionLifetime;
+  permissionWarning?: string | null;
 }
+
+export type PermissionLifetime = "session" | "remember";
 
 export interface ControlSearchAccess {
   files: boolean;
@@ -387,6 +400,7 @@ export interface ControlScanAccess {
   enabled: boolean;
   root: string | null;
   approvedAtUnixMs: number | null;
+  config?: ScanConfig | null;
 }
 
 export interface ControlScanAccessRequest {

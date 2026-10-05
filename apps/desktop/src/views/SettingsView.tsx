@@ -3,10 +3,12 @@ import { DockerManagementPanel } from "../components/DockerManagementPanel";
 import { McpConnectionPanel } from "../components/McpConnectionPanel";
 import { StartupSettingsPanel } from "../components/StartupSettingsPanel";
 import { MenuBarSettingsPanel } from "../components/MenuBarSettingsPanel";
+import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { useLanguage, type LanguagePreference } from "../i18n";
 import type { DockerManagementStatus, ScanConfig } from "../types";
 
 interface SettingsViewProps {
+  controlSettings: ControlStatusPanelProps;
   config: ScanConfig;
   dockerStatus: DockerManagementStatus | null;
   dockerLoading: boolean;
@@ -20,6 +22,7 @@ interface SettingsViewProps {
 const megabyte = 1024 * 1024;
 
 export function SettingsView({
+  controlSettings,
   config,
   dockerStatus,
   dockerLoading,
@@ -37,6 +40,12 @@ export function SettingsView({
 
   return (
     <div className="settings-layout">
+      <section className="settings-panel settings-connections-panel">
+        <div className="settings-panel__heading"><ShieldCheck size={20} aria-hidden="true" />
+          <div><h2>{t("연결과 권한")}</h2><p>{t("외부 터미널 제어와 전송 범위 확인")}</p></div>
+        </div>
+        <ControlStatusPanel {...controlSettings} />
+      </section>
       <section className="settings-panel settings-language-panel">
         <div className="settings-panel__heading">
           <Languages size={20} aria-hidden="true" />

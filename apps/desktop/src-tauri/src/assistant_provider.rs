@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const MAX_MESSAGE_CHARS: usize = 2_000;
 const MAX_HISTORY_TURNS: usize = 20;
@@ -226,6 +226,8 @@ pub(crate) struct AssistantProviderModel {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AssistantChatRequest {
     #[serde(default)]
+    progress_id: Option<String>,
+    #[serde(default)]
     session_id: Option<String>,
     provider: AssistantProviderKind,
     model: Option<String>,
@@ -235,6 +237,51 @@ pub(crate) struct AssistantChatRequest {
     scope_kind: AssistantScopeKind,
     include_docker_status: bool,
     response_language: AssistantResponseLanguage,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssistantProgress<'a> {
+    progress_id: &'a str,
+    session_id: Option<&'a str>,
+    phase: &'static str,
+    round: usize,
+    capability: Option<&'static str>,
+}
+
+fn valid_progress_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn emit_progress(
+    app: &AppHandle,
+    request: &AssistantChatRequest,
+    phase: &'static str,
+    round: usize,
+    capability: Option<&'static str>,
+) {
+    if let Some(id) = request
+        .progress_id
+        .as_deref()
+        .filter(|id| valid_progress_id(id))
+    {
+        // UI metadata only: never emit paths, questions, file contents or model output.
+        let _ = app.emit_to(
+            "main",
+            "assistant-progress",
+            AssistantProgress {
+                progress_id: id,
+                session_id: request.session_id.as_deref(),
+                phase,
+                round,
+                capability,
+            },
+        );
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -394,6 +441,7 @@ async fn ask_assistant_inner(
         .map_err(|_| "이미 AI 응답을 기다리고 있습니다".to_owned())?;
     let _lease = ProviderLease { state: &state };
     state.cancellation.store(false, Ordering::Release);
+    emit_progress(&app, &request, "preparing", 0, None);
 
     let provider = request.provider;
     // Revalidate the very same candidate-selection policy used by the status UI.
@@ -423,6 +471,7 @@ async fn ask_assistant_inner(
         .map_err(|error| format!("대화 작업 폴더를 찾지 못했습니다: {error}"))?
         .join("assistant-workspace");
     let docker_context = if request.include_docker_status {
+        emit_progress(&app, &request, "querying", 0, Some("docker.status"));
         Some(super::docker_tools::assistant_context(&app).await?)
     } else {
         None
@@ -490,6 +539,7 @@ async fn ask_assistant_inner(
         let run_workspace = workspace.clone();
         let run_model = response_model.clone();
         let cancellation = std::sync::Arc::clone(&state.cancellation);
+        emit_progress(&app, &request, "analyzing", round, None);
         let raw = tauri::async_runtime::spawn_blocking(move || {
             run_provider_budget(
                 provider,
@@ -524,6 +574,13 @@ async fn ask_assistant_inner(
         let session_id = request.session_id.as_deref().unwrap();
         let result = match action {
             super::assistant_tools::AssistantAction::App { operation } => {
+                emit_progress(
+                    &app,
+                    &request,
+                    "querying",
+                    round,
+                    Some(operation.capability_id()),
+                );
                 tool_action = Some("app");
                 match super::app_tools::execute(
                     &app,
@@ -546,6 +603,7 @@ async fn ask_assistant_inner(
                 }
             }
             super::assistant_tools::AssistantAction::Files { operation } => {
+                emit_progress(&app, &request, "querying", round, Some("files.workspace"));
                 if request.scope_kind != AssistantScopeKind::Folder {
                     return Err("폴더 대화에서만 파일을 조회할 수 있습니다".to_owned());
                 }
@@ -591,6 +649,7 @@ async fn ask_assistant_inner(
                 )
             }
             action => {
+                emit_progress(&app, &request, "querying", round, Some("empty.workspace"));
                 if request.scope_kind != AssistantScopeKind::Folder {
                     return Err("폴더 대화에서만 빈 폴더를 조회할 수 있습니다".to_owned());
                 }
@@ -2074,6 +2133,7 @@ esac
 
     fn valid_request() -> AssistantChatRequest {
         AssistantChatRequest {
+            progress_id: None,
             session_id: None,
             provider: AssistantProviderKind::Codex,
             model: None,
@@ -2100,6 +2160,27 @@ esac
                 }],
             },
         }
+    }
+
+    #[test]
+    fn progress_metadata_is_bounded_and_contains_no_query_or_file_data() {
+        assert!(valid_progress_id("request-123"));
+        assert!(!valid_progress_id(""));
+        assert!(!valid_progress_id("/private/path"));
+        assert!(!valid_progress_id(&"a".repeat(65)));
+        let progress = AssistantProgress {
+            progress_id: "request-123",
+            session_id: Some("session-123"),
+            phase: "querying",
+            round: 1,
+            capability: Some("applications.list"),
+        };
+        let value = serde_json::to_value(progress).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 5);
+        assert_eq!(value["progressId"], "request-123");
+        assert!(value.get("message").is_none());
+        assert!(value.get("path").is_none());
+        assert!(value.get("data").is_none());
     }
 
     #[test]

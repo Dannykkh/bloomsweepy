@@ -116,6 +116,10 @@ function Preview() {
   const [view, setView] = useState<ViewId>((params.get("view") ?? "dashboard") as ViewId);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [config, setConfig] = useState(DEFAULT_SCAN_CONFIG);
+  const controlSettings = { status: control, canEnableSearch: false, updatingSearchAccess: false,
+    searchAccessError: null, onToggleSearchAccess: noop, scanAccessError: null,
+    canEnableCleanup: false, cleanupAccessLocked: false, updatingCleanupAccess: false,
+    cleanupAccessError: null, onToggleCleanupAccess: noop, onReviewPending: noop };
   return <AppShell activeView={view} root={view === "dashboard" || view === "performance" || view === "settings" ? null : root}
     report={null} volume={volume} mobileNavigationOpen={mobileOpen} selectionBlocked={false}
     dockerEnabled={false} onMobileNavigationChange={setMobileOpen} onNavigate={setView} onPickFolder={noop}>
@@ -136,16 +140,12 @@ function Preview() {
         onPrepareFolder={async () => { throw new Error("Documentation preview only"); }}
         onConfirmFolder={async () => { throw new Error("Documentation preview only"); }} /></div></> : null}
     {view === "performance" ? <PerformanceView /> : null}
-    {view === "assistant" ? <AssistantView status={control} canEnableSearch={false}
-      updatingSearchAccess={false} searchAccessError={null} onToggleSearchAccess={noop}
-      scanRoot={root} scanConfig={config} canEnableScan={false} updatingScanAccess={false}
-      scanAccessError={null} onToggleScanAccess={noop} canEnableCleanup={false} cleanupAccessLocked={false}
-      updatingCleanupAccess={false} cleanupAccessError={null} onToggleCleanupAccess={noop} onReviewPending={noop}
+    {view === "assistant" ? <AssistantView controlSettings={controlSettings}
       directoryProgress={null} directoryState="success" volumes={volumes} dockerStatus={null}
       launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null}
       onConfirmEmptyPlan={async () => { throw new Error("Documentation preview only"); }}
       onConfirmFilePlan={async () => { throw new Error("Documentation preview only"); }} onDirectoryReport={() => undefined} /> : null}
-    {view === "settings" ? <SettingsView config={config} onConfigChange={setConfig} dockerStatus={null}
+    {view === "settings" ? <SettingsView controlSettings={controlSettings} config={config} onConfigChange={setConfig} dockerStatus={null}
       dockerLoading={false} dockerChanging={false} dockerError={null} onDockerEnabledChange={async () => {}}
       onOpenDocker={noop} /> : null}
   </AppShell>;

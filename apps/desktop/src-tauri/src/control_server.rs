@@ -1,3 +1,6 @@
+use crate::permission_settings::{
+    self, ApprovedRoot, PermissionLifetime, PermissionPreferences, ScanGrant,
+};
 use bloomsweepy_control::{
     CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
     ControlInstanceLock, ControlOperationSource, ControlOperationState, ControlOperationStatus,
@@ -55,6 +58,8 @@ pub(crate) struct ControlStatus {
     scan_access: ControlScanAccess,
     cleanup_access: ControlCleanupAccess,
     inspection_allowed: bool,
+    permission_lifetime: PermissionLifetime,
+    permission_warning: Option<String>,
 }
 
 impl Default for ControlStatus {
@@ -73,6 +78,8 @@ impl Default for ControlStatus {
             scan_access: ControlScanAccess::default(),
             cleanup_access: ControlCleanupAccess::default(),
             inspection_allowed: false,
+            permission_lifetime: PermissionLifetime::Session,
+            permission_warning: None,
         }
     }
 }
@@ -103,6 +110,7 @@ pub(crate) struct ControlScanAccess {
     enabled: bool,
     root: Option<String>,
     approved_at_unix_ms: Option<u64>,
+    config: Option<ScanConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,6 +293,7 @@ fn remember_operation_authority(
 }
 
 pub(crate) struct ControlStatusStore {
+    permissions: Mutex<PermissionPreferences>,
     status: Mutex<ControlStatus>,
     search_scopes: Mutex<ControlSearchScopes>,
     search_active: AtomicBool,
@@ -298,6 +307,7 @@ pub(crate) struct ControlStatusStore {
 impl Default for ControlStatusStore {
     fn default() -> Self {
         Self {
+            permissions: Mutex::new(PermissionPreferences::default()),
             status: Mutex::new(ControlStatus::default()),
             search_scopes: Mutex::new(ControlSearchScopes::default()),
             search_active: AtomicBool::new(false),
@@ -311,6 +321,87 @@ impl Default for ControlStatusStore {
 }
 
 impl ControlStatusStore {
+    fn install_permissions(
+        &self,
+        preferences: &PermissionPreferences,
+        warning: Option<String>,
+    ) -> Result<ControlStatus, String> {
+        let mut scopes = self
+            .search_scopes
+            .lock()
+            .map_err(|_| "검색 허용 범위를 잠글 수 없습니다")?;
+        let mut plan = self
+            .scan_plan
+            .lock()
+            .map_err(|_| "검사 허용 범위를 잠글 수 없습니다")?;
+        let mut status = self
+            .status
+            .lock()
+            .map_err(|_| "권한 상태를 잠글 수 없습니다")?;
+        scopes.file_root = preferences
+            .file_root
+            .as_ref()
+            .map(|root| root.canonical.clone());
+        scopes.document_root = preferences
+            .document_root
+            .as_ref()
+            .map(|root| root.canonical.clone());
+        *plan = preferences.scan.as_ref().map(|scan| ControlScanPlan {
+            root: scan.root.path.to_string_lossy().into_owned(),
+            canonical_root: scan.root.canonical.clone(),
+            config: scan.config.clone(),
+        });
+        status.search_access = ControlSearchAccess {
+            files: scopes.file_root.is_some(),
+            documents: scopes.document_root.is_some(),
+        };
+        status.scan_access = preferences
+            .scan
+            .as_ref()
+            .map(|scan| ControlScanAccess {
+                enabled: true,
+                root: Some(scan.root.path.to_string_lossy().into_owned()),
+                approved_at_unix_ms: Some(scan.approved_at_unix_ms),
+                config: Some(scan.config.clone()),
+            })
+            .unwrap_or_default();
+        status.cleanup_access = ControlCleanupAccess {
+            enabled: preferences.cleanup_approved_at_unix_ms.is_some(),
+            approved_at_unix_ms: preferences.cleanup_approved_at_unix_ms,
+        };
+        status.inspection_allowed = preferences.inspection_allowed;
+        status.permission_lifetime = preferences.lifetime;
+        status.permission_warning = warning;
+        status.last_error = None;
+        if !status.cleanup_access.enabled {
+            status.pending_review = None;
+        }
+        status.revision = status.revision.saturating_add(1);
+        Ok(status.clone())
+    }
+
+    fn change_permissions(
+        &self,
+        app: &AppHandle,
+        change: impl FnOnce(&mut PermissionPreferences),
+    ) -> Result<ControlStatus, String> {
+        let mut preferences = self
+            .permissions
+            .lock()
+            .map_err(|_| "권한 설정을 잠글 수 없습니다")?;
+        let mut next = preferences.clone();
+        change(&mut next);
+        let warning = permission_settings::commit(
+            &permission_settings::database_path(app)?,
+            &preferences,
+            &mut next,
+        )?;
+        let status = self.install_permissions(&next, warning)?;
+        *preferences = next;
+        let _ = app.emit(CONTROL_STATUS_EVENT, status.clone());
+        Ok(status)
+    }
+
     fn snapshot(&self) -> Result<ControlStatus, String> {
         self.status
             .lock()
@@ -387,30 +478,17 @@ impl ControlStatusStore {
         let file_root = request
             .file_root
             .as_deref()
-            .map(canonical_directory)
+            .map(ApprovedRoot::new)
             .transpose()?;
         let document_root = request
             .document_root
             .as_deref()
-            .map(canonical_directory)
+            .map(ApprovedRoot::new)
             .transpose()?;
-        let access = ControlSearchAccess {
-            files: file_root.is_some(),
-            documents: document_root.is_some(),
-        };
-        {
-            let mut scopes = self
-                .search_scopes
-                .lock()
-                .map_err(|_| "채팅 검색 허용 범위를 잠글 수 없습니다".to_owned())?;
-            scopes.file_root = file_root;
-            scopes.document_root = document_root;
-        }
-        self.update(app, |status| {
-            status.search_access = access;
-            status.last_error = None;
-        })?;
-        self.snapshot()
+        self.change_permissions(app, |preferences| {
+            preferences.file_root = file_root;
+            preferences.document_root = document_root;
+        })
     }
 
     fn configure_scan_access(
@@ -418,37 +496,21 @@ impl ControlStatusStore {
         app: &AppHandle,
         request: ControlScanAccessRequest,
     ) -> Result<ControlStatus, String> {
-        let (plan, access) = match (request.root, request.config) {
-            (None, None) => (None, ControlScanAccess::default()),
+        let grant = match (request.root, request.config) {
+            (None, None) => None,
             (Some(root), Some(config)) => {
                 validate_scan_config(&config)?;
-                let canonical_root = canonical_directory(&root)?;
-                let display_root = root.clone();
-                (
-                    Some(ControlScanPlan {
-                        root,
-                        canonical_root,
-                        config,
-                    }),
-                    ControlScanAccess {
-                        enabled: true,
-                        root: Some(display_root),
-                        approved_at_unix_ms: Some(unix_time_ms()),
-                    },
-                )
+                Some(ScanGrant {
+                    root: ApprovedRoot::new(&root)?,
+                    config,
+                    approved_at_unix_ms: unix_time_ms(),
+                })
             }
             _ => {
-                return Err("검사 허용을 켤 때는 폴더와 현재 설정이 모두 필요합니다".to_owned());
+                return Err("검사 범위를 지정할 때는 폴더와 현재 설정이 모두 필요합니다".to_owned());
             }
         };
-        *self
-            .scan_plan
-            .lock()
-            .map_err(|_| "채팅 검사 허용 범위를 잠글 수 없습니다".to_owned())? = plan;
-        self.update(app, |status| {
-            status.scan_access = access;
-            status.last_error = None;
-        })
+        self.change_permissions(app, |preferences| preferences.scan = grant)
     }
 
     fn configure_cleanup_access(
@@ -456,40 +518,35 @@ impl ControlStatusStore {
         app: &AppHandle,
         request: ControlCleanupAccessRequest,
     ) -> Result<ControlStatus, String> {
-        if !request.enabled {
-            let mut review = self
+        let mut review = if !request.enabled {
+            let review = self
                 .cleanup_review
                 .lock()
-                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다".to_owned())?;
+                .map_err(|_| "정리 계획 상태를 잠글 수 없습니다")?;
             if review
                 .pending
                 .as_ref()
                 .is_some_and(|plan| plan.status.state == CleanupPlanState::Executing)
             {
                 return Err(
-                    "진행 중인 휴지통 작업이 끝난 뒤 정리 검토 허용을 끌 수 있습니다".to_owned(),
+                    "진행 중인 휴지통 작업이 끝난 뒤 정리 검토 허용을 끌 수 있습니다".into(),
                 );
             }
+            Some(review)
+        } else {
+            None
+        };
+        let status = self.change_permissions(app, |preferences| {
+            preferences.cleanup_approved_at_unix_ms = request.enabled.then(unix_time_ms);
+        })?;
+        if let Some(review) = review.as_mut() {
             if let Some(mut plan) = review.pending.take() {
                 plan.status.state = CleanupPlanState::Rejected;
                 plan.status.message = Some("앱에서 외부 정리 검토 허용을 껐습니다".to_owned());
                 remember_cleanup_plan(&mut review.completed, plan.status);
             }
         }
-        self.update(app, |status| {
-            status.cleanup_access = if request.enabled {
-                ControlCleanupAccess {
-                    enabled: true,
-                    approved_at_unix_ms: Some(unix_time_ms()),
-                }
-            } else {
-                ControlCleanupAccess::default()
-            };
-            if !request.enabled {
-                status.pending_review = None;
-            }
-            status.last_error = None;
-        })
+        Ok(status)
     }
 
     fn ensure_cleanup_access(&self) -> Result<(), String> {
@@ -502,10 +559,7 @@ impl ControlStatusStore {
         if enabled {
             Ok(())
         } else {
-            Err(
-                "앱의 대화 > 연결과 권한에서 이번 실행의 정리 계획 검토를 먼저 허용해 주세요"
-                    .to_owned(),
-            )
+            Err("앱의 설정 > 연결과 권한에서 정리 계획 검토를 먼저 허용해 주세요".to_owned())
         }
     }
 
@@ -729,11 +783,11 @@ impl ControlStatusStore {
             .lock()
             .map_err(|_| "채팅 검사 허용 범위를 잠글 수 없습니다".to_owned())?
             .clone()
-            .ok_or_else(|| "대시보드에서 이 실행의 채팅 검사를 먼저 허용해 주세요".to_owned())?;
+            .ok_or_else(|| "앱에서 검사할 폴더를 먼저 선택해 주세요".to_owned())?;
         let current_root = canonical_directory(&plan.root)
             .map_err(|_| "허용한 폴더를 다시 확인할 수 없습니다".to_owned())?;
         if current_root != plan.canonical_root {
-            return Err("허용한 폴더가 바뀌었습니다. 대시보드에서 다시 허용해 주세요".to_owned());
+            return Err("검사할 폴더가 바뀌었습니다. 앱에서 폴더를 다시 선택해 주세요".to_owned());
         }
         Ok(plan)
     }
@@ -1018,10 +1072,53 @@ pub(crate) fn configure_control_inspection_access(
     if window.label() != "main" {
         return Err("시스템 조회 허용은 앱의 메인 화면에서만 변경할 수 있습니다".to_owned());
     }
-    app.state::<ControlStatusStore>().update(&app, |status| {
-        status.inspection_allowed = enabled;
-        status.last_error = None;
-    })
+    app.state::<ControlStatusStore>()
+        .change_permissions(&app, |preferences| preferences.inspection_allowed = enabled)
+}
+
+#[tauri::command]
+pub(crate) fn configure_control_permission_lifetime(
+    window: WebviewWindow,
+    app: AppHandle,
+    lifetime: PermissionLifetime,
+) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
+    app.state::<ControlStatusStore>()
+        .change_permissions(&app, |preferences| preferences.lifetime = lifetime)
+}
+
+fn ensure_main_permission_window(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() == "main" {
+        Ok(())
+    } else {
+        Err("권한 설정은 앱의 메인 화면에서만 변경할 수 있습니다".into())
+    }
+}
+
+pub(crate) fn restore_permission_settings(app: &AppHandle) {
+    let store = app.state::<ControlStatusStore>();
+    let Ok(mut held) = store.permissions.lock() else {
+        return;
+    };
+    let result = permission_settings::database_path(app).and_then(|path| {
+        let previous = permission_settings::load(&path)?;
+        let mut next = previous.clone();
+        let invalid = next.revalidate();
+        let warning = if invalid {
+            permission_settings::commit(&path, &previous, &mut next)?
+                .or_else(|| Some("기억한 폴더 또는 검사 기준을 확인하지 못해 일부 권한을 복원하지 않았습니다. 다시 허용해 주세요.".into()))
+        } else { None };
+        Ok((next, warning))
+    });
+    let (preferences, warning) = result.unwrap_or_else(|error| {
+        (
+            PermissionPreferences::default(),
+            Some(format!("기억한 권한을 복원하지 않았습니다. {error}")),
+        )
+    });
+    if store.install_permissions(&preferences, warning).is_ok() {
+        *held = preferences;
+    }
 }
 
 pub(crate) fn inspection_access_allowed(app: &AppHandle) -> Result<bool, String> {
@@ -1287,28 +1384,34 @@ pub(crate) fn tool_storage_summary(snapshot: &super::StoredScanSnapshot) -> Stor
 
 #[tauri::command]
 pub(crate) fn configure_control_search_access(
+    window: WebviewWindow,
     app: AppHandle,
     request: ControlSearchAccessRequest,
     state: State<'_, ControlStatusStore>,
 ) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
     state.configure_search_access(&app, request)
 }
 
 #[tauri::command]
 pub(crate) fn configure_control_scan_access(
+    window: WebviewWindow,
     app: AppHandle,
     request: ControlScanAccessRequest,
     state: State<'_, ControlStatusStore>,
 ) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
     state.configure_scan_access(&app, request)
 }
 
 #[tauri::command]
 pub(crate) fn configure_control_cleanup_access(
+    window: WebviewWindow,
     app: AppHandle,
     request: ControlCleanupAccessRequest,
     state: State<'_, ControlStatusStore>,
 ) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
     state.configure_cleanup_access(&app, request)
 }
 
@@ -2521,7 +2624,7 @@ fn operation_not_found(message: String) -> RequestFailure {
     }
 }
 
-fn validate_scan_config(config: &ScanConfig) -> Result<(), String> {
+pub(crate) fn validate_scan_config(config: &ScanConfig) -> Result<(), String> {
     if config.min_large_file_bytes == 0 || config.min_duplicate_file_bytes == 0 {
         return Err("파일 크기 기준은 0보다 커야 합니다".to_owned());
     }
@@ -2704,6 +2807,81 @@ mod tests {
         assert!(!status.cleanup_access.enabled);
         assert!(status.pending_review.is_none());
         assert_eq!(status.revision, 0);
+        assert_eq!(status.permission_lifetime, PermissionLifetime::Session);
+        assert!(status.permission_warning.is_none());
+    }
+
+    #[test]
+    fn restoring_grants_never_restores_a_review_or_starts_an_operation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = ApprovedRoot::new(dir.path().to_str().unwrap()).unwrap();
+        let mut preferences = PermissionPreferences::default();
+        preferences.lifetime = PermissionLifetime::Remember;
+        preferences.inspection_allowed = true;
+        preferences.file_root = Some(root.clone());
+        preferences.document_root = Some(root.clone());
+        preferences.scan = Some(ScanGrant {
+            root,
+            config: ScanConfig::default(),
+            approved_at_unix_ms: 123,
+        });
+        preferences.cleanup_approved_at_unix_ms = Some(456);
+        let path = dir.path().join("grants.sqlite3");
+        permission_settings::save(&path, &preferences).unwrap();
+        let restored = permission_settings::load(&path).unwrap();
+        let store = ControlStatusStore::default();
+        let status = store.install_permissions(&restored, None).unwrap();
+        assert!(
+            status.inspection_allowed
+                && status.search_access.files
+                && status.search_access.documents
+        );
+        assert!(status.scan_access.enabled && status.cleanup_access.enabled);
+        assert_eq!(
+            status.scan_access.config.as_ref(),
+            Some(&ScanConfig::default())
+        );
+        assert_eq!(status.scan_access.approved_at_unix_ms, Some(123));
+        assert_eq!(
+            store.search_scopes.lock().unwrap().file_root.as_ref(),
+            Some(&dir.path().canonicalize().unwrap())
+        );
+        assert!(status.active_operation.is_none() && status.pending_review.is_none());
+        assert!(store.cleanup_review.lock().unwrap().pending.is_none());
+        assert!(store.completed_operations.lock().unwrap().is_empty());
+        assert!(store.start_requests.lock().unwrap().is_empty());
+        assert!(store.operation_authorities.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn selected_scan_scope_is_exact_and_changing_it_does_not_grant_other_access() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let store = ControlStatusStore::default();
+        assert!(store.scan_plan().is_err());
+        let mut preferences = PermissionPreferences::default();
+        for selected in [first.path(), second.path()] {
+            preferences.scan = Some(ScanGrant {
+                root: ApprovedRoot::new(selected.to_str().unwrap()).unwrap(),
+                config: ScanConfig::default(),
+                approved_at_unix_ms: 123,
+            });
+            let status = store.install_permissions(&preferences, None).unwrap();
+            assert_eq!(
+                store.scan_plan().unwrap().canonical_root,
+                selected.canonicalize().unwrap()
+            );
+            assert!(
+                !status.inspection_allowed
+                    && !status.search_access.files
+                    && !status.search_access.documents
+            );
+            assert!(!status.cleanup_access.enabled);
+            assert!(status.active_operation.is_none() && status.pending_review.is_none());
+        }
+        preferences.scan = None;
+        store.install_permissions(&preferences, None).unwrap();
+        assert!(store.scan_plan().is_err());
     }
 
     fn native_authority(session: &str) -> OperationAuthority {

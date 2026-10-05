@@ -356,16 +356,16 @@ export function AppShell({
       ) : null}
 
       <main
-        className="main-content"
+        className={`main-content${activeView === "assistant" ? " main-content--assistant" : ""}`}
         id="main-content"
         inert={mobileNavigationOpen ? true : undefined}
         tabIndex={-1}
       >
-        {activeView !== "dashboard" ? (
+        {activeView !== "dashboard" && activeView !== "assistant" ? (
           <header className={[
             "utility-header utility-header--compact",
             storageViews.has(activeView) ? "utility-header--storage" : "",
-            activeView === "assistant" ? "utility-header--assistant" : "",
+            activeView === "settings" ? "utility-header--settings" : "",
           ].filter(Boolean).join(" ")}>
             <div className="utility-header__identity">
               <p className="eyebrow utility-header__context">

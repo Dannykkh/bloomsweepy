@@ -488,7 +488,8 @@ option {
 }
 
 .utility-header.utility-header--storage,
-.utility-header.utility-header--assistant {
+.utility-header.utility-header--assistant,
+.utility-header.utility-header--settings {
   position: relative;
   z-index: auto;
 }
@@ -3317,6 +3318,14 @@ option {
   white-space: nowrap;
 }
 
+.control-status-panel__notice {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--font-size-ui-min);
+  color: var(--text-muted);
+}
+
 .control-status-panel__error {
   margin: 0;
   font-size: var(--font-size-ui-min);
@@ -3446,6 +3455,38 @@ option {
   background: rgb(76 127 247 / 5%);
 }
 
+.control-permission__lifetime-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 174px;
+  max-width: 100%;
+  min-height: 44px;
+  height: 44px;
+  padding: 8px 30px 8px 12px;
+  font: inherit;
+  font-size: var(--font-size-ui-min);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 15px) center, calc(100% - 10px) center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+}
+
+.control-permission__lifetime-select:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+.control-permission__lifetime-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .control-permission--cleanup {
   border-color: rgb(242 168 74 / 18%);
   background: rgb(242 168 74 / 4%);
@@ -3525,6 +3566,7 @@ option {
   }
 
   .control-permission__scan-button,
+  .control-permission__lifetime-select,
   .control-status-panel__access-button {
     width: 100%;
     min-height: 44px;
@@ -5403,9 +5445,10 @@ dialog.empty-trash-dialog {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
-  max-width: 1100px;
+  width: 100%;
 }
 
+.settings-connections-panel,
 .settings-language-panel {
   grid-column: 1 / -1;
 }

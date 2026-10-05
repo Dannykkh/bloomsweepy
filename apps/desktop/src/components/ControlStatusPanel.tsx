@@ -1,20 +1,20 @@
 import { Terminal } from "lucide-react";
 import { useLanguage, type MessageKey, type Translate } from "../i18n";
 import { formatBytes, formatCount, formatDate } from "../lib/format";
-import type { ControlOperationStatus, ControlStatus, ScanConfig } from "../types";
+import type { ControlOperationStatus, ControlStatus, PermissionLifetime } from "../types";
 
-interface ControlStatusPanelProps {
+export interface ControlStatusPanelProps {
   status: ControlStatus;
+  updatingPermissionLifetime?: boolean;
+  permissionLifetimeError?: string | null;
+  permissionControlsLocked?: boolean;
+  permissionLifetimeLocked?: boolean;
+  onPermissionLifetimeChange?: (lifetime: PermissionLifetime) => void;
   canEnableSearch: boolean;
   updatingSearchAccess: boolean;
   searchAccessError: string | null;
   onToggleSearchAccess: () => void;
-  scanRoot: string | null;
-  scanConfig: ScanConfig;
-  canEnableScan: boolean;
-  updatingScanAccess: boolean;
   scanAccessError: string | null;
-  onToggleScanAccess: () => void;
   canEnableCleanup: boolean;
   cleanupAccessLocked: boolean;
   updatingCleanupAccess: boolean;
@@ -103,16 +103,16 @@ function connectionCopy(status: ControlStatus, t: Translate): { title: string; d
 
 export function ControlStatusPanel({
   status,
+  updatingPermissionLifetime,
+  permissionLifetimeError,
+  permissionControlsLocked,
+  permissionLifetimeLocked,
+  onPermissionLifetimeChange,
   canEnableSearch,
   updatingSearchAccess,
   searchAccessError,
   onToggleSearchAccess,
-  scanRoot,
-  scanConfig,
-  canEnableScan,
-  updatingScanAccess,
   scanAccessError,
-  onToggleScanAccess,
   canEnableCleanup,
   cleanupAccessLocked,
   updatingCleanupAccess,
@@ -130,13 +130,12 @@ export function ControlStatusPanel({
   const processedItems = operation?.processedItems ?? null;
   const processedBytes = operation?.processedBytes ?? null;
   const searchEnabled = status.searchAccess.files || status.searchAccess.documents;
-  const scanEnabled = status.scanAccess.enabled;
   const cleanupEnabled = status.cleanupAccess.enabled;
+  const remember = status.permissionLifetime === "remember";
   const allowedSearches = [
     status.searchAccess.files ? t("파일") : null,
     status.searchAccess.documents ? t("문서") : null,
   ].filter(Boolean);
-  const scanBusy = operation?.kind === "storageScan" && operation.state === "running";
 
   return (
     <section
@@ -195,19 +194,39 @@ export function ControlStatusPanel({
       </div>
 
       <div className="control-status-panel__permissions">
+        <div className="control-permission control-permission--lifetime">
+          <div>
+            <label htmlFor="control-permission-lifetime"><strong>{t("권한 유지 방식")}</strong></label>
+            <p id="control-permission-lifetime-description">{remember
+              ? t("허용한 권한·폴더·검사 설정을 이 컴퓨터에 저장합니다. 실제 삭제와 앱 제거는 매번 별도로 확인합니다.")
+              : t("앱을 완전히 종료하면 허용이 꺼집니다. 창만 닫아 메뉴 막대에 남아 있으면 유지됩니다.")}</p>
+            <small>{t("유지 방식을 바꿔도 꺼진 권한은 자동으로 켜지지 않습니다.")}</small>
+            {permissionLifetimeError ? <small role="alert">{t("권한 저장 오류: {{detail}}", { detail: permissionLifetimeError })}</small> : null}
+            {status.permissionWarning ? <small role="alert">{status.permissionWarning}</small> : null}
+          </div>
+          <select id="control-permission-lifetime" className="control-permission__lifetime-select" value={remember ? "remember" : "session"}
+            aria-describedby="control-permission-lifetime-description"
+            disabled={!status.bridgeAvailable || updatingPermissionLifetime || permissionLifetimeLocked || !onPermissionLifetimeChange}
+            onChange={event => onPermissionLifetimeChange?.(event.target.value as PermissionLifetime)}>
+            <option value="session">{t("이번 실행만")}</option>
+            <option value="remember">{t("이 컴퓨터에서 기억")}</option>
+          </select>
+        </div>
         <div className="control-permission">
           <div><strong>{t("시스템·앱 조회 허용")}</strong>
-            <p id="control-inspection-description">{t("외부 AI에 CPU·메모리·작업·설치 앱의 제한된 목록 공개를 이번 실행에서 허용합니다. 실행·삭제 승인은 아닙니다.")}</p>
+            <p id="control-inspection-description">{t("외부 AI에 CPU·메모리·작업·설치 앱의 제한된 목록 공개를 허용합니다. 실행·삭제 승인은 아닙니다.")}</p>
             {inspectionAccessError ? <small role="alert">{inspectionAccessError}</small> : null}
           </div>
-          <label className="control-permission__scan-button"><input type="checkbox" checked={status.inspectionAllowed === true} disabled={!status.bridgeAvailable || updatingInspectionAccess || !onToggleInspectionAccess} aria-describedby="control-inspection-description" onChange={onToggleInspectionAccess} />{t("시스템·앱 조회 허용")}</label>
+          <label className="control-permission__scan-button"><input type="checkbox" checked={status.inspectionAllowed === true} disabled={!status.bridgeAvailable || permissionControlsLocked || updatingInspectionAccess || !onToggleInspectionAccess} aria-describedby="control-inspection-description" onChange={onToggleInspectionAccess} />{t("시스템·앱 조회 허용")}</label>
         </div>
         <div className="control-permission control-permission--search">
           <div>
             <strong>{t("파일·문서 검색 허용")}</strong>
             <p id="control-search-description">
               {searchEnabled
-                ? t("{{targets}} 목록 검색을 이번 실행에서 허용했습니다.", { targets: allowedSearches.join("·") })
+                ? remember
+                  ? t("허용한 {{targets}} 목록을 다음 실행에도 검색할 수 있습니다.", { targets: allowedSearches.join("·") })
+                  : t("{{targets}} 목록 검색을 이번 실행에서 허용했습니다.", { targets: allowedSearches.join("·") })
                 : t("앱이 이미 만든 파일·문서 목록만 검색합니다.")}
             </p>
             <small id="control-search-help">
@@ -226,6 +245,7 @@ export function ControlStatusPanel({
             aria-describedby="control-search-description control-search-help"
             disabled={
               !status.bridgeAvailable ||
+              permissionControlsLocked ||
               updatingSearchAccess ||
               (!searchEnabled && !canEnableSearch)
             }
@@ -235,51 +255,7 @@ export function ControlStatusPanel({
               ? t("바꾸는 중…")
               : searchEnabled
                 ? t("검색 허용 끄기")
-                : t("이번 실행에서 검색 허용")}
-          </button>
-        </div>
-
-        <div className="control-permission control-permission--scan">
-          <div className="control-permission__scan-copy" id="control-scan-description">
-            <div className="control-permission__heading">
-              <strong>{t("폴더 검사 허용")}</strong>
-              <span className={scanEnabled ? "is-enabled" : ""}>
-                {scanEnabled ? t("이 실행에서 허용됨") : t("허용 안 됨")}
-              </span>
-            </div>
-            <p>{t("로컬 CLI는 아래 폴더와 현재 설정으로 검사 시작만 요청합니다. 실제 파일 확인은 이 앱이 수행합니다.")}</p>
-            <code dir="auto" translate="no">
-              {status.scanAccess.root ?? scanRoot ?? t("먼저 검사할 폴더를 선택하세요")}
-            </code>
-            <small>
-              {t("큰 파일 {{large}} 이상 · 중복 {{duplicate}} 이상 · 결과 {{largeCount}}/{{duplicateCount}}개", {
-                large: formatBytes(scanConfig.minLargeFileBytes),
-                duplicate: formatBytes(scanConfig.minDuplicateFileBytes),
-                largeCount: formatCount(scanConfig.maxLargeFiles),
-                duplicateCount: formatCount(scanConfig.maxDuplicateGroups),
-              })}
-            </small>
-            <small>{t("파일을 수정하거나 이동하지 않습니다. 앱을 닫거나 폴더·설정을 바꾸면 허용이 꺼집니다.")}</small>
-            {scanAccessError ? <small className="is-error" role="alert">{t("검사 허용 오류: {{detail}}", { detail: scanAccessError })}</small> : null}
-          </div>
-          <button
-            type="button"
-            className="control-permission__scan-button"
-            aria-pressed={scanEnabled}
-            aria-describedby="control-scan-description"
-            disabled={
-              !status.bridgeAvailable ||
-              updatingScanAccess ||
-              scanBusy ||
-              (!scanEnabled && !canEnableScan)
-            }
-            onClick={onToggleScanAccess}
-          >
-            {updatingScanAccess
-              ? t("바꾸는 중…")
-              : scanEnabled
-                ? t("검사 허용 끄기")
-                : t("이번 실행에서 검사 허용")}
+                : remember ? t("검색 허용") : t("이번 실행에서 검색 허용")}
           </button>
         </div>
 
@@ -296,7 +272,7 @@ export function ControlStatusPanel({
               {cleanupAccessLocked
                 ? t("진행 중인 검사나 휴지통 작업이 끝난 뒤 이 권한을 바꿀 수 있습니다.")
                 : canEnableCleanup || cleanupEnabled
-                ? t("MCP에는 승인·실행·영구 삭제 기능이 없습니다. 앱을 닫으면 허용이 꺼집니다.")
+                ? t("MCP에는 승인·실행·영구 삭제 기능이 없습니다. 정리 계획과 삭제 승인은 저장하지 않습니다.")
                 : t("큰 파일·중복 검사 또는 정리 후보 검사를 먼저 완료해 주세요.")}
             </small>
             {cleanupAccessError ? <small role="alert">{t("정리 검토 허용 오류: {{detail}}", { detail: cleanupAccessError })}</small> : null}
@@ -307,6 +283,7 @@ export function ControlStatusPanel({
             aria-pressed={cleanupEnabled}
             disabled={
               !status.bridgeAvailable ||
+              permissionControlsLocked ||
               cleanupAccessLocked ||
               updatingCleanupAccess ||
               (!cleanupEnabled && !canEnableCleanup)
@@ -317,10 +294,12 @@ export function ControlStatusPanel({
               ? t("바꾸는 중…")
               : cleanupEnabled
                 ? t("정리 검토 허용 끄기")
-                : t("이번 실행에서 검토 허용")}
+                : remember ? t("검토 허용") : t("이번 실행에서 검토 허용")}
           </button>
         </div>
       </div>
+      <p className="control-status-panel__notice">{t("폴더 검사는 별도 허용 없이 사용할 수 있습니다. 앱에서 선택한 폴더만 읽고, 삭제는 별도로 확인합니다.")}</p>
+      {scanAccessError ? <p className="control-status-panel__notice control-status-panel__error" role="alert">{t("외부 AI 검사 연결 오류: {{detail}}", { detail: scanAccessError })}</p> : null}
     </section>
   );
 }
