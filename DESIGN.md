@@ -114,6 +114,7 @@ BroomSweepy는 저장공간 상태를 한눈에 보여 주고 한 번의 클릭�
 ## Components
 
 - Native glass: OS 창 효과 → 투명 canvas → sidebar/hero의 반투명 표면 순서다. 패널 안에 다시 backdrop blur를 중첩하지 않는다.
+- macOS native-glass의 body wash는 24–44% 한 층이고 app-shell은 투명하다. sidebar는 28% 중립 표면이며 native vibrancy 위에서 sidebar/hero의 CSS blur를 다시 적용하지 않는다. 밝아진 배경에서 보조 글자는 0.79, 세부 글자는 0.72 OKLCH 명도로 높인다. Windows·웹 기본 canvas는 불투명하고 투명도 감소 요청도 불투명 canvas로 전환한다.
 - Storage hero: 디스크 사용률·남은 용량·검사 상태·primary 하나를 포함한다. 작은 드라이브 카드를 선택하면 그 카드만 큰 자리로 교대하고, 실제 스캔 루트는 `이 드라이브 검사`를 눌렀을 때 확정한다. 건강 점수나 서로 겹치는 결과 용량을 합산하지 않는다.
 - Quick action: 44px 이상의 전체 버튼, 큰 아이콘, 결과형 이름, 한 줄 설명 순서다. 카테고리 색은 아이콘과 작은 상태에만 쓴다.
 - Performance instrument: 공통 `시스템 성능` 제목 아래 CPU와 메모리를 같은 크기의 원형·같은 폭 pane으로 나란히 둔다. CPU는 blue-violet, 메모리는 blue이며 정확한 퍼센트와 RAM used/total·사용 가능·스왑을 함께 표시한다. `앱 메모리 정리`는 macOS에서 BroomSweepy 자신의 malloc 영역만 반환하고 allocator가 보고한 바이트만 결과로 표시한다. 아래 프로세스 행은 이름·PID·CPU·resident memory·종료 가능 여부를 보여 주며 40개 이하로 제한한다. 사용률을 메모리 압력 등급으로 바꾸거나 시스템 전체 여유 메모리 변화를 `확보량`으로 만들지 않는다.
@@ -161,6 +162,7 @@ BroomSweepy는 저장공간 상태를 한눈에 보여 주고 한 번의 클릭�
 - macOS 직접 배포 빌드: 투명 WKWebView와 `underWindowBackground` native vibrancy를 사용한다. 이 경로는 Tauri의 macOS private API를 요구하므로 Mac App Store용 빌드에는 사용하지 않고 불투명 CSS 폴백을 둔다.
 - Windows: WebView2 CSS 블러를 기본으로 하고, 창 재질은 지원되는 경우에만 적용한다.
 - OS별 제목 표시줄과 창 버튼 위치는 네이티브 관례를 따른다. macOS 신호등 버튼을 Windows에 복제하지 않는다.
+- macOS 제목 표시줄은 `Visible`, `hiddenTitle: false`, `decorations: true`로 앱 이름·버전과 네이티브 창 버튼을 표시한다. 제목줄은 배경색에 영향을 받지 않는 OS 기본 chrome, 본문은 native glass로 분리하며 본문 헤더로 창 조작을 대체하지 않는다.
 - 기능 가용성은 숨기거나 거짓 성공으로 표시하지 않고 플랫폼 capability로 설명한다.
 
 ## Copy Rules

@@ -8,3 +8,4 @@
 - [004 — 앱 기능 정본·LLM 조사](004-app-tool-investigation.md): 앱 조회 선택→실제 결과 분석→추가 조회, 동의/최종 승인 분리.
 - [005 — 정리 후보 트리](005-cleanup-candidate-tree.md): 상속 체크·하위 제외·중복 없는 frontier·보호 하위 검증. 이 맥 설치형209B 실제 이동/보존/취소 확인.
 - [006 — 프로젝트 기록 Git 공유](006-project-record-versioning.md): 사용자가 메모리·대화·docs 공유를 승인. 정제 기록은 추적하고 원시 관찰/중복 상태는 로컬 유지.
+- [007 — 네이티브 제목줄·글래스 합성](007-native-window-material.md): Visible OS chrome, 단일 wash, 중복 blur 제거, 웹·Windows opaque 유지. 이 맥 설치형 검증.

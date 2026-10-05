@@ -22,6 +22,10 @@ test("macOS keeps native glass while other platforms keep opaque window defaults
   assert.equal(macApp.macOSPrivateApi, true);
   assert.equal(macApp.windows[0].transparent, true);
   assert.deepEqual(macApp.windows[0].windowEffects.effects, ["underWindowBackground"]);
+  assert.equal(macApp.windows[0].label, "main", "native controls keep the existing main-window capability scope");
+  assert.equal(macApp.windows[0].decorations, true, "OS window controls must remain available");
+  assert.equal(macApp.windows[0].hiddenTitle, false, "app/version title must be visible");
+  assert.equal(macApp.windows[0].titleBarStyle, "Visible", "OS chrome must not disappear against the desktop backdrop");
   assert.notEqual(common.app.windows[0].transparent, true);
   assert.equal(common.app.windows[0].windowEffects, undefined);
 });

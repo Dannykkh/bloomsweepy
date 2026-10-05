@@ -26,7 +26,7 @@
 | release-1.6.0, screenshots, https-push, adhoc-dmg | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.6.1, tauri-config, windows-ci, private-api | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.7.0, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
-| rust-base, swift-golden-master, native-glass, direct-dmg | [memory/architecture.md](memory/architecture.md) |
+| native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
 | multi-drive, drive-deck, flip-animation, scan-root | [memory/architecture.md](memory/architecture.md) |
 | macos, disk-image, hdiutil, volume-filter | [memory/architecture.md](memory/architecture.md) |
 | performance-monitor, sysinfo, appkit, graceful-termination | [memory/architecture.md](memory/architecture.md) |

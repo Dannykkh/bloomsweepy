@@ -14,8 +14,8 @@
         "backgroundColor": "#00000000",
         "decorations": true,
         "transparent": true,
-        "titleBarStyle": "Transparent",
-        "hiddenTitle": true,
+        "titleBarStyle": "Visible",
+        "hiddenTitle": false,
         "windowEffects": {
           "effects": ["underWindowBackground"],
           "state": "followsWindowActiveState"
