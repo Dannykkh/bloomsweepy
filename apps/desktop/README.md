@@ -8,6 +8,18 @@
 - v1.7.0 배포본의 빈 폴더 흐름에 더해, 현재 개발본은 일반 파일·내용 있는 폴더의 이름 검색·용량 검사·하위 탐색·삭제 검토를 같은 채팅에서 처리합니다. 기본 휴지통 이동은 인라인 예/아니오 한 번으로 결정하고 직접 입력한 예/아니오도 앱이 처리합니다. 설정의 추가 확인 생략 권한을 켜면 대상을 명확히 이름으로 지정한 제거 요청은 재검증 후 바로 실행합니다. 모델에는 최종 실행 도구를 제공하지 않습니다. 대화형 이름 변경·일반 이동·새 폴더 생성은 미지원입니다.
 - 외부 CLI/MCP와 내장 채팅은 서로 다른 호출 경로지만 현재 개발본은 공통 typed 기능 정본과 앱 서비스를 공유합니다. AI는 앱 조회를 선택하고 실제 목록을 분석·추가 조회하며, 최종 파일 작업은 앱의 확인을 거칩니다.
 
+현재 개발본의 내장 채팅은 CLI가 반환한 JSON 작업 요청을 Rust가 처리하고 실제 결과를
+모델에 다시 전달합니다. 외부 연결은 MCP를 사용합니다. 두 입구 모두 공통
+`file_workspace`로 일반 폴더 검사·큰 항목·이름 검색·하위 탐색·선택·검토·상태 조회를
+호출하며, 기존 내장 `files` 요청도 같은 dispatcher의 호환 alias입니다.
+외부는 앱 선택 루트만 사용하고 긴 작업은 작업 번호→상태→실제 결과로 이어집니다.
+최종 휴지통 이동은 main 앱 확인이며 외부 모델 실행 도구는 없습니다.
+
+MCP 기능 발견은 상한 있는 전체 index와 `capability_details`로 분리해 목록 전체가
+잘리는 것을 막습니다. 완료 결과뿐 아니라 진행 중·허용 필요·검토 대기·실패도 분석 전용
+응답 한 번으로 설명하며, 후속 AI 오류가 실제 앱 결과나 준비된 검토를 없애지 않습니다.
+구현/검증 범위는 [공통 MCP QA](../../docs/qa/2026-10-06-common-mcp-results.md)를 따릅니다.
+
 제품 소개와 현재 사용 가능한 기능은 [한국어 README](../../README.md)와 [English README](../../README.en.md)를 참고하세요.
 
 ### 현재 개발본: 정리 후보 트리
@@ -28,7 +40,7 @@
 
 일반 scan/largest/browse/parent는 기존 `StoredReports.directory`에 동일 보고서를 한 번 저장하고 작업 공간에는 `mapGeneration`만 남깁니다. `get_assistant_directory_report(sessionId, revision)`은 세션/revision/generation/root를 검사한 뒤 같은 스냅샷을 반환합니다. 화면은 채팅을 이탈하지 않고 지도를 동기화하며 **같은 결과 용량지도 보기**로 열 수 있습니다. 이름 검색만 한 결과는 측정 지도인 것처럼 동기화하지 않습니다. 다른 검사로 보고서가 교체되면 재검사가 필요하며 영구 트리 캐시는 만들지 않습니다.
 
-`assistant_files.rs`는 세션 루트에 갇힌 앱 소유 파일 작업 공간입니다. `assistant_tools.rs`의 strict JSON `files` 요청으로 scan/search/review_named/browse/parent/page/select/review만 허용합니다. 로컬 이름 검색은 기존 StreamingWalk, 클라우드/온라인 전용 제외, 메모리 가드를 재사용하고 200개·경로 2 MiB·25만 방문·30초 상한을 둡니다. 모델과 IPC 목록은 24개씩, 검토 선택은 100개, 상태는 16세션으로 제한됩니다. 색인 DB나 본문 전송을 추가하지 않습니다.
+`assistant_files.rs`는 선택 루트에 갇힌 앱 소유 파일 작업 공간입니다. 공통 typed `file_workspace`와 호환 strict JSON `files` 요청으로 scan/largest/search/review_named/browse/parent/page/select/review/status를 허용합니다. 내장 세션과 외부 workspace는 별개입니다. 로컬 이름 검색은 기존 StreamingWalk, 클라우드/온라인 전용 제외, 메모리 가드를 재사용하고 200개·경로 2 MiB·25만 방문·30초 상한을 둡니다. 모델과 IPC 목록은 24개씩, 검토 선택은 100개, 상태는 16세션으로 제한됩니다. 색인 DB나 본문 전송을 추가하지 않습니다.
 
 고유한 정확한 이름만 자동 검토로 연결하며 검색 누락/접근 실패/동명 항목은 선택 카드로 돌립니다. 검토에서 부모 지도와 항목 신원을 다시 비교하고 기존 파일·폴더 검증기를 재사용합니다. 채팅 파일·빈 폴더·앱 계획은 시간만으로 만료되지 않는 일회용입니다. 선택·revision·inventory·kind 변경과 취소·앱 재시작은 기존 계획을 무효화합니다. `confirm_assistant_file_plan`은 모델 프로토콜에 없으며 main WebView에서 기존 OS Trash/재검증/저널/부분 결과를 실행합니다. 앱 실행 결과만 대화의 완료 사실로 보존합니다.
 
@@ -40,11 +52,19 @@ POSIX 폴더 내부 심볼릭 링크는 `symlink_metadata`/`read_link`로 링크
 
 세부 결과와 설치 검증: [2026-10-04 QA](../../docs/qa/2026-10-04-conversational-files.md). 아래 v1.7.0 절은 공개 릴리스 당시의 범위/검증 기록입니다.
 
-### 개발본: CLI 모델 선택
+### 개발본: CLI 모델·추론 선택
 
-현재 개발본은 채팅 하단과 설정의 공용 모델 선택기를 제공합니다. Codex는 설치 CLI 카탈로그(실패 시 내장 목록), Claude Code는 `sonnet`·`opus`·`haiku` 별칭, Ollama는 로컬 설치 목록을 사용합니다. 공급자별 선택을 기억하고 실제 요청/CLI 인자에 반영하며 기본값은 모델 인자를 생략합니다. 모델 오류 시 임의로 전환하지 않으며 권한·계정·CLI 전역 설정도 바꾸지 않습니다. Grok·Antigravity와 미지원 CLI는 기본값 전용입니다. [모델 계약](../../docs/architecture/assistant-model-selection.md) · [QA](../../docs/qa/2026-10-06-cli-model-selection.md)
+채팅 입력창은 작은 모델/추론 버튼과 위로 열리는 팝업, 원형 전송 버튼을 사용합니다. 입력창 아래 및 정상 팝업의 반복 설명은 제거하고 오류·미지원·저장값 복구 안내는 유지합니다. 설정의 기존 선택기와 채팅은 같은 공급자·모델별 선호를 공유합니다.
 
-명시 Codex 모델의 지원 추론 강도·기본값도 CLI 카탈로그에서 읽고 두 화면에 함께 표시합니다. version1에 optional provider/model별 선호를 추가하며 기본값은 override를 생략합니다. 지원되지 않는 저장값은 전송을 막고 선택 변경을 안내합니다. 별도 `--config model_reasoning_effort=…`는 해당 요청의 모든 라운드에만 적용하며 전역 설정·기존120초 응답 제한은 유지합니다. 이 Mac CLI0.160.1의7개 공개 모델·추론 metadata와 설치 검증은 [추론 QA](../../docs/qa/2026-10-06-cli-reasoning-selection.md)에 구분합니다.
+Codex는 설치 CLI 카탈로그(실패 시 내장 목록), Claude Code는 질문 없는 initialize metadata(실패 시 `sonnet`·`opus`·`haiku` 별칭), Grok·Antigravity(agy)는 실제 `models` 출력, Ollama는 로컬 설치 목록을 사용합니다. CLI help에서 모델/추론 옵션을 확인하고 각 모델의 지원 증거만 선택지로 표시합니다. Grok의 미확인 모델이나 Agy 목록에 없는 강도를 추가하지 않습니다. 목록 갱신/업데이트로 저장된 모델을 자동 변경하지 않습니다.
+
+실제 목록이 없으면 CLI 미설치·상태 확인·로그인·서비스·설치 모델 없음·목록 조회 문제를 구분해 안내합니다. 이 Mac의 Grok/Agy는 CLI가 설치되지 않았습니다. 이때 모델 팝업/설정에 공식 문서의 참고 모델만 읽기 전용으로 보여 주며, 참고 항목은 실제 선택·선호·추론 단계에 넣지 않습니다. 실제 CLI 목록이 생기면 참고 목록은 숨깁니다. 참고 예시는 최신/전체/계정별 실행 가능 목록을 보장하지 않습니다. [Grok 설치 안내](https://docs.x.ai/build/overview) · [Agy 설치 안내](https://antigravity.google/docs/cli/install/)
+
+기본값은 모델/강도 인자를 생략합니다. 명시 선택은 Codex의 `--model`·`--config model_reasoning_effort=…`, Claude/Grok/Agy의 `--model`·`--effort`에 반영합니다. version1의 공급자·모델별 선호와 stale 값 전송 차단, 기존 응답 제한/취소·앱 기능·권한 계약을 유지합니다. 모델 옵션만 미지원인 CLI는 기존 기본값 경로를 유지하며, 모델/강도 거부 시 자동 fallback하지 않습니다. 계정별 모델 접근권과 서버의 실제 강도 적용은 선택 목록이나 응답의 요청값 표시만으로 확정하지 않습니다.
+
+이 Mac의 Claude Code2.1.291 metadata-only 조회와 compact fixture 관찰은 확인했으며, Grok/Agy는 CLI 미설치로 실제 실행을 검증하지 않았습니다. 이번 통합/최종 설치 검증 상태는 [다중 공급자 QA](../../docs/qa/2026-10-07-multi-provider-model-selection.md), 세부 동작은 [모델 계약](../../docs/architecture/assistant-model-selection.md)을 따릅니다. 이전 Codex 설치 검증은 [추론 QA](../../docs/qa/2026-10-06-cli-reasoning-selection.md)에 별도로 기록되어 있습니다. 현재 개발본과 공개 v1.7.0은 구분합니다.
+
+Claude 모델은 CLI `resolvedModel`의 버전을 포함해 표시합니다. 같은 질문 없는 초기화에서 최신 `fable` alias도 확인하므로 Fable 5와 Fable 5.1을 구분할 수 있습니다. 버전 이름을 고정 매핑하거나 실행 ID·기존 모델 선호를 바꾸지 않습니다. 목록의 버전은 현재 alias 해석이며 과거 응답의 실제 모델 버전으로 소급하지 않습니다.
 
 ### v1.7.0: 대화형 빈 폴더 정리
 

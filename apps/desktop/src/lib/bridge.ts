@@ -134,6 +134,14 @@ export function confirmAssistantFilePlan(sessionId: string, revision: string, pl
   return invoke("confirm_assistant_file_plan", { sessionId, revision, planId, nestedContentsAcknowledged, automatic });
 }
 
+// Main-window confirmation only. No path, native session or automatic approval is accepted.
+export function confirmExternalFilePlan(revision: string, planId: string, nestedContentsAcknowledged: boolean): Promise<TrashOperationResult> {
+  return invoke("confirm_external_file_plan", { revision, planId, nestedContentsAcknowledged });
+}
+export function cancelExternalFilePlan(revision: string, planId: string): Promise<void> {
+  return invoke("cancel_external_file_plan", { revision, planId });
+}
+
 export function selectAssistantEmptyCandidates(sessionId: string, revision: string, candidateIds: string[]): Promise<AssistantEmptyWorkspace> {
   return invoke("select_assistant_empty_candidates", { sessionId, revision, candidateIds });
 }

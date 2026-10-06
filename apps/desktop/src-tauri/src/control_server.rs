@@ -22,7 +22,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -142,6 +142,24 @@ struct ControlScanPlan {
     config: ScanConfig,
 }
 
+/// App-owned authority, never serialized to a provider or accepted from MCP.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileWorkspaceBinding {
+    pub(crate) root: PathBuf,
+    pub(crate) scope_epoch: u64,
+    pub(crate) cleanup_epoch: u64,
+    pub(crate) cleanup_allowed: bool,
+}
+
+impl FileWorkspaceBinding {
+    pub(crate) fn same_scope(&self, other: &Self) -> bool {
+        self.root == other.root && self.scope_epoch == other.scope_epoch
+    }
+    pub(crate) fn same_review_authority(&self, other: &Self) -> bool {
+        self.same_scope(other) && self.cleanup_epoch == other.cleanup_epoch && other.cleanup_allowed
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PendingReviewStatus {
@@ -225,6 +243,10 @@ enum OperationPermission {
     DocumentSearch(PathBuf),
     StorageScan(PathBuf),
     Cleanup,
+    FileWorkspace {
+        binding: FileWorkspaceBinding,
+        review: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -270,6 +292,7 @@ fn operation_bound_root(authority: &OperationAuthority) -> Option<&Path> {
         | OperationPermission::DocumentSearch(root)
         | OperationPermission::StorageScan(root) => Some(root.as_path()),
         OperationPermission::Cleanup => None,
+        OperationPermission::FileWorkspace { binding, .. } => Some(&binding.root),
     }
 }
 
@@ -304,6 +327,8 @@ pub(crate) struct ControlStatusStore {
     operation_authorities: Mutex<VecDeque<(String, OperationAuthority)>>,
     start_requests: Mutex<VecDeque<(String, String)>>,
     cleanup_review: Mutex<CleanupReviewState>,
+    file_workspace_scope_epoch: AtomicU64,
+    file_workspace_cleanup_epoch: AtomicU64,
 }
 
 impl Default for ControlStatusStore {
@@ -318,6 +343,8 @@ impl Default for ControlStatusStore {
             operation_authorities: Mutex::new(VecDeque::new()),
             start_requests: Mutex::new(VecDeque::new()),
             cleanup_review: Mutex::new(CleanupReviewState::default()),
+            file_workspace_scope_epoch: AtomicU64::new(0),
+            file_workspace_cleanup_epoch: AtomicU64::new(0),
         }
     }
 }
@@ -399,10 +426,31 @@ impl ControlStatusStore {
             &preferences,
             &mut next,
         )?;
+        // The permission mutex also serializes epoch capture; status revisions
+        // change on connections/jobs and are deliberately not approval epochs.
+        self.advance_file_workspace_epochs(&preferences, &next)?;
         let status = self.install_permissions(&next, warning)?;
         *preferences = next;
         let _ = app.emit(CONTROL_STATUS_EVENT, status.clone());
         Ok(status)
+    }
+
+    fn advance_file_workspace_epochs(
+        &self,
+        previous: &PermissionPreferences,
+        next: &PermissionPreferences,
+    ) -> Result<(), String> {
+        if scan_scope_changed(&previous.scan, &next.scan)? {
+            self.file_workspace_scope_epoch
+                .fetch_add(1, Ordering::AcqRel);
+        }
+        if previous.cleanup_approved_at_unix_ms.is_some()
+            != next.cleanup_approved_at_unix_ms.is_some()
+        {
+            self.file_workspace_cleanup_epoch
+                .fetch_add(1, Ordering::AcqRel);
+        }
+        Ok(())
     }
 
     fn snapshot(&self) -> Result<ControlStatus, String> {
@@ -542,12 +590,12 @@ impl ControlStatusStore {
         let status = self.change_permissions(app, |preferences| {
             preferences.cleanup_approved_at_unix_ms = request.enabled.then(unix_time_ms);
         })?;
-        if let Some(review) = review.as_mut() {
-            if let Some(mut plan) = review.pending.take() {
-                plan.status.state = CleanupPlanState::Rejected;
-                plan.status.message = Some("앱에서 외부 정리 검토 허용을 껐습니다".to_owned());
-                remember_cleanup_plan(&mut review.completed, plan.status);
-            }
+        if let Some(review) = review.as_mut()
+            && let Some(mut plan) = review.pending.take()
+        {
+            plan.status.state = CleanupPlanState::Rejected;
+            plan.status.message = Some("앱에서 외부 정리 검토 허용을 껐습니다".to_owned());
+            remember_cleanup_plan(&mut review.completed, plan.status);
         }
         Ok(status)
     }
@@ -1183,6 +1231,95 @@ pub(crate) fn tool_cleanup_access(app: &AppHandle) -> Result<(), String> {
     app.state::<ControlStatusStore>().ensure_cleanup_access()
 }
 
+fn scan_scope_changed(
+    previous: &Option<ScanGrant>,
+    next: &Option<ScanGrant>,
+) -> Result<bool, String> {
+    let project = |grant: &Option<ScanGrant>| {
+        grant
+            .as_ref()
+            .map(|grant| serde_json::to_value((&grant.root, &grant.config)))
+            .transpose()
+            .map_err(|error| error.to_string())
+    };
+    Ok(project(previous)? != project(next)?)
+}
+
+fn workspace_binding_from_permissions(
+    store: &ControlStatusStore,
+    permissions: &PermissionPreferences,
+) -> Result<FileWorkspaceBinding, String> {
+    let grant = permissions
+        .scan
+        .as_ref()
+        .ok_or("앱에서 검사할 폴더를 먼저 선택해 주세요")?;
+    validate_scan_config(&grant.config)?;
+    let original = canonical_directory(&grant.root.path.to_string_lossy())?;
+    if original != grant.root.canonical {
+        return Err("검사할 폴더가 바뀌었습니다. 앱에서 다시 선택해 주세요".into());
+    }
+    let root = bloomsweepy_core::validate_local_directory_path(&grant.root.canonical)
+        .map_err(|_| "허용한 로컬 폴더를 다시 확인해 주세요")?;
+    Ok(FileWorkspaceBinding {
+        root,
+        scope_epoch: store.file_workspace_scope_epoch.load(Ordering::Acquire),
+        cleanup_epoch: store.file_workspace_cleanup_epoch.load(Ordering::Acquire),
+        cleanup_allowed: permissions.cleanup_approved_at_unix_ms.is_some(),
+    })
+}
+
+pub(crate) fn tool_file_workspace_binding(app: &AppHandle) -> Result<FileWorkspaceBinding, String> {
+    let store = app.state::<ControlStatusStore>();
+    let permissions = store
+        .permissions
+        .lock()
+        .map_err(|_| "파일 검사 허용 범위를 확인하지 못했습니다")?;
+    workspace_binding_from_permissions(&store, &permissions)
+}
+
+/// Hold the approval mutex only through the one-shot claim, never across I/O.
+pub(crate) fn with_file_workspace_authority<T>(
+    app: &AppHandle,
+    binding: &FileWorkspaceBinding,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let store = app.state::<ControlStatusStore>();
+    let permissions = store
+        .permissions
+        .lock()
+        .map_err(|_| "정리 검토 허용 범위를 확인하지 못했습니다")?;
+    let current = workspace_binding_from_permissions(&store, &permissions)?;
+    if !binding.same_review_authority(&current) {
+        return Err("정리 검토 허용 범위가 변경됐습니다".into());
+    }
+    action()
+}
+
+pub(crate) fn file_workspace_epochs_current(
+    app: &AppHandle,
+    binding: &FileWorkspaceBinding,
+    review: bool,
+) -> bool {
+    let store = app.state::<ControlStatusStore>();
+    store.file_workspace_scope_epoch.load(Ordering::Acquire) == binding.scope_epoch
+        && (!review
+            || store.file_workspace_cleanup_epoch.load(Ordering::Acquire) == binding.cleanup_epoch)
+}
+
+pub(crate) fn file_workspace_binding_current(
+    app: &AppHandle,
+    binding: &FileWorkspaceBinding,
+    review: bool,
+) -> bool {
+    tool_file_workspace_binding(app).is_ok_and(|current| {
+        if review {
+            binding.same_review_authority(&current)
+        } else {
+            binding.same_scope(&current)
+        }
+    })
+}
+
 fn tool_operation_authority(
     app: &AppHandle,
     scope: &crate::app_tools::ToolScope,
@@ -1271,6 +1408,9 @@ fn operation_permission_current(
             .scan_plan()
             .is_ok_and(|plan| &plan.canonical_root == root),
         OperationPermission::Cleanup => tool_cleanup_access(app).is_ok(),
+        OperationPermission::FileWorkspace { binding, review } => {
+            file_workspace_binding_current(app, binding, *review)
+        }
     }
 }
 
@@ -1348,6 +1488,36 @@ pub(crate) fn reserve_tool_operation(
     bound_root: Option<&Path>,
 ) -> Result<ToolOperationReservation, String> {
     let authority = tool_operation_authority(app, scope, kind, bound_root)?;
+    reserve_operation_authority(app, kind, authority)
+}
+
+pub(crate) fn reserve_file_workspace_operation(
+    app: &AppHandle,
+    binding: &FileWorkspaceBinding,
+    review: bool,
+) -> Result<ToolOperationReservation, String> {
+    if !file_workspace_binding_current(app, binding, review) {
+        return Err("파일 검사 또는 정리 검토 허용 범위가 변경됐습니다".into());
+    }
+    reserve_operation_authority(
+        app,
+        "fileWorkspace",
+        OperationAuthority {
+            actor: OperationActor::External,
+            session_root: None,
+            permission: OperationPermission::FileWorkspace {
+                binding: binding.clone(),
+                review,
+            },
+        },
+    )
+}
+
+fn reserve_operation_authority(
+    app: &AppHandle,
+    kind: &str,
+    authority: OperationAuthority,
+) -> Result<ToolOperationReservation, String> {
     let source = authority.actor.source();
     let operation_id = random_operation_id().map_err(|error| error.to_string())?;
     let cancellation = app
@@ -1387,11 +1557,11 @@ pub(crate) fn finish_tool_operation(
     generation: Option<u64>,
     summary: Option<StorageScanSummary>,
 ) {
-    let Ok((_, revision)) = app.state::<ControlStatusStore>().finish_operation(
+    let Ok((operation, revision)) = app.state::<ControlStatusStore>().finish_operation(
         app,
         operation_id,
         state,
-        message.clone(),
+        message,
         generation,
         summary,
     ) else {
@@ -1399,13 +1569,7 @@ pub(crate) fn finish_tool_operation(
     };
     let _ = app.emit(
         "control-scan-completed",
-        ControlScanCompletedEvent {
-            operation_id: operation_id.to_owned(),
-            revision,
-            state,
-            scan_generation: generation,
-            message,
-        },
+        ControlScanCompletedEvent::from_operation(operation, revision),
     );
 }
 
@@ -1602,10 +1766,24 @@ struct ControlScanProgressEvent {
 #[serde(rename_all = "camelCase")]
 struct ControlScanCompletedEvent {
     operation_id: String,
+    kind: String,
     revision: u64,
     state: ControlOperationState,
     scan_generation: Option<u64>,
     message: String,
+}
+
+impl ControlScanCompletedEvent {
+    fn from_operation(operation: ControlOperationStatus, revision: u64) -> Self {
+        Self {
+            operation_id: operation.operation_id,
+            kind: operation.kind,
+            revision,
+            state: operation.state,
+            scan_generation: operation.scan_generation,
+            message: operation.message.unwrap_or_default(),
+        }
+    }
 }
 
 pub(crate) fn record_scan_progress(app: &AppHandle, operation_id: &str, progress: ScanProgress) {
@@ -2220,11 +2398,11 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
             ),
             Err(error) => (ControlOperationState::Failed, error.message(), None, None),
         };
-        let Ok((_, revision)) = task_app.state::<ControlStatusStore>().finish_operation(
+        let Ok((operation, revision)) = task_app.state::<ControlStatusStore>().finish_operation(
             &task_app,
             &task_operation_id,
             state,
-            message.clone(),
+            message,
             scan_generation,
             summary,
         ) else {
@@ -2232,13 +2410,7 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
         };
         let _ = task_app.emit(
             "control-scan-completed",
-            ControlScanCompletedEvent {
-                operation_id: task_operation_id,
-                revision,
-                state,
-                scan_generation,
-                message,
-            },
+            ControlScanCompletedEvent::from_operation(operation, revision),
         );
         drop(completion);
     });
@@ -2762,6 +2934,181 @@ fn saturating_u64(value: u128) -> u64 {
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn completed_event_preserves_job_kind_and_terminal_fields_without_storage_fallback() {
+        for kind in [
+            "fileWorkspace",
+            "indexBuild",
+            "fileIndex",
+            "documentIndex",
+            "cleanupScan",
+            "storageScan",
+        ] {
+            for state in [
+                ControlOperationState::Completed,
+                ControlOperationState::Failed,
+                ControlOperationState::Cancelled,
+            ] {
+                let generation = (kind == "storageScan"
+                    && state == ControlOperationState::Completed)
+                    .then_some(7);
+                let operation = ControlOperationStatus {
+                    operation_id: "a".repeat(32),
+                    kind: kind.into(),
+                    source: ControlOperationSource::ChatCli,
+                    state,
+                    cancellation_requested: state == ControlOperationState::Cancelled,
+                    message: Some("terminal outcome".into()),
+                    processed_items: Some(3),
+                    processed_bytes: Some(87),
+                    started_at_unix_ms: 1,
+                    finished_at_unix_ms: Some(2),
+                    scan_generation: generation,
+                    summary: None,
+                };
+                let event =
+                    serde_json::to_value(ControlScanCompletedEvent::from_operation(operation, 9))
+                        .unwrap();
+                assert_eq!(event["kind"], kind);
+                assert_eq!(event["operationId"], "a".repeat(32));
+                assert_eq!(event["revision"], 9);
+                assert_eq!(event["state"], serde_json::to_value(state).unwrap());
+                assert_eq!(
+                    event["scanGeneration"],
+                    serde_json::to_value(generation).unwrap()
+                );
+                assert_eq!(event["message"], "terminal outcome");
+                assert!(!event["kind"].is_null());
+                assert_eq!(event["kind"] == "storageScan", kind == "storageScan");
+            }
+        }
+    }
+
+    #[test]
+    fn file_workspace_binding_rejects_aba_config_changes_and_cleanup_regrant() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("a")).unwrap();
+        std::fs::create_dir(root.join("b")).unwrap();
+        let store = ControlStatusStore::default();
+        let mut original = PermissionPreferences::default();
+        original.scan = Some(ScanGrant {
+            root: ApprovedRoot::new(root.join("a").to_str().unwrap()).unwrap(),
+            config: ScanConfig::default(),
+            approved_at_unix_ms: 1,
+        });
+        original.cleanup_approved_at_unix_ms = Some(1);
+        let first = workspace_binding_from_permissions(&store, &original).unwrap();
+        let mut changed = original.clone();
+        changed.scan.as_mut().unwrap().root =
+            ApprovedRoot::new(root.join("b").to_str().unwrap()).unwrap();
+        store
+            .advance_file_workspace_epochs(&original, &changed)
+            .unwrap();
+        store
+            .advance_file_workspace_epochs(&changed, &original)
+            .unwrap();
+        let restored = workspace_binding_from_permissions(&store, &original).unwrap();
+        assert!(!first.same_scope(&restored));
+        changed = original.clone();
+        changed.scan.as_mut().unwrap().config.min_large_file_bytes += 1;
+        store
+            .advance_file_workspace_epochs(&original, &changed)
+            .unwrap();
+        assert!(
+            !restored.same_scope(&workspace_binding_from_permissions(&store, &changed).unwrap())
+        );
+        let before_review = workspace_binding_from_permissions(&store, &changed).unwrap();
+        let mut revoked = changed.clone();
+        revoked.cleanup_approved_at_unix_ms = None;
+        store
+            .advance_file_workspace_epochs(&changed, &revoked)
+            .unwrap();
+        assert!(
+            !before_review.same_review_authority(
+                &workspace_binding_from_permissions(&store, &revoked).unwrap()
+            )
+        );
+        store
+            .advance_file_workspace_epochs(&revoked, &changed)
+            .unwrap();
+        assert!(
+            !before_review.same_review_authority(
+                &workspace_binding_from_permissions(&store, &changed).unwrap()
+            )
+        );
+        let scope_epoch = store.file_workspace_scope_epoch.load(Ordering::Acquire);
+        let cleanup_epoch = store.file_workspace_cleanup_epoch.load(Ordering::Acquire);
+        let mut harmless = changed.clone();
+        harmless.inspection_allowed = !harmless.inspection_allowed;
+        harmless.scan.as_mut().unwrap().approved_at_unix_ms += 1;
+        harmless.cleanup_approved_at_unix_ms = Some(2);
+        store
+            .advance_file_workspace_epochs(&changed, &harmless)
+            .unwrap();
+        assert_eq!(
+            store.file_workspace_scope_epoch.load(Ordering::Acquire),
+            scope_epoch
+        );
+        assert_eq!(
+            store.file_workspace_cleanup_epoch.load(Ordering::Acquire),
+            cleanup_epoch
+        );
+        assert!(
+            workspace_binding_from_permissions(&store, &PermissionPreferences::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn file_workspace_jobs_keep_external_ownership_and_owner_cancellation_after_revocation() {
+        let binding = FileWorkspaceBinding {
+            root: PathBuf::from("app-selected"),
+            scope_epoch: 2,
+            cleanup_epoch: 3,
+            cleanup_allowed: true,
+        };
+        let authority = OperationAuthority {
+            actor: OperationActor::External,
+            session_root: None,
+            permission: OperationPermission::FileWorkspace {
+                binding: binding.clone(),
+                review: true,
+            },
+        };
+        assert_eq!(
+            operation_bound_root(&authority),
+            Some(binding.root.as_path())
+        );
+        assert!(operation_authorized(
+            &authority,
+            &OperationActor::External,
+            true,
+            false
+        ));
+        assert!(!operation_authorized(
+            &authority,
+            &OperationActor::Native("known-session".into()),
+            true,
+            false
+        ));
+        assert!(!operation_authorized(
+            &authority,
+            &OperationActor::External,
+            false,
+            false
+        ));
+        assert!(operation_authorized(
+            &authority,
+            &OperationActor::External,
+            false,
+            true
+        ));
+        assert!(external_operation_visible(
+            &authority,
+            ControlOperationSource::ChatCli
+        ));
+    }
 
     #[test]
     fn error_text_is_bounded_by_characters() {

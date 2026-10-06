@@ -8,7 +8,7 @@ import {
   LoaderCircle,
   MessageSquarePlus,
   RefreshCw,
-  Send,
+  ArrowUp,
   Settings2,
   ShieldCheck,
   Square,
@@ -31,9 +31,9 @@ import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../component
 import { AssistantFileCard } from "../components/AssistantFileCard";
 import { AssistantAppToolCard, appToolTitles, appToolStatusKeys, type AppToolReviewCompletion } from "../components/AssistantAppToolCard";
 import { AssistantApplicationConfirmation } from "../components/AssistantApplicationConfirmation";
-import { AssistantModelPicker } from "../components/AssistantModelPicker";
+import { AssistantComposerControls } from "../components/AssistantComposerControls";
 import { useAssistantModelPreference } from "../hooks/useAssistantModelPreference";
-import { assistantModelRequestValue, assistantModelSelection, assistantReasoningStatus } from "../lib/assistantModelPreference";
+import { assistantModelReady, assistantModelRequestValue, assistantModelSelection, assistantReasoningStatus } from "../lib/assistantModelPreference";
 import { applicationTrashQuestion, humanTrashDecision, solePendingTrash, namedTrashRequest, workspaceReviewMatches, canAutomaticallyTrashFiles } from "../lib/assistantConfirmation";
 import { confirmApplicationTrash, confirmApplicationDataTrash, dismissApplicationPlan } from "../lib/applicationBridge";
 import "./AssistantView.css";
@@ -191,7 +191,7 @@ export function AssistantView({
     () => providers.find((candidate) => candidate.provider === selectedProviderKind) ?? null,
     [providers, selectedProviderKind],
   );
-  const providerModelReady = assistantModelSelection(provider) !== "required" || Boolean(selectedModel);
+  const providerModelReady = assistantModelReady(provider, selectedModel);
   const reasoning = assistantReasoningStatus(provider, selectedModel, selectedReasoningEffort);
   const ready = Boolean(
     activeSession
@@ -1180,26 +1180,25 @@ export function AssistantView({
             onChange={(event) => setDraft(event.currentTarget.value)}
             onKeyDown={handleComposerKeyDown}
           />
-          {sending ? (
-            <button type="button" aria-label={t("AI 응답 취소")} disabled={cancelling} onClick={() => void stopAssistant()}>
-              <Square size={16} aria-hidden="true" />
-            </button>
-          ) : (
-            <button type="submit" aria-label={t("질문 보내기")} disabled={(!ready && !canAnswerTrash) || !draft.trim()}>
-              <Send size={18} aria-hidden="true" />
-            </button>
-          )}
+          <div className="assistant-composer__toolbar">
+            <AssistantComposerControls provider={provider} value={selectedModel} onChange={changeModel}
+              reasoningEffort={selectedReasoningEffort}
+              onReasoningEffortChange={value => modelPreference.setReasoningEffort(selectedProviderKind, selectedModel, value)}
+              busy={checkingProviders || sending || sessionBusy || Boolean(provider?.busy)} />
+            {sending ? (
+              <button className="assistant-composer__send" type="button" aria-label={t("AI 응답 취소")} disabled={cancelling} onClick={() => void stopAssistant()}>
+                <Square size={18} aria-hidden="true" />
+              </button>
+            ) : (
+              <button className="assistant-composer__send" type="submit" aria-label={t("질문 보내기")} disabled={(!ready && !canAnswerTrash) || !draft.trim()}>
+                <ArrowUp size={22} aria-hidden="true" />
+              </button>
+            )}
+          </div>
         </form>
-        <AssistantModelPicker provider={provider} value={selectedModel} onChange={changeModel}
-          reasoningEffort={selectedReasoningEffort}
-          onReasoningEffortChange={value => modelPreference.setReasoningEffort(selectedProviderKind, selectedModel, value)}
-          busy={checkingProviders || sending || sessionBusy || Boolean(provider?.busy)} />
         {modelPreference.storageError ? <p className="assistant-model-storage-error" role="alert">
           {t("모델 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 모델을 사용합니다.")}
         </p> : null}
-        <p className="assistant-composer-note">{t(controlSettings.status.chatTrashWithoutConfirmation ? "앱이 조회하고 AI가 분석합니다. 명확한 삭제 요청은 설정한 권한으로 처리합니다." : "앱이 조회하고 AI가 분석합니다. 실행은 별도 확인합니다.")}
-          <button type="button" onClick={() => setConnectionOpen(true)}>{t("전송 범위")}</button>
-        </p>
         </div>
       </section>
       <dialog className="assistant-connection-dialog" ref={connectionDialog} aria-labelledby="assistant-connection-title"

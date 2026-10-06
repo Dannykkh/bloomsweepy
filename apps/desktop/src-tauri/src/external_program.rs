@@ -64,10 +64,10 @@ pub(crate) fn find_external_programs(executable_name: &str) -> Vec<ExternalProgr
     let mut directories = directories;
     #[cfg(windows)]
     append_windows_cli_directories(&mut directories);
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let mut directories = directories;
-    #[cfg(target_os = "macos")]
-    append_macos_cli_directories(&mut directories);
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    append_unix_cli_directories(&mut directories, env::var_os("HOME").map(PathBuf::from));
 
     programs_in_directories(executable_name, &directories)
 }
@@ -131,21 +131,27 @@ fn programs_in_directories(name: &str, directories: &[PathBuf]) -> Vec<ExternalP
     programs
 }
 
-#[cfg(target_os = "macos")]
-fn append_macos_cli_directories(directories: &mut Vec<PathBuf>) {
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn append_unix_cli_directories(directories: &mut Vec<PathBuf>, home: Option<PathBuf>) {
     let mut append = |directory: PathBuf| {
         if directory.is_absolute() && !directories.iter().any(|candidate| candidate == &directory) {
             directories.push(directory);
         }
     };
 
-    append(PathBuf::from("/opt/homebrew/bin"));
-    append(PathBuf::from("/usr/local/bin"));
-    if let Some(home) = env::var_os("HOME") {
-        let home = PathBuf::from(home);
-        append(home.join(".local").join("bin"));
-        append(home.join(".npm-global").join("bin"));
-        append(home.join(".volta").join("bin"));
+    #[cfg(target_os = "macos")]
+    {
+        append(PathBuf::from("/opt/homebrew/bin"));
+        append(PathBuf::from("/usr/local/bin"));
+    }
+    if let Some(home) = home {
+        #[cfg(target_os = "macos")]
+        {
+            append(home.join(".local").join("bin"));
+            append(home.join(".npm-global").join("bin"));
+            append(home.join(".volta").join("bin"));
+        }
+        append(home.join(".grok").join("bin"));
     }
 }
 
@@ -206,6 +212,42 @@ mod tests {
         assert_eq!(programs[0].path(), first.path().join(name));
         assert_eq!(programs[1].path(), second.path().join(name));
         assert!(find_external_programs("../probe").is_empty());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn finds_grok_in_official_unix_install_directory_without_shell_path() {
+        let home = tempdir().unwrap();
+        let binary_directory = home.path().join(".grok").join("bin");
+        fs::create_dir_all(&binary_directory).unwrap();
+        let executable = binary_directory.join("grok");
+        fs::write(&executable, b"fixture").unwrap();
+
+        let mut directories = Vec::new();
+        append_unix_cli_directories(&mut directories, Some(home.path().to_path_buf()));
+        assert!(
+            programs_in_directories("grok", &directories)
+                .iter()
+                .any(|program| program.path() == executable)
+        );
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn official_unix_install_directory_preserves_path_order_and_absolute_boundary() {
+        let home = tempdir().unwrap();
+        let existing = home.path().join("existing-bin");
+        let grok = home.path().join(".grok").join("bin");
+        let mut directories = vec![existing.clone(), grok.clone()];
+        append_unix_cli_directories(&mut directories, Some(home.path().to_path_buf()));
+        assert_eq!(directories[0], existing);
+        assert_eq!(directories[1], grok);
+        assert_eq!(directories.iter().filter(|path| **path == grok).count(), 1);
+
+        let mut directories = Vec::new();
+        append_unix_cli_directories(&mut directories, Some(PathBuf::from("relative-home")));
+        assert!(directories.iter().all(|path| path.is_absolute()));
+        assert!(!directories.iter().any(|path| path.ends_with(".grok/bin")));
     }
 
     #[cfg(windows)]

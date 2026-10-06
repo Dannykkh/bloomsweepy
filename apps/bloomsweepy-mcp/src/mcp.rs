@@ -22,7 +22,7 @@ pub struct BroomSweepyMcp;
 impl BroomSweepyMcp {
     #[tool(
         name = "app_capabilities",
-        description = "Read BroomSweepy's canonical app capability contract, examples, permissions and limits. Use app_action for app-owned lookups and follow-up queries; provider shell/file tools must not replace the app."
+        description = "Read BroomSweepy's complete bounded capability index. Before using a capability, call app_action with the index's capability_details request to read its exact examples, permissions and limits. Provider shell/file tools must not replace the app."
     )]
     async fn app_capabilities(&self) -> Result<Json<Value>, Json<McpToolError>> {
         bridge_app_action(AppToolRequest::Capabilities {}).await
@@ -30,7 +30,7 @@ impl BroomSweepyMcp {
 
     #[tool(
         name = "app_action",
-        description = "Invoke a typed BroomSweepy app capability from app_capabilities and analyze the actual bounded app result. Follow up with queries if needed. No paths, shell, approval or final execution are accepted. Review-required and permission-required results require local user action."
+        description = "Invoke a typed BroomSweepy capability after reading capability_details. Files use the app-selected root and app-issued IDs, never paths, shell, approval or final execution. Running allows only bounded status observation or cooperative cancellation of the exact returned operationId; no new work or busy loop. Review/permission/failure states stop new actions."
     )]
     async fn app_action(
         &self,
@@ -116,7 +116,7 @@ impl BroomSweepyMcp {
 
     #[tool(
         name = "operation_status",
-        description = "Read the progress or bounded result summary for a BroomSweepy operation ID."
+        description = "Observe the exact operationId returned by BroomSweepy. Bound and space observations; never busy-loop or infer completion from an ID. After confirmed file-workspace completion, request file_workspace/status for actual rows."
     )]
     async fn operation_status(
         &self,
@@ -196,7 +196,7 @@ impl BroomSweepyMcp {
 #[tool_handler(
     name = "bloomsweepy",
     version = "1.7.0",
-    instructions = "Operate the running BroomSweepy app through its canonical app_capabilities and app_action contract. All actual lookups, searches and measurements come from the app engines. Read bounded app results, request follow-up queries and analyze only observed evidence. Provider shell/file tools must not substitute for BroomSweepy. Reviews stop at local final approval; no approval or direct execution tool is exposed. Legacy tools remain compatible."
+    instructions = "Operate the running app through app_capabilities and app_action. Read capability_details for the exact discovered ID before use or interpretation. Files.workspace supports app-selected-root inspection, navigation, selection and review with current app-issued IDs, never raw paths. External heavy actions return running + operationId. Only that exact ID may be observed through operation_status or cooperatively cancelled; allow at most four spaced status observations per turn, no busy loop or unrelated new work. If still running, report pending. After confirmed completion, request file_workspace/status for actual rows. Native in-app chat instead uses synchronous file actions and one analysis-only terminal response, action:null with no polling. Partial, stale and unknown results are not complete or zero; an ID is not completion. Provider shell/file tools must not substitute for the app. Permission-required, review-required, unsupported and failed states stop new actions. Final approval remains local; no approval, automatic-trash permission or direct execution tool is exposed. Legacy tools remain compatible."
 )]
 impl ServerHandler for BroomSweepyMcp {}
 
@@ -306,7 +306,9 @@ struct DocumentSearchArguments {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct OperationArguments {
-    #[schemars(description = "The exact operationId returned by start_storage_scan.")]
+    #[schemars(
+        description = "The exact operationId returned by a BroomSweepy scan or file-workspace action."
+    )]
     operation_id: String,
 }
 
@@ -448,6 +450,13 @@ mod tests {
             let request =
                 parse_app_action(item["requestExample"].clone()).expect("typed app action");
             assert_eq!(request.capability_id(), item["id"]);
+            if let Some(examples) = item["requestExamples"].as_array() {
+                for example in examples {
+                    let request =
+                        parse_app_action(example.clone()).expect("typed operation example");
+                    assert_eq!(request.capability_id(), item["id"]);
+                }
+            }
         }
         assert!(
             parse_app_action(serde_json::json!({"kind":"performance", "maxResults":25})).is_err()
@@ -456,6 +465,95 @@ mod tests {
             parse_app_action(serde_json::json!({"kind":"storage_scan", "path":"/private"}))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn bounded_discovery_links_to_complete_details_through_the_existing_app_action() {
+        let index = bloomsweepy_control::discovery_index();
+        let full = bloomsweepy_control::capability_catalog();
+        let entries = index["capabilities"].as_array().unwrap();
+        assert_eq!(
+            entries.len(),
+            full["capabilities"].as_array().unwrap().len()
+        );
+        assert_eq!(index["detailsRequired"], true);
+        let template = index["detailRequestExample"].clone();
+        for entry in entries {
+            let mut detail_request = template.clone();
+            detail_request["capabilityId"] = entry["id"].clone();
+            let request = parse_app_action(detail_request).unwrap();
+            assert_eq!(request.capability_id(), "capabilities.details");
+            let details =
+                bloomsweepy_control::capability_details(entry["id"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                details["capability"]["requestExample"],
+                entry["requestExample"]
+            );
+            assert_eq!(details["capability"]["finalExecution"], false);
+            assert!(details["capability"]["limits"].as_str().is_some());
+            assert!(
+                details["resultSemantics"]["partialAndUnknown"]
+                    .as_str()
+                    .is_some()
+            );
+            parse_app_action(entry["requestExample"].clone()).unwrap();
+        }
+        assert!(
+            parse_app_action(serde_json::json!({
+                "kind":"capability_details", "capabilityId":"unknown.capability"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn file_workspace_parser_never_accepts_paths_approval_or_execution() {
+        for request in [
+            serde_json::json!({"kind":"file_workspace", "path":"/private", "operation":{"kind":"status"}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"scan", "root":"/private"}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"review_named", "name":"folder/file"}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"review_named", "name":"file", "approve":true}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"execute"}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"status", "automatic":true}}),
+            serde_json::json!({"kind":"file_workspace", "operation":{"kind":"status"}, "permission":true}),
+            serde_json::json!({"kind":"capability_details", "capabilityId":"files.workspace", "command":"ls"}),
+        ] {
+            assert!(parse_app_action(request).is_err());
+        }
+        assert!(
+            parse_app_action(serde_json::json!({
+                "kind":"file_workspace", "operation":{"kind":"search", "query":"a".repeat(241)}
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn mcp_contract_allows_only_bounded_exact_id_observation_while_running() {
+        let info = BroomSweepyMcp.get_info();
+        let instructions = info.instructions.as_deref().unwrap();
+        assert!(
+            instructions.contains("Only that exact ID may be observed through operation_status")
+        );
+        assert!(instructions.contains("at most four spaced status observations per turn"));
+        assert!(instructions.contains("no busy loop or unrelated new work"));
+        assert!(instructions.contains("After confirmed completion, request file_workspace/status"));
+        assert!(instructions.contains("action:null with no polling"));
+        assert!(
+            instructions
+                .contains("no approval, automatic-trash permission or direct execution tool")
+        );
+        for tool in BroomSweepyMcp::tool_router().list_all() {
+            let description = tool.description.as_deref().unwrap_or_default();
+            if tool.name == "app_action" {
+                assert!(description.contains("Running allows only bounded status observation"));
+                assert!(!description.contains("running/failure states allow explanation only"));
+            }
+            if tool.name == "operation_status" {
+                assert!(description.contains("exact operationId"));
+                assert!(description.contains("never busy-loop"));
+            }
+        }
     }
 
     #[test]

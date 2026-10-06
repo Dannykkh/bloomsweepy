@@ -9,6 +9,9 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[path = "assistant_model_catalog.rs"]
+mod model_catalog;
+
 const MAX_MESSAGE_CHARS: usize = 2_000;
 const MAX_HISTORY_TURNS: usize = 20;
 const MAX_HISTORY_CHARS: usize = 24_000;
@@ -78,6 +81,35 @@ fn app_result_message(result: &bloomsweepy_control::AppToolResult) -> String {
     }
 }
 
+const FINAL_ANALYSIS_CONTRACT: &str = "\n[Analysis-only final round]\nThe app has returned a waiting, permission, review or failure state. Explain the ACTUAL returned result and the next user action. Return action:null. No further lookup, polling, approval or execution is allowed in this round. A started operation is not completed; a prepared review is not deletion.\n";
+
+fn final_analysis_message(envelope: super::assistant_tools::AssistantEnvelope) -> Option<String> {
+    envelope.action.is_none().then_some(envelope.message)
+}
+
+fn append_investigation_context(prompt: &mut String, trace: &Investigation, analysis_only: bool) {
+    prompt.push_str(&trace.prompt_suffix());
+    if analysis_only {
+        prompt.push_str(FINAL_ANALYSIS_CONTRACT);
+    }
+}
+
+fn action_fingerprint(action: &super::assistant_tools::AssistantAction) -> Result<String, String> {
+    use super::assistant_tools::AssistantAction;
+    // Legacy file envelopes and the common typed request are one operation,
+    // not two independent requests that can bypass the investigation guard.
+    match action {
+        AssistantAction::App { operation } => serde_json::to_string(operation),
+        AssistantAction::Files { operation } => {
+            serde_json::to_string(&bloomsweepy_control::AppToolRequest::FileWorkspace {
+                operation: operation.clone(),
+            })
+        }
+        _ => serde_json::to_string(action),
+    }
+    .map_err(|error| error.to_string())
+}
+
 #[derive(Default)]
 pub(crate) struct AssistantProviderState {
     running: AtomicBool,
@@ -113,6 +145,10 @@ pub(crate) struct AssistantProviderStatus {
     version: Option<String>,
     #[serde(skip)]
     passed_launch_checks: bool,
+    #[serde(skip)]
+    cli_reasoning_efforts: Vec<String>,
+    #[serde(skip)]
+    claude_catalog_supported: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -171,9 +207,10 @@ impl AssistantResponseLanguage {
 impl AssistantProviderKind {
     fn model_selection(self) -> AssistantModelSelection {
         match self {
-            Self::Codex | Self::ClaudeCode => AssistantModelSelection::Optional,
+            Self::Codex | Self::ClaudeCode | Self::Grok | Self::Antigravity => {
+                AssistantModelSelection::Optional
+            }
             Self::Ollama => AssistantModelSelection::Required,
-            Self::Grok | Self::Antigravity => AssistantModelSelection::Unsupported,
         }
     }
 
@@ -504,6 +541,14 @@ async fn ask_assistant_inner(
     if request.model.is_some() && status.model_selection == AssistantModelSelection::Unsupported {
         return Err("이 CLI 설치본에서는 모델 선택 지원을 확인하지 못했습니다. CLI 기본값을 사용하거나 CLI를 업데이트해 주세요".to_owned());
     }
+    if provider != AssistantProviderKind::Codex
+        && request
+            .reasoning_effort
+            .as_ref()
+            .is_some_and(|effort| !status.cli_reasoning_efforts.contains(effort))
+    {
+        return Err("이 CLI 설치본에서는 선택한 추론 강도 지원을 확인하지 못했습니다. 기본 강도를 사용하거나 CLI를 업데이트해 주세요".to_owned());
+    }
     let program = program.ok_or_else(|| "AI CLI 실행 경로를 확인하지 못했습니다".to_owned())?;
     let request_id = state.next_request_id.fetch_add(1, Ordering::AcqRel);
     let workspace = app
@@ -544,6 +589,7 @@ async fn ask_assistant_inner(
     let mut tool_action = None;
     let mut app_tool_results = Vec::new();
     let mut analysis_complete = false;
+    let mut analysis_only = false;
     let mut message = "앱 조회가 아직 완료되지 않았습니다.".to_owned();
     for round in 0..=MAX_INVESTIGATION_ACTIONS {
         if state.cancellation.load(Ordering::Acquire) {
@@ -575,7 +621,7 @@ async fn ask_assistant_inner(
             } else {
                 prompt.push_str("\nThis is a Docker session. Files/empty-folder actions are unavailable; use app actions only.\n");
             }
-            prompt.push_str(&investigation.prompt_suffix());
+            append_investigation_context(&mut prompt, &investigation, analysis_only);
         }
         let run_program = program.clone();
         let run_workspace = workspace.clone();
@@ -583,7 +629,7 @@ async fn ask_assistant_inner(
         let run_reasoning_effort = response_reasoning_effort.clone();
         let cancellation = std::sync::Arc::clone(&state.cancellation);
         emit_progress(&app, &request, "analyzing", round, None);
-        let raw = tauri::async_runtime::spawn_blocking(move || {
+        let run = tauri::async_runtime::spawn_blocking(move || {
             run_provider_budget(
                 provider,
                 run_program,
@@ -597,19 +643,56 @@ async fn ask_assistant_inner(
             )
         })
         .await
-        .map_err(|error| format!("{} 실행 작업이 중단됐습니다: {error}", provider.label()))??;
+        .map_err(|error| format!("{} 실행 작업이 중단됐습니다: {error}", provider.label()))
+        .and_then(|result| result);
+        let raw = match run {
+            Ok(raw) => raw,
+            Err(error) => {
+                if state.cancellation.load(Ordering::Acquire) || app_tool_results.is_empty() {
+                    return Err(error);
+                }
+                // Preserve actual app evidence and prepared reviews when only
+                // the follow-up model call fails. Never replay the app action.
+                if !analysis_only {
+                    message = "앱의 실제 조회 결과는 아래에 유지했습니다. AI의 추가 분석을 완료하지 못했습니다. 같은 작업을 자동으로 재실행하지 않습니다.".to_owned();
+                }
+                break;
+            }
+        };
         if tool_scope.is_none() {
             message = raw;
             analysis_complete = true;
             break;
         }
-        let envelope = super::assistant_tools::parse_envelope(&raw)?;
+        let envelope = match super::assistant_tools::parse_envelope(&raw) {
+            Ok(envelope) => envelope,
+            Err(error) if app_tool_results.is_empty() => return Err(error),
+            Err(_) => {
+                if !analysis_only {
+                    message = "앱의 실제 조회 결과는 아래에 유지했습니다. AI 분석 응답 형식을 확인하지 못해 추가 작업을 실행하지 않았습니다.".to_owned();
+                }
+                break;
+            }
+        };
+        if analysis_only {
+            if let Some(analysis) = final_analysis_message(envelope) {
+                message = analysis;
+                analysis_complete = true;
+            }
+            // The model cannot turn a waiting/failure result into another
+            // dispatch. Keep the app's own status message on invalid actions.
+            break;
+        }
         let Some(action) = envelope.action else {
             message = envelope.message;
             analysis_complete = true;
             break;
         };
-        let fingerprint = serde_json::to_string(&action).map_err(|error| error.to_string())?;
+        if Instant::now() >= deadline {
+            message = "모델 조사 시간 한도에 도달해 새 앱 작업을 시작하지 않았습니다. 아래 실제 결과를 확인해 주세요.".to_owned();
+            break;
+        }
+        let fingerprint = action_fingerprint(&action)?;
         if let Err(reason) = investigation.admit(fingerprint) {
             message = reason;
             break;
@@ -626,7 +709,7 @@ async fn ask_assistant_inner(
                     Some(operation.capability_id()),
                 );
                 tool_action = Some("app");
-                match super::app_tools::execute(
+                let result = match super::app_tools::execute(
                     &app,
                     scope,
                     &operation,
@@ -644,89 +727,95 @@ async fn ask_assistant_inner(
                         bloomsweepy_control::AppToolStatus::Failed,
                         serde_json::json!({"reason":"앱이 요청을 완료하지 못했습니다. 범위·권한·최신 목록을 확인해 주세요","performed":false}),
                     ),
+                };
+                if matches!(
+                    operation,
+                    bloomsweepy_control::AppToolRequest::FileWorkspace { .. }
+                ) {
+                    file_workspace = super::assistant_files::get_assistant_file_workspace(
+                        app.state(),
+                        session_id.to_owned(),
+                    )?;
+                    empty_workspace = None;
+                    tool_action = Some("files");
                 }
+                result
             }
             super::assistant_tools::AssistantAction::Files { operation } => {
                 emit_progress(&app, &request, "querying", round, Some("files.workspace"));
-                if request.scope_kind != AssistantScopeKind::Folder {
-                    return Err("폴더 대화에서만 파일을 조회할 수 있습니다".to_owned());
+                // The old native envelope remains compatible, but its work
+                // now goes through the exact same typed dispatcher as MCP.
+                let result = super::app_tools::execute(
+                    &app, scope,
+                    &bloomsweepy_control::AppToolRequest::FileWorkspace { operation },
+                    std::sync::Arc::clone(&state.cancellation),
+                ).await.unwrap_or_else(|_| bloomsweepy_control::AppToolResult::with_status(
+                    "files.workspace", bloomsweepy_control::AppToolStatus::Failed,
+                    serde_json::json!({"reason":"파일 조회를 완료하지 못했습니다. 범위·최신 목록을 확인해 주세요","performed":false}),
+                ));
+                if state.cancellation.load(Ordering::Acquire) {
+                    return Err("대화 작업이 취소되었습니다".to_owned());
                 }
-                app.state::<super::assistant_tools::AssistantToolsState>()
-                    .forget(session_id)?;
-                let cancellation = std::sync::Arc::clone(&state.cancellation);
-                let view =
-                    if let super::assistant_files::FileAction::ReviewNamed { name } = operation {
-                        super::assistant_files::review_named(
-                            app.clone(),
-                            session_id.to_owned(),
-                            name,
-                            cancellation,
-                        )
-                        .await?
-                    } else {
-                        super::assistant_files::dispatch(
-                            app.clone(),
-                            session_id.to_owned(),
-                            operation,
-                            cancellation,
-                        )
-                        .await?
-                    };
-                let review =
-                    serde_json::to_value(&view).map_err(|error| error.to_string())?["plan"]
-                        .is_object();
-                let context = app
-                    .state::<super::assistant_files::AssistantFilesState>()
-                    .prompt_context(session_id)?;
-                file_workspace = Some(view);
+                file_workspace = super::assistant_files::get_assistant_file_workspace(
+                    app.state(),
+                    session_id.to_owned(),
+                )?;
                 empty_workspace = None;
                 tool_action = Some("files");
-                bloomsweepy_control::AppToolResult::with_status(
-                    "files.workspace",
-                    if review {
-                        bloomsweepy_control::AppToolStatus::ReviewRequired
-                    } else {
-                        bloomsweepy_control::AppToolStatus::Completed
-                    },
-                    serde_json::json!({"workspace":serde_json::from_str::<serde_json::Value>(&context).map_err(|error|error.to_string())?,
-                        "reviewPrepared":review,"deleted":false}),
-                )
+                result
             }
             action => {
                 emit_progress(&app, &request, "querying", round, Some("empty.workspace"));
-                if request.scope_kind != AssistantScopeKind::Folder {
-                    return Err("폴더 대화에서만 빈 폴더를 조회할 수 있습니다".to_owned());
-                }
                 tool_action = Some(match &action {
                     super::assistant_tools::AssistantAction::ScanEmptyDirectories {} => "scan",
                     super::assistant_tools::AssistantAction::ListEmptyDirectories { .. } => "list",
                     _ => "selection",
                 });
-                let view = super::assistant_tools::dispatch(
-                    app.clone(),
-                    session_id.to_owned(),
-                    action,
-                    std::sync::Arc::clone(&state.cancellation),
-                )
-                .await?;
-                let review =
-                    serde_json::to_value(&view).map_err(|error| error.to_string())?["plan"]
-                        .is_object();
-                let context = app
-                    .state::<super::assistant_tools::AssistantToolsState>()
-                    .prompt_context(session_id)?;
-                empty_workspace = Some(view);
-                file_workspace = None;
-                bloomsweepy_control::AppToolResult::with_status(
-                    "empty.workspace",
-                    if review {
-                        bloomsweepy_control::AppToolStatus::ReviewRequired
-                    } else {
-                        bloomsweepy_control::AppToolStatus::Completed
-                    },
-                    serde_json::json!({"workspace":serde_json::from_str::<serde_json::Value>(&context).map_err(|error|error.to_string())?,
-                        "reviewPrepared":review,"deleted":false}),
-                )
+                let prepared = async {
+                    if request.scope_kind != AssistantScopeKind::Folder {
+                        return Err("폴더 대화에서만 빈 폴더를 조회할 수 있습니다".to_owned());
+                    }
+                    let view = super::assistant_tools::dispatch(
+                        app.clone(),
+                        session_id.to_owned(),
+                        action,
+                        std::sync::Arc::clone(&state.cancellation),
+                    )
+                    .await?;
+                    let context = app
+                        .state::<super::assistant_tools::AssistantToolsState>()
+                        .prompt_context(session_id)?;
+                    let context = serde_json::from_str::<serde_json::Value>(&context)
+                        .map_err(|error| error.to_string())?;
+                    let review =
+                        serde_json::to_value(&view).map_err(|error| error.to_string())?["plan"]
+                            .is_object();
+                    Ok::<_, String>((view, context, review))
+                }
+                .await;
+                match prepared {
+                    Ok((view, context, review)) => {
+                        empty_workspace = Some(view);
+                        file_workspace = None;
+                        bloomsweepy_control::AppToolResult::with_status(
+                            "empty.workspace",
+                            if review {
+                                bloomsweepy_control::AppToolStatus::ReviewRequired
+                            } else {
+                                bloomsweepy_control::AppToolStatus::Completed
+                            },
+                            serde_json::json!({"workspace":context,"reviewPrepared":review,"deleted":false}),
+                        )
+                    }
+                    Err(_) if state.cancellation.load(Ordering::Acquire) => {
+                        return Err("대화 작업이 취소되었습니다".to_owned());
+                    }
+                    Err(_) => bloomsweepy_control::AppToolResult::with_status(
+                        "empty.workspace",
+                        bloomsweepy_control::AppToolStatus::Failed,
+                        serde_json::json!({"reason":"빈 폴더 조회를 완료하지 못했습니다. 범위·권한·최신 목록을 확인해 주세요","performed":false}),
+                    ),
+                }
             }
         };
         let must_stop = result.status != bloomsweepy_control::AppToolStatus::Completed;
@@ -738,7 +827,7 @@ async fn ask_assistant_inner(
             break;
         }
         if must_stop {
-            break;
+            analysis_only = true;
         }
     }
     Ok(AssistantChatResponse {
@@ -836,10 +925,13 @@ fn validate_model_selection(
 }
 
 fn valid_model_id(model: &str) -> bool {
+    // Claude's CLI returns a literal long-context suffix; no arbitrary brackets.
+    let base = model.strip_suffix("[1m]").unwrap_or(model);
     !model.is_empty()
+        && !base.is_empty()
         && model.len() <= MAX_MODEL_NAME_CHARS
-        && model.as_bytes()[0].is_ascii_alphanumeric()
-        && model
+        && base.as_bytes()[0].is_ascii_alphanumeric()
+        && base
             .bytes()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.' | b':' | b'/'))
 }
@@ -856,13 +948,10 @@ fn validate_reasoning_selection(
     let Some(effort) = reasoning_effort else {
         return Ok(());
     };
-    if provider != AssistantProviderKind::Codex {
-        return Err("현재 추론 강도 선택은 Codex에서만 지원합니다".to_owned());
-    }
     if model.is_none() {
-        return Err("추론 강도를 지정하려면 먼저 Codex 모델을 선택해 주세요".to_owned());
+        return Err("추론 강도를 지정하려면 먼저 모델을 선택해 주세요".to_owned());
     }
-    if !valid_reasoning_effort(effort) {
+    if !provider_reasoning_efforts(provider).contains(&effort) {
         return Err(
             "추론 강도가 올바르지 않습니다. 선택한 모델의 지원 목록에서 골라 주세요".to_owned(),
         );
@@ -870,6 +959,16 @@ fn validate_reasoning_selection(
     // Model-specific support is supplied by the bounded catalog in the UI.
     // Do not re-query it per turn: the CLI/server makes the final compatibility check.
     Ok(())
+}
+
+fn provider_reasoning_efforts(provider: AssistantProviderKind) -> &'static [&'static str] {
+    match provider {
+        AssistantProviderKind::Codex => &REASONING_EFFORTS,
+        AssistantProviderKind::ClaudeCode => &["low", "medium", "high", "xhigh", "max"],
+        AssistantProviderKind::Grok => &["low", "medium", "high", "xhigh"],
+        AssistantProviderKind::Antigravity => &["low", "medium", "high"],
+        AssistantProviderKind::Ollama => &[],
+    }
 }
 
 fn build_prompt(
@@ -1029,6 +1128,9 @@ fn run_provider_budget(
                 .arg("dontAsk")
                 .arg("--tools")
                 .arg("")
+                // Empty --tools is None in Grok, not a deny-all allowlist.
+                .arg("--deny")
+                .arg("*")
                 .arg("--no-subagents")
                 .arg("--disable-web-search")
                 .arg("--cwd")
@@ -1066,6 +1168,12 @@ fn run_provider_budget(
     }
     if provider != AssistantProviderKind::Codex {
         configure_selected_model(&mut command, provider, model.as_deref())?;
+        configure_selected_effort(
+            &mut command,
+            provider,
+            model.as_deref(),
+            reasoning_effort.as_deref(),
+        )?;
     }
     // Anonymous file-backed stdin cannot block on a full pipe when a CLI stops
     // reading. No persistent prompt file, writer thread or cancellation race.
@@ -1304,7 +1412,7 @@ fn provider_failure_message_for_selection(
 ) -> String {
     let lower = stderr.to_ascii_lowercase();
     if reasoning_effort.is_some()
-        && lower.contains("reasoning")
+        && (lower.contains("reasoning") || lower.contains("effort"))
         && [
             "not supported",
             "unsupported",
@@ -1328,9 +1436,10 @@ fn provider_failure_message_for_selection(
 
 fn provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
     let (mut status, program) = resolve_provider(provider, busy);
-    // Catalog discovery belongs to the status refresh, not each chat round or
-    // execution preflight. A failed catalog never invalidates a healthy CLI.
-    if status.available
+    // Codex/Claude catalog discovery belongs to refresh, not each chat round.
+    // Grok/Agy's readiness probe already includes `models`; reuse that result.
+    // A failed optional catalog never invalidates an otherwise healthy CLI.
+    if status.passed_launch_checks
         && status.model_selection == AssistantModelSelection::Optional
         && let Some(program) = program
     {
@@ -1341,16 +1450,13 @@ fn provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProv
                 status.model_catalog_source = source;
             }
             AssistantProviderKind::ClaudeCode => {
-                status.models = ["sonnet", "opus", "haiku"]
-                    .into_iter()
-                    .map(|alias| AssistantProviderModel {
-                        id: alias.to_owned(),
-                        label: alias.to_owned(),
-                        supported_reasoning_efforts: Vec::new(),
-                        default_reasoning_effort: None,
-                    })
-                    .collect();
-                status.model_catalog_source = AssistantModelCatalogSource::Aliases;
+                let (models, source) = claude_models(&program, &status);
+                status.models = models;
+                status.model_catalog_source = source;
+            }
+            AssistantProviderKind::Grok | AssistantProviderKind::Antigravity => {
+                // `models` was already read by the bounded readiness probe.
+                // Preserve its metadata rather than querying it twice.
             }
             _ => {}
         }
@@ -1382,6 +1488,8 @@ fn empty_provider_status(provider: AssistantProviderKind, busy: bool) -> Assista
         executable_path: None,
         version: None,
         passed_launch_checks: false,
+        cli_reasoning_efforts: Vec::new(),
+        claude_catalog_supported: false,
     }
 }
 
@@ -1531,10 +1639,26 @@ fn configure_selected_model(
     validate_model_selection(provider, model)?;
     if matches!(
         provider,
-        AssistantProviderKind::Codex | AssistantProviderKind::ClaudeCode
+        AssistantProviderKind::Codex
+            | AssistantProviderKind::ClaudeCode
+            | AssistantProviderKind::Grok
+            | AssistantProviderKind::Antigravity
     ) && let Some(model) = model
     {
         command.arg("--model").arg(model);
+    }
+    Ok(())
+}
+
+fn configure_selected_effort(
+    command: &mut std::process::Command,
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+    effort: Option<&str>,
+) -> Result<(), String> {
+    validate_reasoning_selection(provider, model, effort)?;
+    if let Some(effort) = effort {
+        command.arg("--effort").arg(effort);
     }
     Ok(())
 }
@@ -1543,6 +1667,56 @@ fn help_has_option(help: &str, option: &str) -> bool {
     help.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
         .any(|token| token == option)
 }
+
+fn help_has_command(help: &str, command: &str) -> bool {
+    help.split_once("Commands:").is_some_and(|(_, commands)| {
+        commands
+            .lines()
+            .any(|line| line.split_whitespace().next() == Some(command))
+    })
+}
+
+fn cli_reasoning_efforts(provider: AssistantProviderKind, help: &str) -> Vec<String> {
+    let option = "--effort";
+    if !help_has_option(help, option) {
+        return Vec::new();
+    }
+    // Claude advertises concrete choices on the flag's help line. Never send a
+    // new effort to an older installation that only advertises the old choices.
+    let mut lines = help
+        .lines()
+        .skip_while(|line| !help_has_option(line, option));
+    let mut advertised = lines.next().unwrap_or_default().to_owned();
+    for line in lines.take(4) {
+        if line.trim_start().starts_with('-') {
+            break;
+        }
+        advertised.push_str(line);
+    }
+    provider_reasoning_efforts(provider)
+        .iter()
+        .filter(|effort| {
+            provider != AssistantProviderKind::ClaudeCode
+                || advertised
+                    .split(|ch: char| !ch.is_ascii_alphanumeric())
+                    .any(|word| word == **effort)
+        })
+        .map(|value| (*value).to_owned())
+        .collect()
+}
+
+const CLAUDE_CATALOG_EXTRA_ARGS: &[&str] = &[
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-prompts",
+    "none",
+    "--safe-mode",
+    "--system-prompt",
+    "",
+];
 
 fn missing_chat_options(provider: AssistantProviderKind, help: &str) -> Vec<&'static str> {
     let required: Vec<&str> = match provider {
@@ -1562,6 +1736,17 @@ fn missing_chat_options(provider: AssistantProviderKind, help: &str) -> Vec<&'st
             .copied()
             .filter(|arg| arg.starts_with("--"))
             .collect(),
+        AssistantProviderKind::Grok => vec![
+            "--single",
+            "--permission-mode",
+            "--tools",
+            "--deny",
+            "--no-subagents",
+            "--disable-web-search",
+            "--cwd",
+            "--output-format",
+        ],
+        AssistantProviderKind::Antigravity => vec!["--print", "--sandbox"],
         _ => Vec::new(),
     };
     let tokens = help
@@ -1573,14 +1758,15 @@ fn missing_chat_options(provider: AssistantProviderKind, help: &str) -> Vec<&'st
         .collect();
     // Old Claude CLIs may treat unknown subcommands as a prompt. Do not run
     // `auth status` unless the CLI advertises its authentication command group.
-    if provider == AssistantProviderKind::ClaudeCode
-        && !help.split_once("Commands:").is_some_and(|(_, commands)| {
-            commands
-                .lines()
-                .any(|line| line.split_whitespace().next() == Some("auth"))
-        })
-    {
+    if provider == AssistantProviderKind::ClaudeCode && !help_has_command(help, "auth") {
         missing.push("auth status");
+    }
+    if matches!(
+        provider,
+        AssistantProviderKind::Grok | AssistantProviderKind::Antigravity
+    ) && !help_has_command(help, "models")
+    {
+        missing.push("models");
     }
     missing
 }
@@ -1630,7 +1816,10 @@ fn inspect_candidate(
         .map(str::to_owned);
     if matches!(
         provider,
-        AssistantProviderKind::Codex | AssistantProviderKind::ClaudeCode
+        AssistantProviderKind::Codex
+            | AssistantProviderKind::ClaudeCode
+            | AssistantProviderKind::Grok
+            | AssistantProviderKind::Antigravity
     ) {
         let arguments: &[&str] = if provider == AssistantProviderKind::Codex {
             &["exec", "--help"]
@@ -1655,6 +1844,12 @@ fn inspect_candidate(
                     status.model_selection = AssistantModelSelection::Unsupported;
                     status.model_catalog_source = AssistantModelCatalogSource::Unsupported;
                 }
+                status.cli_reasoning_efforts = cli_reasoning_efforts(provider, &output.stdout);
+                status.claude_catalog_supported = provider == AssistantProviderKind::ClaudeCode
+                    && CLAUDE_CATALOG_EXTRA_ARGS
+                        .iter()
+                        .filter(|arg| arg.starts_with("--"))
+                        .all(|option| help_has_option(&output.stdout, option));
             }
             _ => {
                 status.state = AssistantCliState::CheckFailed;
@@ -1700,12 +1895,58 @@ fn inspect_candidate(
         AssistantProviderKind::ClaudeCode => &["auth", "status"],
         _ => &["models"],
     };
-    status.authentication = probe(arguments)
-        .map(|output| authentication_from_output(provider, &output))
+    let auth_output = if matches!(
+        provider,
+        AssistantProviderKind::Grok | AssistantProviderKind::Antigravity
+    ) {
+        status_probe_cancellable_limit(
+            program,
+            arguments,
+            Duration::from_secs(8),
+            cancellation,
+            MAX_MODEL_CATALOG_BYTES,
+        )
+    } else {
+        probe(arguments)
+    };
+    if let Ok(output) = &auth_output
+        && output.success
+    {
+        let models = match provider {
+            AssistantProviderKind::Grok => {
+                model_catalog::parse_grok_models(&output.stdout, &status.cli_reasoning_efforts)
+            }
+            AssistantProviderKind::Antigravity => {
+                model_catalog::parse_agy_models(&output.stdout, &status.cli_reasoning_efforts)
+            }
+            _ => Err(ProbeError::Read),
+        };
+        if let Ok(models) = models
+            && !models.is_empty()
+        {
+            status.models = models;
+            if status.model_selection == AssistantModelSelection::Optional {
+                status.model_catalog_source = AssistantModelCatalogSource::Cli;
+            }
+        }
+    }
+    status.authentication = auth_output
+        .as_ref()
+        .map(|output| authentication_from_output(provider, output))
         .unwrap_or(AssistantAuthentication::Unknown);
+    if provider == AssistantProviderKind::Antigravity
+        && auth_output.as_ref().is_ok_and(|output| output.success)
+        && !status.models.is_empty()
+        && status.authentication == AssistantAuthentication::Unknown
+    {
+        status.state = AssistantCliState::Ready;
+        status.available = true;
+        status.detail = "Antigravity CLI 실행과 모델 목록을 확인했습니다. 로그인 및 계정별 사용 가능 여부는 질문을 보낼 때 확인됩니다".to_owned();
+        return status;
+    }
     (status.state, status.detail) = match status.authentication {
         AssistantAuthentication::Authenticated => (AssistantCliState::Ready, format!("{} CLI 실행과 저장된 로그인 정보를 확인했습니다. 서버의 인증 유효성은 질문을 보낼 때 확인됩니다", provider.label())),
-        AssistantAuthentication::Required => (AssistantCliState::LoginRequired, format!("{} CLI는 실행되지만 로그인이 필요합니다. 터미널에서 {}로 로그인한 뒤 다시 확인해 주세요", provider.label(), if provider == AssistantProviderKind::ClaudeCode { "claude auth login" } else if provider == AssistantProviderKind::Codex { "codex login" } else { provider.executable_name() })),
+        AssistantAuthentication::Required => (AssistantCliState::LoginRequired, format!("{} CLI는 실행되지만 로그인이 필요합니다. 터미널에서 {}로 로그인한 뒤 다시 확인해 주세요", provider.label(), if provider == AssistantProviderKind::ClaudeCode { "claude auth login" } else if provider == AssistantProviderKind::Codex { "codex login" } else if provider == AssistantProviderKind::Grok { "grok login" } else { provider.executable_name() })),
         _ => (AssistantCliState::CheckFailed, "CLI 실행은 확인했지만 인증 상태를 확인하지 못했습니다. 네트워크·CLI 오류일 수 있으므로 다시 확인해 주세요. 로그인 필요로 판정하지 않았습니다".to_owned()),
     };
     status.available = status.state == AssistantCliState::Ready;
@@ -1735,8 +1976,12 @@ fn authentication_from_output(
         return AssistantAuthentication::Required;
     }
     if output.success
-        && provider != AssistantProviderKind::ClaudeCode
-        && (provider != AssistantProviderKind::Codex || text.contains("logged in"))
+        && (provider == AssistantProviderKind::Codex && text.contains("logged in")
+            || provider == AssistantProviderKind::Grok
+                && (text.contains("you are using xai_api_key.")
+                    || text.contains("you are logged in with ")
+                    || text.contains("is using its own api key.")
+                    || text.contains("you are authenticated via deployment key.")))
     {
         return AssistantAuthentication::Authenticated;
     }
@@ -1797,6 +2042,76 @@ fn codex_models(
         }
     }
     (Vec::new(), AssistantModelCatalogSource::Unavailable)
+}
+
+const CLAUDE_CATALOG_REQUEST_ID: &str = "broomsweepy_metadata_only_1";
+
+fn claude_models(
+    program: &ExternalProgram,
+    status: &AssistantProviderStatus,
+) -> (Vec<AssistantProviderModel>, AssistantModelCatalogSource) {
+    if status.claude_catalog_supported
+        && let Ok(output) = claude_catalog_probe(program)
+        && output.success
+        && let Ok(models) = model_catalog::parse_claude_models(
+            &output.stdout,
+            CLAUDE_CATALOG_REQUEST_ID,
+            &status.cli_reasoning_efforts,
+        )
+        && !models.is_empty()
+    {
+        return (models, AssistantModelCatalogSource::Cli);
+    }
+    // Old CLIs retain documented floating aliases, without invented effort or
+    // version metadata. Discovery failure never silently replaces a saved ID.
+    (
+        ["sonnet", "opus", "haiku"]
+            .into_iter()
+            .map(|alias| AssistantProviderModel {
+                id: alias.to_owned(),
+                label: alias.to_owned(),
+                supported_reasoning_efforts: Vec::new(),
+                default_reasoning_effort: None,
+            })
+            .collect(),
+        AssistantModelCatalogSource::Aliases,
+    )
+}
+
+fn claude_catalog_probe(program: &ExternalProgram) -> Result<ProbeOutput, ProbeError> {
+    // This file contains one control initialization, never a user/prompt frame.
+    // EOF after initialization is supported by the CLI control protocol.
+    let mut stdin = tempfile::tempfile().map_err(|_| ProbeError::Read)?;
+    serde_json::to_writer(
+        &mut stdin,
+        &serde_json::json!({
+            "type":"control_request", "request_id":CLAUDE_CATALOG_REQUEST_ID,
+            "request":{"subtype":"initialize", "hooks":null, "skills":[]}
+        }),
+    )
+    .map_err(|_| ProbeError::Read)?;
+    stdin.write_all(b"\n").map_err(|_| ProbeError::Read)?;
+    stdin
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| ProbeError::Read)?;
+    let mut command = program.command();
+    command
+        .args(&CLAUDE_CHAT_ARGS[..CLAUDE_CHAT_ARGS.len() - 2])
+        .args(CLAUDE_CATALOG_EXTRA_ARGS)
+        // Metadata-only discovery also includes the currently resolved Fable
+        // alias, instead of relabeling an older pinned Fable row as the latest.
+        .args(["--model", "fable"])
+        .current_dir(std::env::temp_dir())
+        .env_remove("CLAUDECODE")
+        .env("ENABLE_CLAUDEAI_MCP_SERVERS", "false")
+        .env("DISABLE_AUTOUPDATER", "1")
+        .stdin(Stdio::from(stdin));
+    status_probe_command(
+        command,
+        Duration::from_secs(8),
+        None,
+        MAX_MODEL_CATALOG_BYTES,
+    )
 }
 
 fn parse_codex_models(output: &str) -> Result<Vec<AssistantProviderModel>, ProbeError> {
@@ -1923,6 +2238,22 @@ fn status_probe_cancellable_limit(
     cancellation: Option<&AtomicBool>,
     output_limit: u64,
 ) -> Result<ProbeOutput, ProbeError> {
+    let mut command = program.command();
+    command
+        .args(arguments)
+        .current_dir(std::env::temp_dir())
+        .env("DISABLE_AUTOUPDATER", "1")
+        .env("GROK_DISABLE_AUTOUPDATER", "1")
+        .stdin(Stdio::null());
+    status_probe_command(command, timeout, cancellation, output_limit)
+}
+
+fn status_probe_command(
+    mut command: std::process::Command,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+    output_limit: u64,
+) -> Result<ProbeOutput, ProbeError> {
     if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
         return Err(ProbeError::Cancelled);
     }
@@ -1930,12 +2261,7 @@ fn status_probe_cancellable_limit(
     // (which can contain account details) in diagnostics or logs.
     let mut stdout = tempfile::tempfile().map_err(|_| ProbeError::Read)?;
     let mut stderr = tempfile::tempfile().map_err(|_| ProbeError::Read)?;
-    let mut command = program.command();
     let mut child = command
-        .args(arguments)
-        .current_dir(std::env::temp_dir())
-        .env("DISABLE_AUTOUPDATER", "1")
-        .stdin(Stdio::null())
         .stdout(Stdio::from(
             stdout.try_clone().map_err(|_| ProbeError::Read)?,
         ))
@@ -2012,6 +2338,27 @@ mod tests {
             .unwrap();
         assert!(trace.record("y".into()).is_err());
         assert_eq!(trace.results.len(), 1);
+    }
+
+    #[test]
+    fn native_file_aliases_share_the_investigation_repeat_guard() {
+        use crate::assistant_tools::parse_envelope;
+        let legacy = parse_envelope(
+            r#"{"message":"Scan.","action":{"kind":"files","operation":{"kind":"scan"}}}"#,
+        )
+        .unwrap()
+        .action
+        .unwrap();
+        let common = parse_envelope(r#"{"message":"Scan.","action":{"kind":"app","operation":{"kind":"file_workspace","operation":{"kind":"scan"}}}}"#).unwrap().action.unwrap();
+        assert_eq!(
+            action_fingerprint(&legacy).unwrap(),
+            action_fingerprint(&common).unwrap()
+        );
+        let mut trace = Investigation::default();
+        trace.admit(action_fingerprint(&legacy).unwrap()).unwrap();
+        assert!(trace.admit(action_fingerprint(&common).unwrap()).is_err());
+        let status = parse_envelope(r#"{"message":"Status.","action":{"kind":"app","operation":{"kind":"file_workspace","operation":{"kind":"status"}}}}"#).unwrap().action.unwrap();
+        trace.admit(action_fingerprint(&status).unwrap()).unwrap();
     }
 
     #[cfg(unix)]
@@ -2097,6 +2444,82 @@ esac
             serde_json::json!({}),
         );
         assert!(app_result_message(&running).contains("아직 완료되지 않았습니다"));
+    }
+
+    #[test]
+    fn final_analysis_never_accepts_a_second_action() {
+        use crate::assistant_tools::parse_envelope;
+        let analysis =
+            parse_envelope(r#"{"message":"The app needs local approval.","action":null}"#).unwrap();
+        assert_eq!(
+            final_analysis_message(analysis).as_deref(),
+            Some("The app needs local approval.")
+        );
+        let repeated = parse_envelope(r#"{"message":"Run again.","action":{"kind":"app","operation":{"kind":"storage_scan"}}}"#).unwrap();
+        assert!(final_analysis_message(repeated).is_none());
+        assert!(FINAL_ANALYSIS_CONTRACT.contains("action:null"));
+        assert!(FINAL_ANALYSIS_CONTRACT.contains("No further lookup"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scripted_provider_reads_each_terminal_app_state_in_analysis_only_round() {
+        use crate::assistant_tools::parse_envelope;
+        use bloomsweepy_control::{AppToolResult, AppToolStatus};
+        for status in [
+            AppToolStatus::ReviewRequired,
+            AppToolStatus::Running,
+            AppToolStatus::PermissionRequired,
+            AppToolStatus::Unsupported,
+            AppToolStatus::Failed,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let program = fake_cli(
+                dir.path(),
+                "terminal-provider",
+                r#"
+input=$(cat)
+case "$input" in
+  *'"observedToken":"actual-terminal-evidence"'*'[Analysis-only final round]'*) printf '%s' '{"message":"I read the actual terminal app result; no action was executed.","action":null}' ;;
+  *) printf '%s' '{"message":"Query the app.","action":{"kind":"app","operation":{"kind":"performance"}}}' ;;
+esac
+"#,
+            );
+            let actual = AppToolResult::with_status(
+                "performance.inspect",
+                status,
+                serde_json::json!({"observedToken":"actual-terminal-evidence","performed":false}),
+            )
+            .with_presentation(
+                serde_json::json!({"path":"/private/local-only","planId":"private-plan"}),
+            );
+            let mut trace = Investigation::default();
+            trace
+                .record(crate::app_tools::model_context(&actual).unwrap())
+                .unwrap();
+            let mut prompt = "Original user question.".to_owned();
+            append_investigation_context(&mut prompt, &trace, true);
+            assert!(!prompt.contains("/private/local-only"));
+            assert!(!prompt.contains("private-plan"));
+            let raw = run_provider(
+                AssistantProviderKind::ClaudeCode,
+                program,
+                None,
+                dir.path().join("workspace"),
+                1,
+                prompt,
+                std::sync::Arc::new(AtomicBool::new(false)),
+            )
+            .unwrap();
+            let message = final_analysis_message(parse_envelope(&raw).unwrap()).unwrap();
+            assert!(message.contains("actual terminal app result"), "{status:?}");
+            assert!(
+                fs::read_dir(dir.path().join("workspace"))
+                    .unwrap()
+                    .next()
+                    .is_none()
+            );
+        }
     }
 
     #[cfg(unix)]
@@ -2226,6 +2649,275 @@ esac
             ),
             AssistantAuthentication::Unknown
         );
+        let grok = AssistantProviderKind::Grok;
+        for banner in [
+            "You are using XAI_API_KEY.",
+            "You are logged in with example.test.",
+            "Model 'grok-4.7' is using its own API key.",
+            "You are authenticated via deployment key.",
+        ] {
+            assert_eq!(
+                authentication_from_output(grok, &probe_output(true, banner, "")),
+                AssistantAuthentication::Authenticated
+            );
+        }
+        assert_eq!(
+            authentication_from_output(grok, &probe_output(true, "You are not authenticated.", "")),
+            AssistantAuthentication::Required
+        );
+        for provider in [grok, AssistantProviderKind::Antigravity] {
+            assert_eq!(
+                authentication_from_output(
+                    provider,
+                    &probe_output(true, "Available models:\n - some-model", "")
+                ),
+                AssistantAuthentication::Unknown
+            );
+        }
+    }
+
+    #[test]
+    fn non_codex_effort_args_are_explicit_and_old_help_cannot_enable_new_options() {
+        for provider in [
+            AssistantProviderKind::ClaudeCode,
+            AssistantProviderKind::Grok,
+            AssistantProviderKind::Antigravity,
+        ] {
+            let mut command = std::process::Command::new(provider.executable_name());
+            configure_selected_model(&mut command, provider, Some("valid-model")).unwrap();
+            configure_selected_effort(&mut command, provider, Some("valid-model"), Some("high"))
+                .unwrap();
+            let args: Vec<_> = command
+                .get_args()
+                .map(|arg| arg.to_str().unwrap())
+                .collect();
+            assert_eq!(args, ["--model", "valid-model", "--effort", "high"]);
+            let mut defaults = std::process::Command::new(provider.executable_name());
+            configure_selected_model(&mut defaults, provider, None).unwrap();
+            configure_selected_effort(&mut defaults, provider, None, None).unwrap();
+            assert_eq!(defaults.get_args().count(), 0);
+            assert!(cli_reasoning_efforts(provider, "--effort-extra high").is_empty());
+            assert!(cli_reasoning_efforts(provider, "--model valid-model").is_empty());
+        }
+        assert_eq!(
+            cli_reasoning_efforts(
+                AssistantProviderKind::ClaudeCode,
+                "--effort <level> Effort for session\n   (low, medium, high)\n--other xhigh max"
+            ),
+            ["low", "medium", "high"]
+        );
+        assert_eq!(
+            cli_reasoning_efforts(
+                AssistantProviderKind::ClaudeCode,
+                "--effort <level>\n (low, medium, high, xhigh, max)\n--other"
+            ),
+            ["low", "medium", "high", "xhigh", "max"]
+        );
+        assert!(missing_chat_options(AssistantProviderKind::Grok, "--single --permission-mode --tools --no-subagents --disable-web-search --cwd --output-format\nCommands:\n models List models").contains(&"--deny"));
+        assert!(
+            missing_chat_options(AssistantProviderKind::Antigravity, "--print --sandbox")
+                .contains(&"models")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn grok_and_agy_execution_preserve_selection_and_safety_arguments() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_cli(dir.path(), "argv-provider", r#"printf '%s\n' "$@""#);
+        for provider in [
+            AssistantProviderKind::Grok,
+            AssistantProviderKind::Antigravity,
+        ] {
+            let response = run_provider_budget(
+                provider,
+                program.clone(),
+                Some("example-model".into()),
+                Some("high".into()),
+                dir.path().join("workspace"),
+                0,
+                "synthetic prompt".into(),
+                std::sync::Arc::new(AtomicBool::new(false)),
+                Duration::from_secs(2),
+            )
+            .unwrap();
+            let args: Vec<_> = response.lines().collect();
+            for pair in [["--model", "example-model"], ["--effort", "high"]] {
+                assert!(args.windows(2).any(|args| args == pair));
+            }
+            if provider == AssistantProviderKind::Grok {
+                for pair in [
+                    ["--deny", "*"],
+                    ["--permission-mode", "dontAsk"],
+                    ["--output-format", "plain"],
+                    ["--single", "synthetic prompt"],
+                ] {
+                    assert!(args.windows(2).any(|args| args == pair));
+                }
+                assert!(args.contains(&"--disable-web-search"));
+                assert!(args.contains(&"--no-subagents"));
+            } else {
+                assert!(args.contains(&"--sandbox"));
+                assert!(
+                    args.windows(2)
+                        .any(|args| args == ["--print", "synthetic prompt"])
+                );
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn model_metadata_readiness_does_not_invent_auth_or_unadvertised_effort() {
+        let dir = tempfile::tempdir().unwrap();
+        let agy = fake_cli(
+            dir.path(),
+            "agy-ready",
+            r#"
+case "$1" in
+ --version) printf '1.1.12' ;;
+ --help) printf '%s\n' '--print --sandbox --model --effort' 'Commands:' '  models List models' ;;
+ models) printf '%s\n' 'gemini-3.1-pro-high     Gemini 3.1 Pro (High)' 'gemini-3.1-pro-low     Gemini 3.1 Pro (Low)' ;;
+ *) exit 10 ;;
+esac
+"#,
+        );
+        let status = inspect_candidate(AssistantProviderKind::Antigravity, false, &agy, None);
+        assert!(status.available);
+        assert_eq!(status.authentication, AssistantAuthentication::Unknown);
+        assert_eq!(
+            status.model_catalog_source,
+            AssistantModelCatalogSource::Cli
+        );
+        assert_eq!(
+            status.models[0].supported_reasoning_efforts,
+            ["low", "high"]
+        );
+        assert!(status.models[0].default_reasoning_effort.is_none());
+        let grok = fake_cli(
+            dir.path(),
+            "grok-ready",
+            r#"
+case "$1" in
+ --version) printf '0.2.89' ;;
+ --help) printf '%s\n' '--single --permission-mode --tools --deny --no-subagents --disable-web-search --cwd --output-format --model' 'Commands:' '  models List models' ;;
+ models) printf '%s\n' 'You are using XAI_API_KEY.' 'Available models:' '  * grok-4.7 (default)' ;;
+ *) exit 10 ;;
+esac
+"#,
+        );
+        let status = inspect_candidate(AssistantProviderKind::Grok, false, &grok, None);
+        assert!(status.available);
+        assert_eq!(
+            status.authentication,
+            AssistantAuthentication::Authenticated
+        );
+        assert_eq!(status.models[0].id, "grok-4.7");
+        assert!(status.models[0].supported_reasoning_efforts.is_empty());
+        let no_models_command = fake_cli(
+            dir.path(),
+            "old-agy",
+            r#"
+case "$1" in
+ --version) printf '1.0.0' ;;
+ --help) printf '%s\n' '--print --sandbox --model --effort' ;;
+ *) printf 'user prompt must not run' ; exit 99 ;;
+esac
+"#,
+        );
+        let status = inspect_candidate(
+            AssistantProviderKind::Antigravity,
+            false,
+            &no_models_command,
+            None,
+        );
+        assert_eq!(status.state, AssistantCliState::Incompatible);
+        assert!(!status.passed_launch_checks);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn claude_metadata_probe_sends_only_initialize_and_reuses_bounded_runner() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_cli(
+            dir.path(),
+            "metadata-only",
+            r#"
+case " $* " in
+ *' --model fable '*) ;;
+ *) exit 8 ;;
+esac
+input=$(cat)
+case "$input" in
+ *'"type":"control_request"'*'"request_id":"broomsweepy_metadata_only_1"'* | *'"request_id":"broomsweepy_metadata_only_1"'*'"type":"control_request"'*)
+  printf '%s\n' '{"type":"control_response","response":{"request_id":"broomsweepy_metadata_only_1","subtype":"success","response":{"models":[{"value":"sonnet","displayName":"Sonnet","supportsEffort":true,"supportedEffortLevels":["high"]}]}}}' ;;
+ *) exit 9 ;;
+esac
+"#,
+        );
+        let mut status = empty_provider_status(AssistantProviderKind::ClaudeCode, false);
+        status.claude_catalog_supported = true;
+        status.cli_reasoning_efforts = vec!["high".into()];
+        let (models, source) = claude_models(&program, &status);
+        assert_eq!(source, AssistantModelCatalogSource::Cli);
+        assert_eq!(models[0].id, "sonnet");
+        assert_eq!(models[0].supported_reasoning_efforts, ["high"]);
+        status.claude_catalog_supported = false;
+        let (models, source) = claude_models(&program, &status);
+        assert_eq!(source, AssistantModelCatalogSource::Aliases);
+        assert_eq!(models.len(), 3);
+        assert!(
+            models
+                .iter()
+                .all(|model| model.supported_reasoning_efforts.is_empty())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "opt-in installed Claude metadata only; no user prompt or inference"]
+    fn installed_claude_metadata_only_catalog_has_real_model_efforts() {
+        let (status, program) = resolve_provider(AssistantProviderKind::ClaudeCode, false);
+        assert!(
+            status.passed_launch_checks,
+            "installed Claude capability checks failed"
+        );
+        assert!(status.claude_catalog_supported);
+        let output = claude_catalog_probe(&program.unwrap()).expect("metadata probe failed");
+        assert!(output.success);
+        for line in output.stdout.lines() {
+            if let Ok(frame) = serde_json::from_str::<serde_json::Value>(line) {
+                assert!(!matches!(
+                    frame["type"].as_str(),
+                    Some("user" | "assistant" | "result")
+                ));
+            }
+        }
+        let models = model_catalog::parse_claude_models(
+            &output.stdout,
+            CLAUDE_CATALOG_REQUEST_ID,
+            &status.cli_reasoning_efforts,
+        )
+        .expect("catalog parser failed");
+        assert!(models.len() >= 3 && models.len() <= MAX_PROVIDER_MODELS);
+        assert!(
+            models
+                .iter()
+                .any(|model| !model.supported_reasoning_efforts.is_empty())
+        );
+        assert!(models.iter().all(|model| model.id != "default"));
+        for (id, family) in [("opus", "Opus "), ("fable", "Fable ")] {
+            let model = models
+                .iter()
+                .find(|model| model.id == id)
+                .expect("discovery alias absent");
+            assert!(
+                model.label.starts_with(family),
+                "resolved version label absent"
+            );
+            assert!(model.label[family.len()..].starts_with(|ch: char| ch.is_ascii_digit()));
+        }
+        // No account data or raw output is printed, even on failures.
     }
 
     #[test]
@@ -2677,7 +3369,7 @@ esac
     }
 
     #[test]
-    fn model_selection_validates_defaults_explicit_ids_and_unsupported_providers() {
+    fn model_selection_validates_provider_defaults_and_explicit_safe_ids() {
         let mut request = valid_request();
         for provider in [
             AssistantProviderKind::Codex,
@@ -2686,7 +3378,12 @@ esac
             request.provider = provider;
             request.model = None;
             assert!(validate_request(&request).is_ok());
-            for model in ["gpt-6-astra", "sonnet", "claude-opus-4-6", "org/model:v2"] {
+            for model in [
+                "gpt-6-astra",
+                "sonnet",
+                "claude-fable-5[1m]",
+                "org/model:v2",
+            ] {
                 request.model = Some(model.to_owned());
                 assert!(validate_request(&request).is_ok());
             }
@@ -2700,6 +3397,9 @@ esac
                 "x\u{0000}",
                 "모델",
                 "m;echo",
+                "foo[1m][1m]",
+                "foo[2m]",
+                "[1m]",
             ] {
                 request.model = Some(model.to_owned());
                 assert!(validate_request(&request).is_err(), "accepted {model:?}");
@@ -2715,12 +3415,12 @@ esac
             request.model = None;
             assert!(validate_request(&request).is_ok());
             request.model = Some("any-model".to_owned());
-            assert!(validate_request(&request).is_err());
+            assert!(validate_request(&request).is_ok());
         }
     }
 
     #[test]
-    fn reasoning_selection_requires_codex_explicit_model_and_whitelisted_effort() {
+    fn reasoning_selection_requires_explicit_model_and_provider_whitelisted_effort() {
         let mut request = valid_request();
         request.reasoning_effort = Some("medium".to_owned());
         assert!(
@@ -2750,11 +3450,24 @@ esac
             AssistantProviderKind::ClaudeCode,
             AssistantProviderKind::Grok,
             AssistantProviderKind::Antigravity,
-            AssistantProviderKind::Ollama,
         ] {
-            assert!(validate_reasoning_selection(provider, Some("a-model"), Some("high")).is_err());
+            assert!(validate_reasoning_selection(provider, Some("a-model"), Some("high")).is_ok());
             assert!(validate_reasoning_selection(provider, Some("a-model"), None).is_ok());
+            for effort in REASONING_EFFORTS {
+                assert_eq!(
+                    validate_reasoning_selection(provider, Some("a-model"), Some(effort)).is_ok(),
+                    provider_reasoning_efforts(provider).contains(&effort)
+                );
+            }
         }
+        assert!(
+            validate_reasoning_selection(
+                AssistantProviderKind::Ollama,
+                Some("local-model"),
+                Some("high")
+            )
+            .is_err()
+        );
         request.reasoning_effort = None;
         request.provider = AssistantProviderKind::Codex;
         assert!(validate_request(&request).is_ok());
@@ -2789,8 +3502,9 @@ esac
         assert_eq!(ollama["modelSelection"], "required");
         let grok = serde_json::to_value(empty_provider_status(AssistantProviderKind::Grok, false))
             .unwrap();
-        assert_eq!(grok["modelSelection"], "unsupported");
-        assert_eq!(grok["modelCatalogSource"], "unsupported");
+        assert_eq!(grok["modelSelection"], "optional");
+        assert_eq!(grok["modelCatalogSource"], "unavailable");
+        assert!(grok.get("cliReasoningEfforts").is_none());
         for (source, expected) in [
             (AssistantModelCatalogSource::Cli, "cli"),
             (AssistantModelCatalogSource::Bundled, "bundled"),
@@ -2927,16 +3641,18 @@ fi
             .is_ok()
         );
         let oversized = fake_cli(dir.path(), "catalog-too-wide", "head -c 1048577 /dev/zero");
-        assert!(matches!(
+        assert_eq!(
             status_probe_cancellable_limit(
                 &oversized,
                 &[],
-                Duration::from_secs(1),
+                // A size-bound test, not a scheduling-speed test on an 8GiB Mac.
+                Duration::from_secs(5),
                 None,
                 MAX_MODEL_CATALOG_BYTES
-            ),
-            Err(ProbeError::OutputLimit)
-        ));
+            )
+            .err(),
+            Some(ProbeError::OutputLimit)
+        );
     }
 
     #[test]

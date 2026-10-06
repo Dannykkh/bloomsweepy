@@ -31,8 +31,9 @@ export function isAssistantProviderKind(value: unknown): value is AssistantProvi
 
 export function normalizeAssistantModelId(value: unknown): string | null {
   if (value === "") return "";
+  // $는 마지막 개행 직전에도 매칭하므로 일치한 값 전체를 비교한다.
   return typeof value === "string" && value.length <= ASSISTANT_MODEL_ID_MAX_LENGTH
-    && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(value) ? value : null;
+    && /^[A-Za-z0-9][A-Za-z0-9._:/-]*(?:\[1m\])?$/.exec(value)?.[0] === value ? value : null;
 }
 
 export function normalizeAssistantReasoningEffort(value: unknown): AssistantReasoningEffort | "" | null {
@@ -160,6 +161,14 @@ export function assistantModelSelection(provider: AssistantProviderStatus | null
   return provider?.modelSelection ?? (provider?.provider === "ollama" ? "required" : "unsupported");
 }
 
+export function assistantModelReady(provider: AssistantProviderStatus | null, model: string): boolean {
+  const id = normalizeAssistantModelId(model);
+  if (id === null) return false;
+  const selection = assistantModelSelection(provider);
+  return selection === "required" ? Boolean(id) : selection !== "unsupported" || !id;
+}
+
+/** Sending is gated by assistantModelReady; unsupported hosts must not replace a saved model. */
 export function assistantModelRequestValue(provider: AssistantProviderStatus | null, model: string): string | null {
   return assistantModelSelection(provider) === "unsupported" ? null : normalizeAssistantModelId(model) || null;
 }
@@ -170,7 +179,7 @@ export function assistantReasoningStatus(provider: AssistantProviderStatus | nul
   const supportedEfforts = Array.isArray(supplied)
     ? [...new Set(supplied.map(normalizeAssistantReasoningEffort).filter((effort): effort is AssistantReasoningEffort => Boolean(effort)))] : [];
   const mode = !provider ? "unavailable"
-    : provider.provider !== "codex" || assistantModelSelection(provider) === "unsupported" ? "unsupported"
+    : assistantModelSelection(provider) === "unsupported" ? "unsupported"
     : !model ? "modelDefault"
     : provider.modelCatalogSource === "unavailable" || !selected ? "unavailable"
     : !supportedEfforts.length ? "unsupported" : "supported";

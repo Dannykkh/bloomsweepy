@@ -116,4 +116,12 @@ OS스크린리더는 NOT RUN. 높은 강도도 기존 한 라운드120초 제한
 보장하지 않는다. 응답 model/reasoningEffort는 요청 echo다. 파일 삭제/휴지통 비우기/로그인/
 권한/CLI 전역 설정 변경, commit/push/release는 이번 요청에서 하지 않는다.
 
+## 후속 설치형 재시작 보완
+
+2026-10-06 19:06–19:09, 사용자 “설치형 검사까지 완료하자” 후 guard 포함 새 ARM64
+08faa1ac… 앱에서 ⌘Q/main process부재→재실행을 실제 수행했다. chat/Settings 모두
+Codex/6.1-Sol/중간, 자체취소 대화4개와 기존 권한 복원 PASS. 위 오후 Mac잠금 NOT RUN은
+당시 기록으로 유지하며 현재 미완료 재시작은 해소됐다. 새 argv probe를 포착한 것으로
+확대하지 않는다. 실제 변경·검증 범위는 [후속 설치형 QA](2026-10-06-installed-trash-safety.md).
+
 #tags: 추론강도, cli업데이트, 카탈로그, 맥설치, ui검증, arch:012

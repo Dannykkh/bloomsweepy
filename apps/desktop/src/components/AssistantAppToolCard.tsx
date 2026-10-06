@@ -1,13 +1,16 @@
 import { ExternalLink, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLanguage, type MessageKey } from "../i18n";
-import { cleanAppMemory, executeGracefulProcessTermination } from "../lib/bridge";
+import { cancelExternalFilePlan, cleanAppMemory, confirmExternalFilePlan, executeGracefulProcessTermination } from "../lib/bridge";
+import { externalFileReviewDecision, preparedExternalFileWorkspace } from "../lib/externalFileReview";
 import { formatBytes, formatCount, formatDate } from "../lib/format";
 import type { ApplicationInventory, ApplicationTrashPlan } from "../lib/applicationTypes";
-import type { AppToolResult, DockerCleanupPreview, DockerManagementStatus, TerminationPreview, TrashOperationResult, ViewId } from "../types";
+import type { AppToolResult, AssistantFileWorkspace, DockerCleanupPreview, DockerManagementStatus, TerminationPreview, TrashOperationResult, ViewId } from "../types";
 import { ApplicationReview, type ReviewTarget } from "../views/ApplicationsView";
 import { DockerCleanupDialog } from "./DockerCleanupDialog";
 import { ProcessTerminationDialog } from "./ProcessTerminationDialog";
+import { AssistantFileCard } from "./AssistantFileCard";
+import { AssistantTrashResultCard } from "./AssistantEmptyFolderCard";
 import "./AssistantAppToolCard.css";
 
 export const appToolTitles: Record<string, MessageKey> = {
@@ -120,6 +123,7 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
   const consumed = useRef(false);
   const memoryDialog = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const preparedFiles = useMemo(() => preparedExternalFileWorkspace(result), [result]);
   const preparedApplication = useMemo(() => {
     if (reviewKind !== "applicationBundle" && reviewKind !== "applicationData") return null;
     const inventory = presentation.inventory as ApplicationInventory | undefined;
@@ -177,6 +181,7 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
     } finally { setRunning(false); onBusyChange?.(false); }
   }
 
+  if (preparedFiles) return <ExternalFileReviewDialog workspace={preparedFiles} busy={busy} onBusyChange={onBusyChange} onClose={onClose} onCompleted={onCompleted} />;
   if (preparedApplication) return <ApplicationReview target={preparedApplication.target} preparedPlan={preparedApplication.plan} busy={busy} onBusyChange={onBusyChange} onClose={onClose}
     onCompleted={(_target, _plan, actual) => onCompleted(actual ? { message: t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: formatCount(actual.requestedCount), moved: formatCount(actual.movedCount) }), trashResult: actual, mutated: true } : { message: t("결과를 확인하지 못했습니다. 휴지통과 작업 기록을 먼저 확인한 뒤 목록을 새로 고치세요. 같은 요청을 자동으로 재시도하지 않습니다."), mutated: true })} />;
   if (dockerPreview?.items.length) return <DockerCleanupDialog preview={dockerPreview} onClose={onClose} onCompleted={(status) => onCompleted({ message: status.lastCleanup?.message ?? t("현재 상태를 확인하고 있습니다."), dockerStatus: status })} />;
@@ -189,6 +194,74 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
     <footer><button ref={cancelRef} type="button" className="secondary-button" disabled={running} onClick={onClose}>{t(consumed.current ? "닫기" : "취소")}</button>{!consumed.current ? <button type="button" className="primary-button" disabled={running || busy} onClick={() => void confirmMemory()}>{t("앱 메모리 정리")}</button> : null}</footer>
   </dialog>;
   return <AppToolNoticeDialog title={t("검토 열기")} message={t("검토 정보가 만료됐거나 지원되지 않습니다. 앱에서 다시 조회해 주세요.")} onClose={onClose} />;
+}
+
+function ExternalFileReviewDialog({ workspace, busy, onBusyChange, onClose, onCompleted }: {
+  workspace: AssistantFileWorkspace; busy: boolean; onBusyChange?: (busy: boolean) => void;
+  onClose: () => void; onCompleted: (completion: AppToolReviewCompletion) => void;
+}) {
+  const { t } = useLanguage();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [running, setRunning] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [settled, setSettled] = useState(false);
+  const [actualResult, setActualResult] = useState<TrashOperationResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const decision = useMemo(() => externalFileReviewDecision(workspace, {
+    confirm: confirmExternalFilePlan, cancel: cancelExternalFilePlan,
+  }), [workspace]);
+  useEffect(() => {
+    const node = dialog.current;
+    node?.showModal();
+    node?.querySelector<HTMLButtonElement>(".assistant-trash-question-actions .secondary-button")?.focus();
+    return () => node?.close();
+  }, []);
+
+  async function cancel() {
+    if (busy || decision.running) return;
+    setRunning(true); setCancelling(true); onBusyChange?.(true);
+    try {
+      if (!await decision.cancel()) return;
+      // Closing a settled review is not a second operation result or a claim
+      // that a started move was cancelled. Preserve the reported real result.
+      if (!decision.confirmationAttempted) onCompleted({ message: t("취소했습니다. 휴지통으로 이동한 항목은 없습니다."), mutated: false });
+      onClose();
+    } catch (reason) {
+      setError(`${t("휴지통 이동을 완료하지 못했습니다")} · ${String(reason)}`);
+    } finally { setRunning(false); setCancelling(false); onBusyChange?.(false); }
+  }
+  async function confirm(nestedAcknowledged: boolean) {
+    if (busy || decision.running || decision.confirmationAttempted) return;
+    const expiry = workspace.plan!.expiresAtUnixMs;
+    if (expiry !== null && Date.now() >= expiry) {
+      setError(t("검토 정보가 만료됐거나 지원되지 않습니다. 앱에서 다시 조회해 주세요."));
+      return;
+    }
+    setRunning(true); onBusyChange?.(true);
+    try {
+      const actual = await decision.confirm(nestedAcknowledged);
+      if (!actual) return;
+      const message = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: formatCount(actual.requestedCount), moved: formatCount(actual.movedCount) });
+      setNotice(message); setActualResult(actual); setSettled(true);
+      onCompleted({ message, trashResult: actual, mutated: true });
+    } catch (reason) {
+      const message = `${t("휴지통 이동을 완료하지 못했습니다")} · ${String(reason)} ${t("결과를 확인하지 못했습니다. 휴지통과 작업 기록을 먼저 확인한 뒤 목록을 새로 고치세요. 같은 요청을 자동으로 재시도하지 않습니다.")}`;
+      setError(message); setSettled(true);
+      onCompleted({ message, mutated: true });
+    } finally { setRunning(false); onBusyChange?.(false); }
+  }
+  const noAction = () => undefined;
+  return <dialog ref={dialog} className="safety-dialog empty-trash-dialog" aria-label={t("휴지통 이동 최종 확인")}
+    onCancel={(event) => { event.preventDefault(); void cancel(); }}>
+    <AssistantFileCard workspace={workspace} busy={running || busy || settled}
+      onAction={noAction} onSelect={() => void cancel()} onPrepare={noAction} onConfirm={(nestedAck) => void confirm(nestedAck)} onShowMap={noAction} />
+    {running ? <p role="status">{t(cancelling ? "취소 요청 중…" : "휴지통 이동을 처리하고 있습니다. 완료할 때까지 기다려 주세요.")}</p> : null}
+    {notice ? <p role="status">{notice}</p> : null}
+    {error ? <p role="alert">{error}</p> : null}
+    {actualResult ? <AssistantTrashResultCard result={actualResult} /> : null}
+    <footer><button type="button" className="secondary-button" disabled={running || busy} onClick={() => void cancel()}>{t(settled ? "닫기" : "취소")}</button></footer>
+  </dialog>;
 }
 
 function AppToolNoticeDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {

@@ -12,10 +12,12 @@ import { LanguageProvider } from "./i18n";
 import { LANGUAGE_STORAGE_KEY } from "./i18n/preference";
 import { confirmAssistantEmptyPlan, confirmAssistantFilePlan } from "./lib/bridge";
 import { DEFAULT_SCAN_CONFIG } from "./types";
-import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
+import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantProviderModel, AssistantProviderStatus, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
 import "./App.css";
 
 const params = new URLSearchParams(window.location.search);
+const multiProviderModels = params.has("multi-provider");
+const modelsMode = params.has("models") || multiProviderModels;
 window.localStorage.setItem(LANGUAGE_STORAGE_KEY, params.get("language") ?? "ko");
 window.localStorage.setItem("bloomsweepy.assistant-provider", "codex");
 mockWindows("main");
@@ -55,6 +57,25 @@ const fileSeed: AssistantFileWorkspace = {
   ], selectedIds: [], plan: null,
 };
 let fileWorkspace: AssistantFileWorkspace | null = null;
+const externalFileMode = params.has("externalFileReview") || params.has("extcancel") || params.has("extmalformed");
+const externalRevision = "b".repeat(32);
+const externalPlanId = "c".repeat(32);
+const externalFileSeed: AssistantFileWorkspace = {
+  ...structuredClone(fileSeed), revision: externalRevision,
+  entries: fileSeed.entries.map(row => ({ ...row, id: `${externalRevision}-${row.number}` })),
+  selectedIds: [`${externalRevision}-1`],
+  plan: { id: externalPlanId, entries: [{ ...fileSeed.entries[0], id: `${externalRevision}-1` }],
+    logicalBytes: fileSeed.entries[0].logicalBytes!, requiresNestedAck: true, expiresAtUnixMs: params.has("expired") ? 1 : null },
+};
+const externalFileResult: AppToolResult = {
+  source: "broomsweepy", capability: "files.workspace", status: "review_required", capturedAtUnixMs: now, truncated: false,
+  data: { workspace: { freshScan: true, revision: externalRevision, reviewReady: true }, reviewPrepared: true, deleted: false },
+  presentation: { view: "overview", reviewKind: "files", workspaceKey: "external-files.workspace",
+    workspace: params.has("extmalformed") ? { ...externalFileSeed, revision: "unknown-revision" } : externalFileSeed },
+};
+let externalSettled = false;
+let externalConfirmAttempted = false;
+let externalCancels = 0;
 let executions = 0;
 let preparations = 0;
 let queries = 0;
@@ -73,11 +94,29 @@ const control: ControlStatus = { revision: 1, bridgeAvailable: true, connectedCl
   protocolVersion: 3, searchAccess: { files: false, documents: false },
   scanAccess: { enabled: false, root: null, approvedAtUnixMs: null }, cleanupAccess: { enabled: false, approvedAtUnixMs: null } };
 
+function syntheticCliProvider(provider: AssistantProviderStatus["provider"], label: string,
+  models: AssistantProviderModel[], busy: boolean): AssistantProviderStatus {
+  const providerState = params.get("provider-state");
+  if ((provider === "grok" || provider === "antigravity")
+    && ["notInstalled", "broken", "incompatible", "loginRequired", "serviceUnavailable", "checkFailed", "noModels"].includes(providerState ?? "")) {
+    return { provider, label: `${label} · QA mock`, installed: providerState !== "notInstalled",
+      authentication: providerState === "loginRequired" ? "required" : "unknown", available: false, busy,
+      detail: "Synthetic missing catalog — no CLI operations", state: providerState as AssistantProviderStatus["state"],
+      executablePath: null, version: "fixture", modelSelection: "optional", modelCatalogSource: "unavailable", models: [] };
+  }
+  return { provider, label: `${label} · QA mock`, installed: true, authentication: "authenticated",
+    available: true, busy, detail: "Synthetic CLI metadata — no AI requests", state: "ready", executablePath: null,
+    version: "fixture", modelSelection: params.has("old-host") ? undefined : "optional",
+    modelCatalogSource: params.has("no-catalog") ? "unavailable" : "cli",
+    models: params.has("no-catalog") ? [] : params.has("old-host") || params.has("no-reasoning-catalog")
+      ? models.map(({ id, label }) => ({ id, label })) : models };
+}
+
 function invokeFixture(command: string, raw: unknown) {
   const args = raw as Record<string, unknown>;
   if (command === "set_application_language") return null;
   if (command === "get_mcp_registration_statuses") return [];
-  if (command === "get_assistant_provider_status" && params.has("models")) {
+  if (command === "get_assistant_provider_status" && modelsMode) {
     const modelBusy = params.has("models-busy") && modelStatusChecks++ === 0;
     return [
     { provider: "codex", label: "Codex · QA mock", installed: true, authentication: "authenticated",
@@ -88,10 +127,25 @@ function invokeFixture(command: string, raw: unknown) {
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", ...(params.has("limited-reasoning") ? [] : ["ultra"])], defaultReasoningEffort: "low" }) },
         { id: "fixture-deep", label: "Deep · synthetic",
           ...(params.has("old-host") || params.has("no-reasoning-catalog") ? {} : { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium" }) }] },
-    { provider: "claudeCode", label: "Claude Code · QA mock", installed: true, authentication: "authenticated",
+    ...(multiProviderModels ? [syntheticCliProvider("claudeCode", "Claude Code", [
+      { id: "opus", label: "Opus 5.5 · QA mock", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: null },
+      { id: "claude-fable-5[1m]", label: "Fable 5 (1M) · QA mock", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: null },
+      { id: "fable", label: "Fable 5.1 · QA mock", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: null },
+      { id: "sonnet", label: "Sonnet 5.5 · QA mock", supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: null },
+      { id: "haiku", label: "Haiku 4.5 · QA mock", supportedReasoningEfforts: [], defaultReasoningEffort: null },
+    ], modelBusy), syntheticCliProvider("grok", "Grok", [
+      { id: "grok-4.7", label: "Grok 4.7 · QA mock", supportedReasoningEfforts: ["low", "medium", "high", "xhigh"], defaultReasoningEffort: null },
+      { id: "grok-4.5", label: "Grok 4.5 · QA mock", supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: null },
+      { id: "grok-unknown", label: "Unknown Grok model · QA mock", supportedReasoningEfforts: [], defaultReasoningEffort: null },
+    ], modelBusy), syntheticCliProvider("antigravity", "Antigravity", [
+      ...["high", "medium", "low"].map(effort => ({ id: `gemini-3.8-flash-${effort}`, label: `Gemini 3.8 Flash ${effort} · QA mock`,
+        supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: null })),
+      ...["high", "low"].map(effort => ({ id: `gemini-3.1-pro-${effort}`, label: `Gemini 3.1 Pro ${effort} · QA mock`,
+        supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: null })),
+    ], modelBusy)] : [{ provider: "claudeCode", label: "Claude Code · QA mock", installed: true, authentication: "authenticated",
       available: true, busy: modelBusy, detail: "Synthetic aliases — no AI requests", state: "ready", executablePath: null,
       version: "fixture", modelSelection: "optional", modelCatalogSource: "aliases",
-      models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }, { id: "haiku", label: "Haiku" }] },
+      models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }, { id: "haiku", label: "Haiku" }] }]),
     { provider: "ollama", label: "Ollama · QA mock", installed: true, authentication: "notRequired",
       available: true, busy: modelBusy, detail: "Synthetic installed models — no AI requests", state: "ready", executablePath: null,
       version: "fixture", modelSelection: "required", modelCatalogSource: "installed",
@@ -132,9 +186,16 @@ function invokeFixture(command: string, raw: unknown) {
     lastModel = request.model ?? null;
     lastReasoningEffort = request.reasoningEffort ?? null;
     lastModelProvider = request.provider ?? "codex";
-    if (params.has("models")) return { provider: lastModelProvider, label: `${lastModelProvider} · QA mock`, model: lastModel, reasoningEffort: lastReasoningEffort,
-      message: "선택한 모델 값을 받은 합성 응답입니다. 실제 CLI·파일 작업·외부 전송은 없습니다.",
-      analysisComplete: true, appToolResults: [], dockerContext: null, emptyWorkspace: null, fileWorkspace: null, toolAction: null };
+    if (modelsMode) {
+      const response = { provider: lastModelProvider, label: `${lastModelProvider} · QA mock`, model: lastModel, reasoningEffort: lastReasoningEffort,
+        message: "선택한 모델 값을 받은 합성 응답입니다. 실제 CLI·파일 작업·외부 전송은 없습니다.",
+        analysisComplete: true, appToolResults: [], dockerContext: null, emptyWorkspace: null, fileWorkspace: null, toolAction: null };
+      if (!params.has("models-delayed")) return response;
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { cancelPending = null; resolve(response); }, 15_000);
+        cancelPending = () => { clearTimeout(timer); cancelPending = null; reject(new Error("테스트 응답을 취소했습니다")); };
+      });
+    }
     if (layoutState) return new Promise((resolve, reject) => {
       const timers: ReturnType<typeof setTimeout>[] = [];
       const cleanup = () => { timers.forEach(clearTimeout); cancelPending = null; };
@@ -196,6 +257,27 @@ function invokeFixture(command: string, raw: unknown) {
       dockerContext: null, emptyWorkspace: action ? clone(workspace) : null, toolAction: action };
   }
   if (command === "execute_graceful_process_termination") { executions++; return { outcome: "requestSent", displayName: "Synthetic Editor", requestedAtUnixMs: Date.now() }; }
+  if (command === "prepare_external_file_plan") { preparations++; throw new Error("Prepared external review must not be prepared again"); }
+  if (command === "confirm_external_file_plan" || command === "cancel_external_file_plan") {
+    if (!externalFileMode || args.revision !== externalRevision || args.planId !== externalPlanId
+      || "sessionId" in args || "path" in args || "automatic" in args) throw new Error("Synthetic exact identity check failed");
+    if (command === "cancel_external_file_plan") {
+      externalCancels++;
+      if (params.has("cancel-error")) throw new Error("Synthetic cancellation failed; review remains open");
+      externalSettled = true; return null;
+    }
+    if (externalSettled || externalConfirmAttempted || args.nestedContentsAcknowledged !== true) throw new Error("Synthetic plan unavailable");
+    externalConfirmAttempted = true; executions++;
+    const actual: TrashOperationResult = { operationId: "fixture-external-files-only", requestedCount: 1, movedCount: params.has("partial") ? 0 : 1,
+      movedBytes: params.has("partial") ? 0 : externalFileSeed.plan!.logicalBytes, cancelled: false, stoppedEarly: false, journalComplete: true, journalPath: "/Demo/mock-journal",
+      items: [{ path: externalFileSeed.plan!.entries[0].path, logicalBytes: externalFileSeed.plan!.logicalBytes, status: params.has("partial") ? "failed" : "moved", message: null }] };
+    return new Promise<TrashOperationResult>((resolve, reject) => window.setTimeout(() => {
+      externalSettled = true;
+      if (params.has("changed-target")) reject(new Error("Synthetic target changed; nothing moved"));
+      else resolve(actual);
+      counterListeners.forEach(listener => listener());
+    }, params.has("extslow") ? 600 : 20));
+  }
   if (command === "clean_app_memory") { executions++; return { outcome: "completed", allocatorReleasedBytes: 0, appResidentBeforeBytes: 1000, appResidentAfterBytes: 1000, systemAvailableBeforeBytes: 2000, systemAvailableAfterBytes: 2000, requestedAtUnixMs: now, completedAtUnixMs: Date.now() }; }
   if (command === "prepare_application_trash" || command === "prepare_application_data_trash") { preparations++; throw new Error("Prepared tool reviews must not be prepared again"); }
   if (command === "dismiss_application_plan") return null;
@@ -265,12 +347,12 @@ function prepareFiles() {
 }
 const noop = () => undefined;
 function Fixture() {
-  useSyncExternalStore(listener => { counterListeners.add(listener); return () => { counterListeners.delete(listener); }; }, () => `${preparations}-${executions}-${queries}`);
+  useSyncExternalStore(listener => { counterListeners.add(listener); return () => { counterListeners.delete(listener); }; }, () => `${preparations}-${executions}-${queries}-${externalCancels}`);
   const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, chatTrashWithoutConfirmation: automaticAllowed, permissionLifetime: params.has("remember") ? "remember" : "session" });
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>(params.get("view") === "settings" ? "settings" : "assistant");
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [appReview, setAppReview] = useState<AppToolResult | null>(null);
+  const [appReview, setAppReview] = useState<AppToolResult | null>(externalFileMode ? externalFileResult : null);
   const [localNotice, setLocalNotice] = useState("");
   const [map, setMap] = useState<DirectoryScanReport | null>(null);
   const [showMap, setShowMap] = useState(false);
@@ -300,8 +382,8 @@ function Fixture() {
       onAppToolReview={(prepared) => setAppReview(prepared)} onAppToolView={(result) => setLocalNotice(`Explicit navigation: ${result.capability}`)} />}
     </AppShell></div>
     {appReview ? <AssistantAppToolReview result={appReview} onClose={() => setAppReview(null)} onCompleted={(result) => setLocalNotice(result.message)} /> : null}
-    <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions} · Mock queries: {queries}</output>
-    {params.has("models") ? <output data-testid="model-fixture-request">Mock provider: {lastModelProvider} · Mock model: {lastModel ?? "CLI default"} · Mock reasoning effort: {lastReasoningEffort ?? "CLI default"}</output> : null}
+    <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions} · Mock queries: {queries} · Mock external cancellations: {externalCancels}</output>
+    {modelsMode ? <output data-testid="model-fixture-request">Mock provider: {lastModelProvider} · Mock model: {lastModel ?? "CLI default"} · Mock reasoning effort: {lastReasoningEffort ?? "CLI default"}</output> : null}
   </>;
 }
 createRoot(document.getElementById("root")!).render(<LanguageProvider><Fixture /></LanguageProvider>);

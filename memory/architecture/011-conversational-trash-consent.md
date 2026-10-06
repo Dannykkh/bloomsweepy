@@ -5,13 +5,13 @@ date: 2026-10-05
 source: codex
 tags: conversational-files, trash-consent, native-opt-in, nonexpiring-plan, bounded-search
 supersedes: [[001-conversational-file-workspace]] — 앱 소유 범위/프로토콜/상한은 계승하고 버튼 전용 최종 승인·5분 TTL만 사용자 요구로 변경한다.
-evidence: conversations/2026-10-05-conversational-trash-consent.md#사용자-요청-턴-시각-미확인; #1927-kst--검증-기록; conversations/2026-10-06-conversational-trash-regressions-fixed.md#0701-kst--실제-codex-종단; conversations/2026-10-06-commit-push-safety.md
+evidence: conversations/2026-10-05-conversational-trash-consent.md#사용자-요청-턴-시각-미확인; #1927-kst--검증-기록; conversations/2026-10-06-conversational-trash-regressions-fixed.md#0701-kst--실제-codex-종단; conversations/2026-10-06-commit-push-safety.md; conversations/2026-10-06-installed-safety-verification.md
 alternatives: 다중 체크/검토 팝업 유지 — 명확한 요청도 재승인해야 해 사용자 과업을 방해; 일괄 무조건 자동 실행 — 상담·모델 출력·불완전/모호 결과도 승인으로 오해하므로 제외; 시간 만료 유지 — 늦게 돌아온 사용자의 결정을 불필요하게 막으므로 제외. 불확실한 대상은 단일 질문으로 돌아간다.
 depends-on: [[002-opaque-folder-symlinks]], [[003-conversational-storage-map]], [[004-app-tool-investigation]], [[009-opt-in-permission-lifetime]], [[010-selected-folder-inspection]]
-sources: docs/architecture/app-capability-contract.md; docs/qa/2026-10-05-conversational-trash-consent.md; docs/qa/2026-10-06-pre-push-trash-intent.md
+sources: docs/architecture/app-capability-contract.md; docs/qa/2026-10-05-conversational-trash-consent.md; docs/qa/2026-10-06-pre-push-trash-intent.md; docs/qa/2026-10-06-installed-trash-safety.md
 files: apps/desktop/src/lib/assistantConfirmation.ts; apps/desktop/src/views/AssistantView.tsx; apps/desktop/src-tauri/src/assistant_files.rs; apps/desktop/src-tauri/src/assistant_tools.rs; apps/desktop/src-tauri/src/application_actions.rs; apps/desktop/src-tauri/src/permission_settings.rs; apps/desktop/src-tauri/src/control_server.rs
 reopen-when: 지시어/범주 전체 정리 자동화, 여러 계획 승인, 관련 데이터 자동 제거, 공급자/MCP 실행 또는 다중 사용자 권한 요구가 생기면 재검토한다.
-last_verified: 2026-10-06 — 후속 조건부 오승인 복구 frontend91/TypeScript/production frontend build 및 독립29사례 리뷰 PASS/findings 없음. 이 guard의 native 앱 재빌드·설치는 NOT RUN. 이전 native 형태 합성 회귀/설치형 Codex 아니오 취소·ON 정확한29B Trash 종단 PASS와 나머지2파일58B 보존은 별도 이전 검증이며 새 guard의 설치형 근거가 아님. native229PASS/3ignored는 이전 추론 QA이며 후속 helper에는 재실행하지 않음.
+last_verified: 2026-10-06 — 후속 guard frontend91/TypeScript/production frontend build·독립29사례 리뷰 및 ARM64설치본08faa1ac… deep strict PASS. 실제 조건부 요청→native29B 계획/확인 카드→인간 아니오 취소·세파일87B/저널 보존, 완전 재시작 복원 PASS. 새 guard의 직접 자동29B 이동은 새 사용자 승인 PENDING; 이전29B 성공을 이 근거로 확대하지 않음. native229PASS/3ignored는 이전 추론 QA이며 helper에는 재실행하지 않음.
 
 `files` strict JSON의 조회·검사·검토만 모델에 제공한다. 앱 소유 작업 공간은 세션 루트 안의
 200 결과/24 페이지/100 선택/16 세션과 bounded 메타데이터를 유지한다. 자동 모델 입력은
@@ -57,3 +57,5 @@ Windows와 장시간 soak, 실제 내용 있는 폴더/앱 본체 자동 실행�
 추가 명령·복합/지원하지 않는 표현은 예/아니오로 돌아간다. 파일 이름 자체의 조건 단어는
 literal로 다룬다. marker/control 충돌·상한 초과도 확인 생략을 막는다. 권한·계획·실행 루틴은
 변경하지 않았으며 이 후속 수정의 설치본 실제 실행은 이전29B 시험과 별개다.
+후속 설치 검사에서 실제 조건부 native 계획과 취소·복원은 통과했다. 정확한 직접 명령
+자동 이동은 새 자체 파일에 대해 새 승인을 받은 후 검증하며, 이전 승인을 재사용하지 않는다.

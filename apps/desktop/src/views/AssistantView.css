@@ -59,6 +59,7 @@
 .assistant-workspace .assistant-chat {
   min-height: 0;
   height: 100%;
+  overflow: visible;
   grid-template-rows: minmax(0, 1fr) auto;
   border: 0;
   border-radius: 0;
@@ -98,16 +99,20 @@
 .assistant-workspace .assistant-message.is-assistant > span { color: var(--text-muted); }
 .assistant-dock { position: relative; width: min(100%, 800px); margin: 0 auto; padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
 .assistant-workspace .assistant-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   margin: 0;
   padding: 10px;
-  border-radius: 22px;
+  border-radius: 26px;
   background: var(--surface-strong);
 }
-.assistant-workspace .assistant-composer textarea { padding: 11px 10px; font-size: 16px; resize: none; field-sizing: content; min-height: 46px; max-height: 120px; }
-.assistant-workspace .assistant-composer > button { border-radius: 50%; background: var(--text); color: var(--canvas); }
-.assistant-workspace .assistant-composer > button:disabled { background: var(--surface); color: var(--text-faint); }
-.assistant-workspace .assistant-composer-note { padding: 7px 0 0; line-height: 1.5; color: var(--text-muted); }
-.assistant-composer-note button { padding: 2px 5px; color: var(--text-muted); border: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+.assistant-workspace .assistant-composer textarea { padding: 11px 12px; font-size: 16px; resize: none; field-sizing: content; min-height: 52px; max-height: 120px; }
+.assistant-composer__toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.assistant-workspace .assistant-composer__send { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--canvas); }
+.assistant-workspace .assistant-composer__send:disabled { background: var(--surface); color: var(--text-faint); }
+.assistant-workspace .assistant-composer__send:not(:disabled):hover { background: var(--text-muted); }
 .assistant-working { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 0 8px 10px; color: var(--text-muted); font-size: 14px; }
 .assistant-working [role="status"] { display: flex; align-items: center; gap: 8px; }
 .assistant-working__time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
@@ -161,7 +166,6 @@
   .assistant-heading .assistant-session-toolbar { gap: 0; }
   .assistant-workspace .assistant-message p { font-size: 15px; }
   .assistant-workspace .assistant-message { gap: 8px; }
-  .assistant-composer-note { text-align: left; }
   .assistant-connection-dialog .control-permission { flex-wrap: wrap; }
 }
 @media (prefers-reduced-motion: reduce) {

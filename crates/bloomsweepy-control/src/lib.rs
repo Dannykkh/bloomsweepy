@@ -12,8 +12,8 @@ use thiserror::Error;
 mod capabilities;
 pub use capabilities::{
     AppToolRequest, AppToolResult, AppToolStatus, AppToolView, ApplicationReviewKind,
-    ApplicationSort, DockerCleanupCategory, IndexSource, UsageSort, capability_catalog,
-    native_prompt_catalog,
+    ApplicationSort, DockerCleanupCategory, FileWorkspaceAction, IndexSource, UsageSort,
+    capability_catalog, capability_details, discovery_index, native_prompt_catalog,
 };
 
 pub const PROTOCOL_VERSION: u16 = 3;

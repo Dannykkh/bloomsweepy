@@ -8,6 +8,7 @@ import {
   ASSISTANT_REASONING_EFFORTS,
   LEGACY_ASSISTANT_PROVIDER_KEY,
   LEGACY_OLLAMA_MODEL_KEY,
+  assistantModelReady,
   assistantModelRequestValue,
   assistantModelSelection,
   assistantReasoningStatus,
@@ -85,6 +86,35 @@ test("bounded model ids reject options, control characters and unknown input", (
   assert.equal(withAssistantModel(original, "codex", "--help"), original);
 });
 
+test("model ids allow only one exact trailing 1m context suffix within the total bound", () => {
+  for (const id of ["claude-fable-5[1m]", "opus[1m]", "org/model-v1.2[1m]", `${"a".repeat(ASSISTANT_MODEL_ID_MAX_LENGTH - 4)}[1m]`]) {
+    assert.equal(normalizeAssistantModelId(id), id);
+  }
+  for (const id of ["foo[1m][1m]", "foo[2m]", "[1m]", "foo[]", "foo[1M]", "foo[1m]bar", "foo[1m]/bar",
+    "foo[1m] --help", "foo[1m];exec", "foo[1m]$(id)", "foo[1m]\n", "foo[1m]\r", "foo\n", "foo[1m]\0",
+    `${"a".repeat(ASSISTANT_MODEL_ID_MAX_LENGTH - 3)}[1m]`]) {
+    assert.equal(normalizeAssistantModelId(id), null, id);
+  }
+});
+
+test("context-suffixed Claude choices retain their exact id and per-model reasoning across storage and requests", () => {
+  const model = "claude-fable-5[1m]";
+  let preference = withAssistantModel(withAssistantProvider(emptyAssistantModelPreference(), "claudeCode"), "claudeCode", model);
+  preference = withAssistantReasoningEffort(preference, "claudeCode", model, "xhigh");
+  const local = storage();
+  assert.equal(writeAssistantModelPreference(local, preference), true);
+  const restored = readAssistantModelPreference(local).preference;
+  assert.equal(restored.models.claudeCode, model);
+  assert.equal(assistantReasoningEffortFor(restored, "claudeCode", model), "xhigh");
+  assert.equal(assistantReasoningEffortFor(restored, "claudeCode", "claude-fable-5"), "");
+  assert.equal(assistantModelRequestValue({ ...provider, provider: "claudeCode" }, model), model);
+  assert.equal(withAssistantModel(restored, "claudeCode", `${model}[1m]`), restored);
+  const parsed = parseAssistantModelPreference(JSON.stringify({ version: 1, provider: "claudeCode",
+    models: { claudeCode: `${model}[1m]` }, reasoningEfforts: { claudeCode: { [`${model}[1m]`]: "high", [model]: "xhigh" } } }))!;
+  assert.equal(parsed.models.claudeCode, undefined);
+  assert.deepEqual(parsed.reasoningEfforts, { claudeCode: { [model]: "xhigh" } });
+});
+
 test("malformed and oversized storage cannot replace a valid legacy preference", () => {
   for (const raw of ["{", "[]", "null", JSON.stringify({ version: 2, provider: "codex", models: {} }), JSON.stringify({ version: 1, provider: "other", models: {} }), JSON.stringify({ version: 1, provider: "codex", models: [] }), "x".repeat(ASSISTANT_PREFERENCE_MAX_BYTES + 1)]) {
     assert.equal(parseAssistantModelPreference(raw), null);
@@ -117,6 +147,41 @@ test("legacy host remains model-required only for Ollama", () => {
   assert.equal(assistantModelSelection({ ...legacy, provider: "ollama" }), "required");
   assert.equal(assistantModelSelection(null), "unsupported");
   assert.equal(assistantModelRequestValue(legacy, "test-model"), null);
+  assert.equal(assistantModelReady(legacy, "test-model"), false, "null request value must never silently replace an explicit saved model");
+  assert.equal(assistantModelReady(legacy, ""), true);
+});
+
+test("unsupported model selection blocks saved explicit choices until deliberate reset instead of falling back", () => {
+  for (const kind of ["codex", "claudeCode", "grok", "antigravity"] as const) {
+    const chosen = kind === "claudeCode" ? "claude-fable-5[1m]" : "saved-model";
+    const preference = withAssistantModel(withAssistantProvider(emptyAssistantModelPreference(), kind), kind, chosen);
+    for (const unsupported of [
+      { ...provider, provider: kind, modelSelection: "unsupported" as const },
+      { ...provider, provider: kind, modelSelection: undefined },
+    ]) {
+      assert.equal(assistantModelReady(unsupported, preference.models[kind]!), false, kind);
+      assert.equal(assistantModelRequestValue(unsupported, preference.models[kind]!), null);
+      assert.equal(preference.models[kind], chosen, "readiness does not mutate the stored selection");
+      const reset = withAssistantModel(preference, kind, "");
+      assert.equal(assistantModelReady(unsupported, reset.models[kind]!), true);
+      assert.equal(assistantModelRequestValue(unsupported, reset.models[kind]!), null);
+      assert.equal(preference.models[kind], chosen, "only explicit reset produces CLI default");
+    }
+  }
+  assert.equal(assistantModelReady(null, "saved-model"), false);
+  assert.equal(assistantModelReady(null, ""), true, "overall provider availability still gates sending");
+});
+
+test("model readiness preserves required and optional catalog policies without rejecting valid unlisted ids", () => {
+  const required = { ...provider, provider: "ollama" as const, modelSelection: "required" as const };
+  assert.equal(assistantModelReady(required, ""), false);
+  assert.equal(assistantModelReady(required, "qwen3:8b"), true);
+  for (const optional of [provider, { ...provider, models: [] }, { ...provider, modelCatalogSource: "unavailable" as const, models: [] }]) {
+    assert.equal(assistantModelReady(optional, ""), true);
+    assert.equal(assistantModelReady(optional, "valid-unlisted-model"), true);
+    assert.equal(assistantModelRequestValue(optional, "valid-unlisted-model"), "valid-unlisted-model");
+    assert.equal(assistantModelReady(optional, "--help"), false);
+  }
 });
 
 test("legacy model preference migration leaves the chosen model and default effort untouched", () => {
@@ -206,11 +271,85 @@ test("reasoning options and displayed defaults come from the explicitly selected
   assert.equal(assistantReasoningStatus(reasoningProvider, "first-model", "").requestValue, null, "catalog default is a label, not an override");
 });
 
-test("CLI default and unsupported providers never inherit an explicit effort", () => {
+test("CLI default and providers without model support never inherit an explicit effort", () => {
   assert.equal(assistantReasoningStatus(reasoningProvider, "", "").mode, "modelDefault");
   assert.equal(assistantReasoningStatus(reasoningProvider, "", "high").requestValue, null);
-  assert.equal(assistantReasoningStatus({ ...reasoningProvider, provider: "claudeCode" }, "first-model", "high").mode, "unsupported");
-  assert.equal(assistantReasoningStatus({ ...reasoningProvider, provider: "ollama" }, "first-model", "high").requestValue, null);
+  assert.equal(assistantReasoningStatus({ ...reasoningProvider, provider: "grok", modelSelection: "unsupported" }, "first-model", "high").mode, "unsupported");
+  assert.equal(assistantReasoningStatus({ ...provider, provider: "ollama", modelSelection: "required" }, "test-model", "high").requestValue, null);
+});
+
+test("Claude Code, Grok and Antigravity reasoning follow each selected model's capability metadata", () => {
+  for (const kind of ["claudeCode", "grok", "antigravity"] as const) {
+    const advertised: AssistantProviderStatus = { ...provider, provider: kind,
+      models: [{ id: "shared-model", label: "Synthetic model", supportedReasoningEfforts: ["none", "low", "high", "high", "unsupported"], defaultReasoningEffort: "low" },
+        { id: "second-model", label: "Second synthetic model", supportedReasoningEfforts: ["medium", "max"], defaultReasoningEffort: "medium" }] };
+    const high = assistantReasoningStatus(advertised, "shared-model", "high");
+    assert.equal(high.mode, "supported", kind);
+    assert.deepEqual(high.supportedEfforts, ["none", "low", "high"]);
+    assert.equal(high.defaultEffort, "low");
+    assert.equal(high.requestValue, "high");
+    assert.equal(high.stale, false);
+    const second = assistantReasoningStatus(advertised, "second-model", "high");
+    assert.equal(second.mode, "supported");
+    assert.equal(second.defaultEffort, "medium");
+    assert.equal(second.stale, true);
+    assert.equal(second.requestValue, null);
+    assert.equal(assistantReasoningStatus(advertised, "second-model", "max").requestValue, "max");
+    assert.equal(assistantReasoningStatus(advertised, "shared-model", "none").requestValue, "none", "none is explicit, not the CLI default");
+    assert.equal(assistantReasoningStatus(advertised, "shared-model", "").requestValue, null);
+    assert.equal(assistantReasoningStatus(advertised, "", "").mode, "modelDefault");
+    assert.equal(assistantReasoningStatus(advertised, "", "high").requestValue, null);
+  }
+});
+
+test("new provider choices are stored per provider and model without sharing values or changing defaults", () => {
+  let preference = emptyAssistantModelPreference();
+  for (const [kind, effort] of [["claudeCode", "high"], ["grok", "none"], ["antigravity", "medium"]] as const) {
+    preference = withAssistantModel(withAssistantProvider(preference, kind), kind, "shared-model");
+    preference = withAssistantReasoningEffort(preference, kind, "shared-model", effort);
+    preference = withAssistantReasoningEffort(preference, kind, "second-model", "low");
+  }
+  const local = storage();
+  assert.equal(writeAssistantModelPreference(local, preference), true);
+  const restored = readAssistantModelPreference(local).preference;
+  for (const [kind, effort] of [["claudeCode", "high"], ["grok", "none"], ["antigravity", "medium"]] as const) {
+    assert.equal(restored.models[kind], "shared-model");
+    assert.equal(assistantReasoningEffortFor(restored, kind, "shared-model"), effort);
+    assert.equal(assistantReasoningEffortFor(restored, kind, "second-model"), "low");
+    const reset = withAssistantReasoningEffort(restored, kind, "shared-model", "");
+    assert.equal(assistantReasoningEffortFor(reset, kind, "shared-model"), "");
+    assert.equal(assistantReasoningEffortFor(reset, kind, "second-model"), "low");
+    assert.equal(reset.models[kind], "shared-model");
+    assert.equal(assistantReasoningEffortFor(restored, kind, "shared-model"), effort);
+  }
+  assert.equal(assistantReasoningEffortFor(restored, "codex", "shared-model"), "");
+});
+
+test("new provider unavailable catalogs, missing metadata and lost levels retain saved effort but refuse it", () => {
+  for (const kind of ["claudeCode", "grok", "antigravity"] as const) {
+    const preference = withAssistantReasoningEffort(withAssistantModel(emptyAssistantModelPreference(), kind, "shared-model"), kind, "shared-model", "high");
+    const advertised: AssistantProviderStatus = { ...provider, provider: kind,
+      models: [{ id: "shared-model", label: "Synthetic", supportedReasoningEfforts: ["medium", "high"], defaultReasoningEffort: "medium" }] };
+    for (const unavailable of [
+      { ...advertised, modelCatalogSource: "unavailable" as const, models: [] },
+      { ...advertised, models: [] },
+      { ...advertised, models: [{ id: "shared-model", label: "No reasoning metadata" }] },
+      { ...advertised, models: [{ id: "shared-model", label: "Default only", supportedReasoningEfforts: [], defaultReasoningEffort: null }] },
+      { ...advertised, models: [{ id: "shared-model", label: "Lost level", supportedReasoningEfforts: ["medium"], defaultReasoningEffort: "medium" }] },
+      { ...advertised, modelSelection: undefined },
+      { ...advertised, modelSelection: "unsupported" as const },
+    ]) {
+      const value = assistantReasoningEffortFor(preference, kind, "shared-model");
+      const status = assistantReasoningStatus(unavailable, "shared-model", value);
+      assert.equal(value, "high", kind);
+      assert.equal(status.stale, true);
+      assert.equal(status.requestValue, null);
+      assert.equal(assistantReasoningStatus(unavailable, "shared-model", "").stale, false);
+      assert.equal(assistantReasoningStatus(unavailable, "shared-model", "").requestValue, null);
+    }
+    assert.equal(assistantReasoningStatus(advertised, "shared-model", "HIGH").requestValue, null);
+    assert.equal(assistantReasoningStatus(advertised, "shared-model", "unsupported").stale, true);
+  }
 });
 
 test("catalog failure or lost support preserves the choice and blocks sending until deliberate reset", () => {

@@ -12,8 +12,17 @@ flowchart TD
     Denied --> State{완료 조회 결과?}
     Result --> State
     State -->|예| Model
-    State -->|아니오| Waiting([권한 작업 또는 검토 대기 표시])
-    Waiting --> Confirm{사용자 앱 최종 확인?}
+    State -->|아니오| FinalOnly[[실제 상태 분석 전용 LLM 응답]]
+    FinalOnly --> NoAction{action null?}
+    NoAction -->|예| Waiting([상태 설명과 실제 결과 카드])
+    NoAction -->|아니오| AppFallback([추가 실행 없이 앱 상태 안내 유지])
+    AppFallback --> Waiting
+    Waiting --> Async{비동기 작업?}
+    Async -->|예| Status[같은 작업 번호로 상태 조회]
+    Status --> Result
+    Async -->|아니오| Review{준비된 검토 결과?}
+    Review -->|아니오| Stopped([권한 또는 실패 안내로 종료])
+    Review -->|예| Confirm{사용자 앱 최종 확인?}
     Confirm -->|아니오| Unchanged([실행하지 않음])
     Confirm -->|예| Execute[[기존 재검증과 OS 작업]]
     Execute --> Evidence([실제 실행 결과 표시])

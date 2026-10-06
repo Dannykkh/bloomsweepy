@@ -18,9 +18,9 @@
 | rust, tauri, macos, sidecar, cargo-test | [memory/gotchas.md](memory/gotchas.md) |
 | cli-discovery, authentication-status, claude-safe-mode, chat-qa | [memory/gotchas.md](memory/gotchas.md) |
 | oauth-expiry, stdout-errors, standalone-cli | [memory/gotchas.md](memory/gotchas.md) |
-| codex-install, arm64, cli-0.153.4 | [gotchas](memory/gotchas.md) |
+| codex-install, arm64 | [gotchas](memory/gotchas.md) |
 | response-quality, conversation-restore, chat-header-overlap | [memory/gotchas.md](memory/gotchas.md) |
-| app-capabilities, app-owned-results, llm-investigation | [004](memory/architecture/004-app-tool-investigation.md) |
+| mcp | [004](memory/architecture/004-app-tool-investigation.md), [013](memory/architecture/013-common-file-mcp-results.md) |
 | cleanup-tree, child-exclusion, inherited-selection | [005](memory/architecture/005-cleanup-candidate-tree.md) |
 | claude-arm64, rosetta, startup-latency, macos-soak | [memory/gotchas.md](memory/gotchas.md) |
 | cloud-exclusion, jwalk, codex-common-flow, scan-safety | [memory/gotchas.md](memory/gotchas.md) |
@@ -74,4 +74,4 @@
 ## meta/
 - **프로젝트**: BroomSweepy
 - **생성일**: 2026-09-04
-- **마지막 업데이트**: 2026-10-06
+- **마지막 업데이트**: 2026-10-07

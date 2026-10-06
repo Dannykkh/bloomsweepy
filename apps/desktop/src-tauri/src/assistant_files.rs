@@ -4,12 +4,15 @@ use crate::{
     ScanCompletionGuard, ScanRuntime, StoredReports, assistant_sessions, assistant_tools,
     trash_actions,
 };
+use bloomsweepy_control::{
+    AppToolResult, AppToolStatus, ControlOperationState, FileWorkspaceAction,
+};
 use bloomsweepy_core::{
     DirectoryNode, DirectoryScanConfig, VerifiedTrashItem, scan_directory_level,
     search_local_entries, validate_directory_trash_file, validate_directory_trash_folder,
     validate_local_directory_path,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use std::{
     collections::{HashMap, HashSet},
@@ -20,46 +23,20 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 
 const PAGE_SIZE: usize = 24;
 const MAX_WORKSPACES: usize = 16;
 const MAX_SELECTION: usize = 100;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum FileAction {
-    Scan {},
-    Largest {},
-    Search {
-        query: String,
-    },
-    ReviewNamed {
-        name: String,
-    },
-    Browse {
-        revision: String,
-        #[serde(rename = "entryId")]
-        entry_id: String,
-    },
-    Parent {
-        revision: String,
-    },
-    Page {
-        revision: String,
-        offset: usize,
-    },
-    Select {
-        revision: String,
-        #[serde(rename = "includeIds")]
-        include_ids: Vec<String>,
-        #[serde(rename = "excludeIds")]
-        exclude_ids: Vec<String>,
-    },
-    Review {
-        revision: String,
-        ids: Vec<String>,
-    },
+pub(crate) type FileAction = FileWorkspaceAction;
+const EXTERNAL_WORKSPACE_KEY: &str = "external-files.workspace";
+
+#[derive(Default)]
+struct ExternalWorkspaceState {
+    // minimal: one shared external workspace and last outcome — add per-client isolation only with authenticated transport identities.
+    binding: Option<crate::control_server::FileWorkspaceBinding>,
+    operation: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -196,7 +173,10 @@ impl Workspace {
 }
 
 #[derive(Default)]
-pub(crate) struct AssistantFilesState(Mutex<HashMap<String, Workspace>>);
+pub(crate) struct AssistantFilesState(
+    Mutex<HashMap<String, Workspace>>,
+    Mutex<ExternalWorkspaceState>,
+);
 impl AssistantFilesState {
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<String, Workspace>>, String> {
         self.0
@@ -215,19 +195,7 @@ impl AssistantFilesState {
         let Some(workspace) = workspaces.get(session_id) else {
             return Ok(json!({"freshScan":false}).to_string());
         };
-        let view = workspace.view();
-        let entries: Vec<_> = view.entries.iter().map(|entry| json!({"id":entry.id,"number":entry.number,
-            "name":entry.name.chars().take(240).collect::<String>(),"kind":if entry.is_directory {"directory"} else {"file"},
-            "logicalBytes":entry.logical_bytes,"files":entry.file_count,"directories":entry.directory_count,
-            "modifiedAtUnixMs":entry.modified_at_unix_ms,
-            "selected":view.selected_ids.contains(&entry.id)})).collect();
-        Ok(json!({"freshScan":true,"revision":view.revision,"currentFolder":view.current_name,"canGoUp":view.can_go_up,
-            "query":view.query,"sizeRanked":view.size_ranked,"scanCompletedAtUnixMs":view.summary.completed_at_unix_ms,
-            "rankingScope":"direct children; folder sizes include descendants; logical bytes, not reclaimable space",
-            "deletionSafety":"unknown; names, sizes and modification times cannot establish backup, necessity or reproducibility",
-            "totalEntries":view.total_entries,"truncated":view.truncated,"unreadable":view.unreadable_entries,
-            "offset":view.offset,"nextOffset":view.next_offset,"entries":entries,"selectedCount":view.selected_ids.len(),
-            "reviewReady":view.plan.is_some(),"approval":"main app human decision or native opt-in exact-named removal; model cannot approve"}).to_string())
+        Ok(model_workspace_context(&workspace.view()).to_string())
     }
     fn insert(&self, session_id: &str, workspace: Workspace) -> Result<FileWorkspaceView, String> {
         let view = workspace.view();
@@ -282,6 +250,21 @@ impl AssistantFilesState {
         workspace.selected.clear();
         Ok(plan.verified)
     }
+}
+
+fn model_workspace_context(view: &FileWorkspaceView) -> serde_json::Value {
+    let entries: Vec<_> = view.entries.iter().map(|entry| json!({"id":entry.id,"number":entry.number,
+        "name":entry.name.chars().take(240).collect::<String>(),"kind":if entry.is_directory {"directory"} else {"file"},
+        "logicalBytes":entry.logical_bytes,"files":entry.file_count,"directories":entry.directory_count,
+        "modifiedAtUnixMs":entry.modified_at_unix_ms,
+        "selected":view.selected_ids.contains(&entry.id)})).collect();
+    json!({"freshScan":true,"revision":view.revision,"currentFolder":view.current_name,"canGoUp":view.can_go_up,
+        "query":view.query,"sizeRanked":view.size_ranked,"scanCompletedAtUnixMs":view.summary.completed_at_unix_ms,
+        "rankingScope":"direct children; folder sizes include descendants; logical bytes, not reclaimable space",
+        "deletionSafety":"unknown; names, sizes and modification times cannot establish backup, necessity or reproducibility",
+        "totalEntries":view.total_entries,"truncated":view.truncated,"unreadable":view.unreadable_entries,
+        "offset":view.offset,"nextOffset":view.next_offset,"entries":entries,"selectedCount":view.selected_ids.len(),
+        "reviewReady":view.plan.is_some(),"approval":"main app human decision or native opt-in exact-named removal; model cannot approve"})
 }
 
 fn validate_ids(ids: &[String]) -> Result<(), String> {
@@ -468,183 +451,264 @@ pub(crate) async fn dispatch(
         return Err("폴더 대화에서만 사용할 수 있습니다".into());
     }
     let scope = PathBuf::from(session.session.scope_root);
-    let cancellation = app.state::<ScanRuntime>().begin()?;
-    let _completion = ScanCompletionGuard::new(app.clone());
     app.state::<assistant_tools::AssistantToolsState>()
         .forget(&session_id)?;
-    let worker_app = app.clone();
-    let worker_session = session_id.clone();
-    let view = tauri::async_runtime::spawn_blocking(move || {
-        let state = worker_app.state::<AssistantFilesState>();
-        let cancelled =
-            || cancellation.load(Ordering::Acquire) || request_cancel.load(Ordering::Acquire);
-        if cancelled() {
-            return Err("대화 작업을 취소했습니다".into());
-        }
-        match operation {
-            FileAction::Scan {} | FileAction::Largest {} => {
-                let size_ranked = matches!(operation, FileAction::Largest {});
-                let current = state
-                    .lock()?
-                    .get(&worker_session)
-                    .map(|workspace| workspace.current.clone())
-                    .unwrap_or(scope.clone());
-                state.forget(&worker_session)?;
-                let mut workspace = scan_workspace(
-                    scope,
-                    current,
-                    &worker_app.state::<StoredReports>(),
-                    &cancelled,
-                )?;
-                workspace.size_ranked = size_ranked;
-                state.insert(&worker_session, workspace)
-            }
-            FileAction::Search { query } | FileAction::ReviewNamed { name: query } => {
-                // ReviewNamed is handled by the caller flag below; exact, unique names only.
-                let current = state
-                    .lock()?
-                    .get(&worker_session)
-                    .map(|workspace| workspace.current.clone())
-                    .unwrap_or(scope.clone());
-                state.forget(&worker_session)?;
-                let current = confined(&scope, &current)?;
-                let report = search_local_entries(&current, &query, cancelled)
-                    .map_err(|error| error.to_string())?;
-                state.insert(
-                    &worker_session,
-                    Workspace {
-                        revision: assistant_tools::new_id()?,
-                        scope,
-                        current,
-                        nodes: report.entries,
-                        summary: session.folder_summary,
-                        query: Some(query),
-                        size_ranked: false,
-                        map_generation: None,
-                        truncated: report.truncated,
-                        unreadable: report.unreadable_entries,
-                        offset: 0,
-                        selected: Vec::new(),
-                        plan: None,
-                    },
-                )
-            }
-            FileAction::Browse { revision, entry_id } => {
-                let target = {
-                    let workspaces = state.lock()?;
-                    let workspace = workspaces
-                        .get(&worker_session)
-                        .filter(|workspace| workspace.revision == revision)
-                        .ok_or("파일 목록이 변경됐습니다")?;
-                    workspace.check_page_ids(std::slice::from_ref(&entry_id))?;
-                    let node = &workspace.nodes[workspace.index(&entry_id)?];
-                    if !node.is_directory {
-                        return Err("폴더만 하위 탐색할 수 있습니다".into());
-                    }
-                    PathBuf::from(&node.path)
-                };
-                state.forget(&worker_session)?;
-                state.insert(
-                    &worker_session,
-                    scan_workspace(
-                        scope,
-                        target,
-                        &worker_app.state::<StoredReports>(),
-                        &cancelled,
-                    )?,
-                )
-            }
-            FileAction::Parent { revision } => {
-                let target = {
-                    let workspaces = state.lock()?;
-                    let workspace = workspaces
-                        .get(&worker_session)
-                        .filter(|workspace| workspace.revision == revision)
-                        .ok_or("파일 목록이 변경됐습니다")?;
-                    if workspace.current == scope {
-                        return Err("대화 폴더 밖으로 이동할 수 없습니다".into());
-                    }
-                    workspace
-                        .current
-                        .parent()
-                        .ok_or("부모 폴더가 없습니다")?
-                        .to_owned()
-                };
-                state.forget(&worker_session)?;
-                state.insert(
-                    &worker_session,
-                    scan_workspace(
-                        scope,
-                        target,
-                        &worker_app.state::<StoredReports>(),
-                        &cancelled,
-                    )?,
-                )
-            }
-            FileAction::Page { revision, offset } => {
-                let mut workspaces = state.lock()?;
-                let workspace = workspace_mut(&mut workspaces, &worker_session, &revision)?;
-                if offset != 0 && offset >= workspace.nodes.len() {
-                    return Err("목록 페이지 범위를 벗어났습니다".into());
-                }
-                workspace.offset = offset;
-                Ok(workspace.view())
-            }
-            FileAction::Select {
-                revision,
-                include_ids,
-                exclude_ids,
-            } => {
-                let selected = {
-                    let workspaces = state.lock()?;
-                    let workspace = workspaces
-                        .get(&worker_session)
-                        .filter(|workspace| workspace.revision == revision)
-                        .ok_or("파일 목록이 변경됐습니다")?;
-                    workspace.check_page_ids(&include_ids)?;
-                    workspace.check_page_ids(&exclude_ids)?;
-                    if include_ids.iter().any(|id| exclude_ids.contains(id)) {
-                        return Err("같은 항목을 포함하고 제외할 수 없습니다".into());
-                    }
-                    let mut selected = workspace.selected.clone();
-                    selected.retain(|id| !exclude_ids.contains(id));
-                    for id in include_ids {
-                        if !selected.contains(&id) {
-                            selected.push(id);
-                        }
-                    }
-                    selected
-                };
-                state.select(&worker_session, &revision, selected)
-            }
-            FileAction::Review { revision, ids } => {
-                state
-                    .lock()?
-                    .get(&worker_session)
-                    .filter(|workspace| workspace.revision == revision)
-                    .ok_or("파일 목록이 변경됐습니다")?
-                    .check_page_ids(&ids)?;
-                state.select(&worker_session, &revision, ids)?;
-                prepare(&state, &worker_session, &revision, &cancelled)
-            }
-        }
-    })
-    .await
-    .map_err(|error| format!("파일 대화 작업이 중단됐습니다: {error}"))??;
-    if view.query.is_none() && view.current_path == scope_path(&app, &session_id).await? {
-        assistant_sessions::update_folder_summary(app.clone(), session_id, view.summary.clone())
-            .await?;
+    let view = dispatch_root(
+        app.clone(),
+        FileDispatchRoot {
+            key: session_id.clone(),
+            scope: scope.clone(),
+            summary: session.folder_summary,
+            binding: None,
+        },
+        operation,
+        request_cancel,
+        None,
+    )
+    .await?;
+    if view.query.is_none() && Path::new(&view.current_path) == scope {
+        assistant_sessions::update_folder_summary(app, session_id, view.summary.clone()).await?;
     }
     Ok(view)
 }
 
-async fn scope_path(app: &AppHandle, id: &str) -> Result<String, String> {
-    Ok(
-        assistant_sessions::get_assistant_session(app.clone(), id.into())
-            .await?
-            .session
-            .scope_root,
-    )
+struct FileDispatchRoot {
+    key: String,
+    scope: PathBuf,
+    summary: AssistantFolderSummary,
+    binding: Option<(crate::control_server::FileWorkspaceBinding, bool)>,
+}
+
+async fn dispatch_root(
+    app: AppHandle,
+    context: FileDispatchRoot,
+    operation: FileAction,
+    request_cancel: Arc<AtomicBool>,
+    reserved_cancellation: Option<Arc<AtomicBool>>,
+) -> Result<FileWorkspaceView, String> {
+    operation.validate().map_err(|error| error.to_string())?;
+    let (cancellation, completion) = if let Some(cancellation) = reserved_cancellation {
+        (cancellation, None)
+    } else {
+        (
+            app.state::<ScanRuntime>().begin()?,
+            Some(ScanCompletionGuard::new(app.clone())),
+        )
+    };
+    let worker_app = app.clone();
+    let worker_completion = completion.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Dropping the IPC future must not release the native scan lease while blocking work remains.
+        let _worker_completion = worker_completion;
+        let cancelled = || {
+            cancellation.load(Ordering::Acquire)
+                || request_cancel.load(Ordering::Acquire)
+                || context.binding.as_ref().is_some_and(|(binding, review)| {
+                    !crate::control_server::file_workspace_epochs_current(
+                        &worker_app,
+                        binding,
+                        *review,
+                    )
+                })
+        };
+        apply_workspace_action(
+            &worker_app.state::<AssistantFilesState>(),
+            &worker_app.state::<StoredReports>(),
+            &context.key,
+            context.scope.clone(),
+            context.summary.clone(),
+            operation,
+            &cancelled,
+        )
+    })
+    .await
+    .map_err(|error| format!("파일 대화 작업이 중단됐습니다: {error}"))?
+}
+
+fn apply_workspace_action(
+    state: &AssistantFilesState,
+    reports: &StoredReports,
+    worker_session: &str,
+    scope: PathBuf,
+    initial_summary: AssistantFolderSummary,
+    operation: FileAction,
+    cancelled: &impl Fn() -> bool,
+) -> Result<FileWorkspaceView, String> {
+    operation.validate().map_err(|error| error.to_string())?;
+    if cancelled() {
+        return Err("대화 작업을 취소했습니다".into());
+    }
+    let named = match &operation {
+        FileAction::ReviewNamed { name } => Some(name.clone()),
+        _ => None,
+    };
+    let operation = if let Some(name) = &named {
+        FileAction::Search {
+            query: name.clone(),
+        }
+    } else {
+        operation
+    };
+    let view = match operation {
+        FileAction::Scan {} | FileAction::Largest {} => {
+            let size_ranked = matches!(operation, FileAction::Largest {});
+            let current = state
+                .lock()?
+                .get(worker_session)
+                .map(|workspace| workspace.current.clone())
+                .unwrap_or(scope.clone());
+            state.forget(worker_session)?;
+            let mut workspace = scan_workspace(scope, current, reports, cancelled)?;
+            workspace.size_ranked = size_ranked;
+            state.insert(worker_session, workspace)
+        }
+        FileAction::Search { query } => {
+            let current = state
+                .lock()?
+                .get(worker_session)
+                .map(|workspace| workspace.current.clone())
+                .unwrap_or(scope.clone());
+            state.forget(worker_session)?;
+            let current = confined(&scope, &current)?;
+            let report = search_local_entries(&current, &query, cancelled)
+                .map_err(|error| error.to_string())?;
+            state.insert(
+                worker_session,
+                Workspace {
+                    revision: assistant_tools::new_id()?,
+                    scope,
+                    current,
+                    nodes: report.entries,
+                    summary: initial_summary,
+                    query: Some(query),
+                    size_ranked: false,
+                    map_generation: None,
+                    truncated: report.truncated,
+                    unreadable: report.unreadable_entries,
+                    offset: 0,
+                    selected: Vec::new(),
+                    plan: None,
+                },
+            )
+        }
+        FileAction::Browse { revision, entry_id } => {
+            let target = {
+                let workspaces = state.lock()?;
+                let workspace = workspaces
+                    .get(worker_session)
+                    .filter(|workspace| workspace.revision == revision)
+                    .ok_or("파일 목록이 변경됐습니다")?;
+                workspace.check_page_ids(std::slice::from_ref(&entry_id))?;
+                let node = &workspace.nodes[workspace.index(&entry_id)?];
+                if !node.is_directory {
+                    return Err("폴더만 하위 탐색할 수 있습니다".into());
+                }
+                PathBuf::from(&node.path)
+            };
+            state.forget(worker_session)?;
+            state.insert(
+                worker_session,
+                scan_workspace(scope, target, reports, cancelled)?,
+            )
+        }
+        FileAction::Parent { revision } => {
+            let target = {
+                let workspaces = state.lock()?;
+                let workspace = workspaces
+                    .get(worker_session)
+                    .filter(|workspace| workspace.revision == revision)
+                    .ok_or("파일 목록이 변경됐습니다")?;
+                if workspace.current == scope {
+                    return Err("대화 폴더 밖으로 이동할 수 없습니다".into());
+                }
+                workspace
+                    .current
+                    .parent()
+                    .ok_or("부모 폴더가 없습니다")?
+                    .to_owned()
+            };
+            state.forget(worker_session)?;
+            state.insert(
+                worker_session,
+                scan_workspace(scope, target, reports, cancelled)?,
+            )
+        }
+        FileAction::Page { revision, offset } => {
+            let mut workspaces = state.lock()?;
+            let workspace = workspace_mut(&mut workspaces, worker_session, &revision)?;
+            if offset != 0 && offset >= workspace.nodes.len() {
+                return Err("목록 페이지 범위를 벗어났습니다".into());
+            }
+            workspace.offset = offset;
+            Ok(workspace.view())
+        }
+        FileAction::Select {
+            revision,
+            include_ids,
+            exclude_ids,
+        } => {
+            let selected = {
+                let workspaces = state.lock()?;
+                let workspace = workspaces
+                    .get(worker_session)
+                    .filter(|workspace| workspace.revision == revision)
+                    .ok_or("파일 목록이 변경됐습니다")?;
+                workspace.check_page_ids(&include_ids)?;
+                workspace.check_page_ids(&exclude_ids)?;
+                if include_ids.iter().any(|id| exclude_ids.contains(id)) {
+                    return Err("같은 항목을 포함하고 제외할 수 없습니다".into());
+                }
+                let mut selected = workspace.selected.clone();
+                selected.retain(|id| !exclude_ids.contains(id));
+                for id in include_ids {
+                    if !selected.contains(&id) {
+                        selected.push(id);
+                    }
+                }
+                selected
+            };
+            state.select(worker_session, &revision, selected)
+        }
+        FileAction::Review { revision, ids } => {
+            state
+                .lock()?
+                .get(worker_session)
+                .filter(|workspace| workspace.revision == revision)
+                .ok_or("파일 목록이 변경됐습니다")?
+                .check_page_ids(&ids)?;
+            state.select(worker_session, &revision, ids)?;
+            prepare(state, worker_session, &revision, cancelled)
+        }
+        FileAction::Status {} => state
+            .view(worker_session)?
+            .ok_or_else(|| "현재 파일 검사 결과가 없습니다".into()),
+        FileAction::ReviewNamed { .. } => unreachable!("normalized to exact name search"),
+    }?;
+    if let Some(name) = named {
+        prepare_unique_name(state, worker_session, view, &name, cancelled)
+    } else {
+        Ok(view)
+    }
+}
+
+fn prepare_unique_name(
+    state: &AssistantFilesState,
+    key: &str,
+    view: FileWorkspaceView,
+    name: &str,
+    cancelled: &impl Fn() -> bool,
+) -> Result<FileWorkspaceView, String> {
+    let id = {
+        let mut workspaces = state.lock()?;
+        let workspace = workspace_mut(&mut workspaces, key, &view.revision)?;
+        let Some(id) = unique_exact_id(workspace, name) else {
+            return Ok(view);
+        };
+        workspace.offset = workspace.index(&id)? / PAGE_SIZE * PAGE_SIZE;
+        id
+    };
+    state.select(key, &view.revision, vec![id])?;
+    prepare(state, key, &view.revision, cancelled)
 }
 
 pub(crate) async fn review_named(
@@ -653,41 +717,7 @@ pub(crate) async fn review_named(
     name: String,
     cancelled: Arc<AtomicBool>,
 ) -> Result<FileWorkspaceView, String> {
-    let view = dispatch(
-        app.clone(),
-        session_id.clone(),
-        FileAction::Search {
-            query: name.clone(),
-        },
-        cancelled.clone(),
-    )
-    .await?;
-    let ids = {
-        let state = app.state::<AssistantFilesState>();
-        let workspaces = state.lock()?;
-        let workspace = workspaces.get(&session_id).ok_or("파일 목록이 없습니다")?;
-        let Some(id) = unique_exact_id(workspace, &name) else {
-            return Ok(view);
-        };
-        vec![id]
-    };
-    // Unique exact match may be beyond page one. Change page so it is explicitly in context.
-    {
-        let state = app.state::<AssistantFilesState>();
-        let mut workspaces = state.lock()?;
-        let workspace = workspace_mut(&mut workspaces, &session_id, &view.revision)?;
-        workspace.offset = workspace.index(&ids[0])? / PAGE_SIZE * PAGE_SIZE;
-    }
-    dispatch(
-        app,
-        session_id,
-        FileAction::Review {
-            revision: view.revision,
-            ids,
-        },
-        cancelled,
-    )
-    .await
+    dispatch(app, session_id, FileAction::ReviewNamed { name }, cancelled).await
 }
 
 fn unique_exact_id(workspace: &Workspace, name: &str) -> Option<String> {
@@ -705,6 +735,433 @@ fn unique_exact_id(workspace: &Workspace, name: &str) -> Option<String> {
         return None;
     }
     Some(workspace.entry(index).id)
+}
+
+fn external_permission() -> AppToolResult {
+    AppToolResult::with_status(
+        "files.workspace",
+        AppToolStatus::PermissionRequired,
+        json!({"workspace":{"freshScan":false},"reviewPrepared":false,"deleted":false,
+            "reason":"앱에서 검사 폴더와 정리 검토 허용을 확인해 주세요","permissionChanged":false}),
+    )
+}
+
+fn needs_review_access(action: &FileAction) -> bool {
+    matches!(
+        action,
+        FileAction::Select { .. } | FileAction::Review { .. } | FileAction::ReviewNamed { .. }
+    )
+}
+fn heavy_action(action: &FileAction) -> bool {
+    matches!(
+        action,
+        FileAction::Scan {}
+            | FileAction::Largest {}
+            | FileAction::Search { .. }
+            | FileAction::Browse { .. }
+            | FileAction::Parent { .. }
+            | FileAction::Review { .. }
+            | FileAction::ReviewNamed { .. }
+    )
+}
+
+impl AssistantFilesState {
+    fn external_lock(&self) -> Result<std::sync::MutexGuard<'_, ExternalWorkspaceState>, String> {
+        self.1
+            .lock()
+            .map_err(|_| "외부 파일 조회 상태를 확인하지 못했습니다".into())
+    }
+    fn bind_external(
+        &self,
+        binding: &crate::control_server::FileWorkspaceBinding,
+    ) -> Result<(), String> {
+        let mut external = self.external_lock()?;
+        let mut workspaces = self.lock()?;
+        if external
+            .binding
+            .as_ref()
+            .is_none_or(|old| !old.same_scope(binding))
+        {
+            workspaces.remove(EXTERNAL_WORKSPACE_KEY);
+            external.operation = None;
+        } else if external
+            .binding
+            .as_ref()
+            .is_some_and(|old| old.cleanup_epoch != binding.cleanup_epoch)
+            && let Some(workspace) = workspaces.get_mut(EXTERNAL_WORKSPACE_KEY)
+        {
+            workspace.selected.clear();
+            workspace.plan = None;
+        }
+        external.binding = Some(binding.clone());
+        Ok(())
+    }
+    fn invalidate_external(&self) -> Result<(), String> {
+        let mut external = self.external_lock()?;
+        self.lock()?.remove(EXTERNAL_WORKSPACE_KEY);
+        external.binding = None;
+        external.operation = None;
+        Ok(())
+    }
+    fn tool_result(
+        &self,
+        key: &str,
+        status: Option<AppToolStatus>,
+    ) -> Result<AppToolResult, String> {
+        let view = self.view(key)?;
+        let mut context = view
+            .as_ref()
+            .map(model_workspace_context)
+            .unwrap_or_else(|| json!({"freshScan":false}));
+        let mut last_operation = None;
+        let mut inferred = if view.as_ref().is_some_and(|view| view.plan.is_some()) {
+            AppToolStatus::ReviewRequired
+        } else {
+            AppToolStatus::Completed
+        };
+        if key == EXTERNAL_WORKSPACE_KEY {
+            context["approval"] = json!(
+                "local main-app final confirmation only; external models cannot approve or execute"
+            );
+            last_operation = self.external_lock()?.operation.clone();
+            match last_operation
+                .as_ref()
+                .and_then(|value| value["state"].as_str())
+            {
+                Some("running" | "executing") => {
+                    inferred = AppToolStatus::Running;
+                    context = json!({"freshScan":false,"scanInProgress":true});
+                }
+                Some("failed") => inferred = AppToolStatus::Failed,
+                _ => {}
+            }
+        }
+        let review = view.as_ref().is_some_and(|view| view.plan.is_some());
+        let mut result = AppToolResult::with_status(
+            "files.workspace",
+            status.unwrap_or(inferred),
+            json!({"workspace":context,"reviewPrepared":review,"deleted":false,"lastOperation":last_operation}),
+        );
+        result.truncated = view
+            .as_ref()
+            .is_some_and(|view| view.truncated || view.unreadable_entries > 0);
+        if let Some(view) = view {
+            result.presentation = Some(
+                json!({"view":"overview","reviewKind":"files","workspaceKey":key,"workspace":view}),
+            );
+        }
+        Ok(result)
+    }
+}
+
+fn unknown_summary(root: &Path) -> AssistantFolderSummary {
+    AssistantFolderSummary {
+        scope_name: root
+            .file_name()
+            .unwrap_or(root.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+        completed_at_unix_ms: 0,
+        total_logical_bytes: 0,
+        total_files: 0,
+        total_directories: 0,
+        unreadable_entries: 0,
+        empty_directory_count: 0,
+        children_truncated: true,
+        children: Vec::new(),
+    }
+}
+
+/// The canonical adapter never accepts a session/path/approval from an external caller.
+pub(crate) async fn execute_tool(
+    app: &AppHandle,
+    scope: &crate::app_tools::ToolScope,
+    operation: &FileWorkspaceAction,
+    cancellation: Arc<AtomicBool>,
+) -> Result<AppToolResult, String> {
+    operation.validate().map_err(|error| error.to_string())?;
+    if cancellation.load(Ordering::Acquire) {
+        return Err("파일 조회를 취소했습니다".into());
+    }
+    let files = app.state::<AssistantFilesState>();
+    if let crate::app_tools::ToolScope::Native { session_id, .. } = scope {
+        let session =
+            assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
+        if session.session.scope_kind != AssistantScopeKind::Folder {
+            return Err("폴더 대화에서만 파일을 조회할 수 있습니다".into());
+        }
+        if !matches!(operation, FileAction::Status {}) {
+            dispatch(
+                app.clone(),
+                session_id.clone(),
+                operation.clone(),
+                cancellation,
+            )
+            .await?;
+        }
+        return files.tool_result(session_id, None);
+    }
+    let binding = match crate::control_server::tool_file_workspace_binding(app) {
+        Ok(binding) => binding,
+        Err(_) => {
+            files.invalidate_external()?;
+            return Ok(external_permission());
+        }
+    };
+    files.bind_external(&binding)?;
+    let review = needs_review_access(operation);
+    if review && !binding.cleanup_allowed {
+        return Ok(external_permission());
+    }
+    if matches!(operation, FileAction::Status {}) {
+        let result = files.tool_result(EXTERNAL_WORKSPACE_KEY, None)?;
+        if !crate::control_server::file_workspace_binding_current(
+            app,
+            &binding,
+            result.status == AppToolStatus::ReviewRequired,
+        ) {
+            files.invalidate_external()?;
+            return Ok(external_permission());
+        }
+        return Ok(result);
+    }
+    if files
+        .external_lock()?
+        .operation
+        .as_ref()
+        .is_some_and(|operation| {
+            matches!(operation["state"].as_str(), Some("running" | "executing"))
+        })
+    {
+        return files.tool_result(EXTERNAL_WORKSPACE_KEY, Some(AppToolStatus::Running));
+    }
+    let summary = files
+        .view(EXTERNAL_WORKSPACE_KEY)?
+        .map(|view| view.summary)
+        .unwrap_or_else(|| unknown_summary(&binding.root));
+    if heavy_action(operation) {
+        let reservation =
+            crate::control_server::reserve_file_workspace_operation(app, &binding, review)?;
+        let id = reservation.operation.operation_id.clone();
+        files.external_lock()?.operation =
+            Some(json!({"operationId":id,"state":"running","outcome":"pending","performed":false}));
+        let task_app = app.clone();
+        let action = operation.clone();
+        tauri::async_runtime::spawn(async move {
+            let _completion = reservation.completion;
+            let result = dispatch_root(
+                task_app.clone(),
+                FileDispatchRoot {
+                    key: EXTERNAL_WORKSPACE_KEY.into(),
+                    scope: binding.root.clone(),
+                    summary,
+                    binding: Some((binding.clone(), review)),
+                },
+                action,
+                cancellation,
+                Some(reservation.cancellation.clone()),
+            )
+            .await;
+            let files = task_app.state::<AssistantFilesState>();
+            let current =
+                crate::control_server::file_workspace_binding_current(&task_app, &binding, review);
+            let (state, outcome, message) = if !current {
+                let _ = files.invalidate_external();
+                (
+                    ControlOperationState::Cancelled,
+                    "permission_changed",
+                    "파일 조회 허용 범위가 바뀌어 결과를 전달하지 않았습니다",
+                )
+            } else if result.is_ok() {
+                (
+                    ControlOperationState::Completed,
+                    "inspected",
+                    "앱의 파일 조회·검토를 완료했습니다",
+                )
+            } else if reservation.cancellation.load(Ordering::Acquire) {
+                let _ = files.forget(EXTERNAL_WORKSPACE_KEY);
+                (
+                    ControlOperationState::Cancelled,
+                    "cancelled",
+                    "파일 조회를 취소했습니다",
+                )
+            } else {
+                let _ = files.forget(EXTERNAL_WORKSPACE_KEY);
+                (
+                    ControlOperationState::Failed,
+                    "failed",
+                    "파일 조회를 완료하지 못했습니다. 최신 목록과 범위를 확인해 주세요",
+                )
+            };
+            if current {
+                if let Ok(mut external) = files.external_lock() {
+                    external.operation = Some(
+                        json!({"operationId":id,"state":state,"outcome":outcome,"performed":result.is_ok()}),
+                    );
+                }
+                if let Ok(result) = files.tool_result(EXTERNAL_WORKSPACE_KEY, None)
+                    && result.status == AppToolStatus::ReviewRequired
+                    && crate::control_server::file_workspace_binding_current(
+                        &task_app, &binding, true,
+                    )
+                {
+                    let _ = task_app.emit("app-tool-review", result);
+                }
+            }
+            crate::control_server::finish_tool_operation(
+                &task_app,
+                &id,
+                state,
+                message.into(),
+                None,
+                None,
+            );
+        });
+        return files.tool_result(EXTERNAL_WORKSPACE_KEY, Some(AppToolStatus::Running));
+    }
+    dispatch_root(
+        app.clone(),
+        FileDispatchRoot {
+            key: EXTERNAL_WORKSPACE_KEY.into(),
+            scope: binding.root.clone(),
+            summary,
+            binding: Some((binding.clone(), review)),
+        },
+        operation.clone(),
+        cancellation,
+        None,
+    )
+    .await
+    .map_err(|_| {
+        "파일 목록을 변경하지 못했습니다. 최신 목록과 허용 범위를 확인해 주세요".to_owned()
+    })?;
+    if !crate::control_server::file_workspace_binding_current(app, &binding, review) {
+        files.invalidate_external()?;
+        return Ok(external_permission());
+    }
+    files.external_lock()?.operation = None;
+    files.tool_result(EXTERNAL_WORKSPACE_KEY, None)
+}
+
+#[tauri::command]
+pub(crate) async fn confirm_external_file_plan(
+    app: AppHandle,
+    window: WebviewWindow,
+    revision: String,
+    plan_id: String,
+    nested_contents_acknowledged: bool,
+) -> Result<trash_actions::TrashOperationResult, String> {
+    if window.label() != "main" {
+        return Err("기본 앱 화면에서만 최종 확인할 수 있습니다".into());
+    }
+    let files = app.state::<AssistantFilesState>();
+    let binding = files
+        .external_lock()?
+        .binding
+        .clone()
+        .ok_or("파일 검토 범위가 변경됐습니다")?;
+    if !crate::control_server::file_workspace_binding_current(&app, &binding, true) {
+        files.invalidate_external()?;
+        return Err("파일 검사 또는 정리 검토 허용이 변경됐습니다. 다시 검토하세요".into());
+    }
+    let cancellation = app.state::<ScanRuntime>().begin()?;
+    let completion = ScanCompletionGuard::new(app.clone());
+    let items = crate::control_server::with_file_workspace_authority(&app, &binding, || {
+        let items = files.claim(
+            EXTERNAL_WORKSPACE_KEY,
+            &revision,
+            &plan_id,
+            nested_contents_acknowledged,
+        )?;
+        files.external_lock()?.operation =
+            Some(json!({"state":"executing","outcome":"pending","performed":false}));
+        Ok(items)
+    })?;
+    let result = trash_actions::trash_verified_cleanup_tree_files(
+        app.clone(),
+        items,
+        cancellation,
+        completion.clone(),
+    )
+    .await;
+    files.forget(EXTERNAL_WORKSPACE_KEY)?;
+    app.state::<StoredReports>().clear_all()?;
+    let outcome = match &result {
+        Ok(actual) => trash_outcome(actual),
+        Err(_) => {
+            json!({"state":"failed","outcome":"unconfirmed","performed":true,"automaticRetry":false})
+        }
+    };
+    if crate::control_server::file_workspace_binding_current(&app, &binding, false) {
+        files.external_lock()?.operation = Some(outcome);
+    } else {
+        files.invalidate_external()?;
+    }
+    result
+}
+
+fn trash_outcome(actual: &trash_actions::TrashOperationResult) -> serde_json::Value {
+    json!({"state":"completed","outcome":if actual.cancelled && actual.moved_count == 0 {"cancelled"} else if actual.moved_count == actual.requested_count {"moved"} else {"partial"},
+        "requestedCount":actual.requested_count,"movedCount":actual.moved_count,"movedBytes":actual.moved_bytes,
+        "cancelled":actual.cancelled,"stoppedEarly":actual.stopped_early,"journalComplete":actual.journal_complete,
+        "failedCount":actual.items.iter().filter(|item| item.status == trash_actions::TrashItemStatus::Failed).count(),
+        "skippedCount":actual.items.iter().filter(|item| item.status == trash_actions::TrashItemStatus::Skipped).count(),
+        "performed":true,"automaticRetry":false})
+}
+
+#[tauri::command]
+pub(crate) fn cancel_external_file_plan(
+    app: AppHandle,
+    window: WebviewWindow,
+    revision: String,
+    plan_id: String,
+) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("기본 앱 화면에서만 최종 확인할 수 있습니다".into());
+    }
+    let files = app.state::<AssistantFilesState>();
+    cancel_external_plan(&files, revision, plan_id)
+}
+
+fn cancel_external_plan(
+    files: &AssistantFilesState,
+    revision: String,
+    plan_id: String,
+) -> Result<(), String> {
+    if [&revision, &plan_id]
+        .iter()
+        .any(|id| id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err("앱이 발급한 검토 계획 번호가 필요합니다".into());
+    }
+    let mut external = files.external_lock()?;
+    let mut workspaces = files.lock()?;
+    let current = workspaces
+        .get_mut(EXTERNAL_WORKSPACE_KEY)
+        .filter(|workspace| {
+            workspace.revision == revision
+                && workspace
+                    .plan
+                    .as_ref()
+                    .is_some_and(|plan| plan.id == plan_id)
+        });
+    let Some(workspace) = current else {
+        // Stale dismissal is harmless: it never changes a newer plan or restores execution authority.
+        // No history or TTL is needed, even after arbitrarily many intervening workspace changes.
+        return Ok(());
+    };
+    if external
+        .operation
+        .as_ref()
+        .is_some_and(|operation| operation["state"] == "executing")
+    {
+        return Err("이미 휴지통 작업이 시작됐습니다".into());
+    }
+    workspace.plan = None;
+    workspace.selected.clear();
+    external.operation =
+        Some(json!({"state":"completed","outcome":"cancelled","performed":false,"movedCount":0}));
+    Ok(())
 }
 
 #[tauri::command]
@@ -850,6 +1307,700 @@ mod tests {
         let workspace =
             scan_workspace(root.clone(), root, &StoredReports::default(), &|| false).unwrap();
         (temp, workspace)
+    }
+
+    fn external_binding(root: PathBuf) -> crate::control_server::FileWorkspaceBinding {
+        crate::control_server::FileWorkspaceBinding {
+            root,
+            scope_epoch: 1,
+            cleanup_epoch: 1,
+            cleanup_allowed: true,
+        }
+    }
+
+    #[test]
+    fn file_dispatch_worker_keeps_its_lease_after_the_request_guard_drops() {
+        let runtime = Arc::new(ScanRuntime::default());
+        let cancellation = runtime.begin().unwrap();
+        let completion = ScanCompletionGuard::for_runtime(runtime.clone(), None);
+        let worker_completion = Some(completion.clone());
+        let (started_tx, started_rx) = std::sync::mpsc::sync_channel(0);
+        let (finish_tx, finish_rx) = std::sync::mpsc::sync_channel(0);
+        let worker = tauri::async_runtime::spawn_blocking(move || {
+            let _worker_completion = worker_completion;
+            started_tx.send(()).unwrap();
+            finish_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(cancellation.load(Ordering::Acquire));
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(completion); // The awaiting IPC request no longer owns the lease.
+        assert!(runtime.is_running());
+        assert!(runtime.begin().is_err());
+        assert!(runtime.cancel().unwrap());
+        finish_tx.send(()).unwrap();
+        tauri::async_runtime::block_on(worker).unwrap();
+        assert!(!runtime.is_running());
+    }
+
+    #[test]
+    fn shared_root_engine_scans_ranks_browses_and_searches_only_its_fixture() {
+        let (_temp, fixture_workspace) = fixture();
+        let root = fixture_workspace.scope.clone();
+        let state = AssistantFilesState::default();
+        let reports = StoredReports::default();
+        let scan = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            unknown_summary(&root),
+            FileAction::Largest {},
+            &|| false,
+        )
+        .unwrap();
+        assert!(scan.size_ranked);
+        assert_eq!(scan.entries[0].name, "promo-video");
+        let browse = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            scan.summary.clone(),
+            FileAction::Browse {
+                revision: scan.revision,
+                entry_id: scan.entries[0].id.clone(),
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert!(browse.can_go_up);
+        assert_eq!(browse.entries[0].name, "clip.mp4");
+        let parent = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            browse.summary,
+            FileAction::Parent {
+                revision: browse.revision,
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(Path::new(&parent.current_path), root);
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root.clone(),
+                parent.summary.clone(),
+                FileAction::Parent {
+                    revision: parent.revision.clone()
+                },
+                &|| false
+            )
+            .is_err()
+        );
+        let search = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            parent.summary,
+            FileAction::Search {
+                query: "clip".into(),
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(search.entries[0].name, "clip.mp4");
+        assert_eq!(search.map_generation, None);
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root.clone(),
+                search.summary.clone(),
+                FileAction::Search {
+                    query: "../private".into()
+                },
+                &|| false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root,
+                search.summary,
+                FileAction::Scan {},
+                &|| true
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn external_reserved_workspace_never_reuses_native_selection_or_identity() {
+        let (_temp, workspace) = fixture();
+        let root = workspace.scope.clone();
+        let native_key = assistant_tools::new_id().unwrap();
+        let state = AssistantFilesState::default();
+        let native = state.insert(&native_key, workspace).unwrap();
+        state
+            .bind_external(&external_binding(root.clone()))
+            .unwrap();
+        let reports = StoredReports::default();
+        let external = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            native.summary.clone(),
+            FileAction::Scan {},
+            &|| false,
+        )
+        .unwrap();
+        assert_ne!(external.revision, native.revision);
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root.clone(),
+                native.summary.clone(),
+                FileAction::Select {
+                    revision: external.revision.clone(),
+                    include_ids: vec![native.entries[0].id.clone()],
+                    exclude_ids: Vec::new()
+                },
+                &|| false
+            )
+            .is_err()
+        );
+        apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root,
+            native.summary,
+            FileAction::Select {
+                revision: external.revision,
+                include_ids: vec![external.entries[0].id.clone()],
+                exclude_ids: Vec::new(),
+            },
+            &|| false,
+        )
+        .unwrap();
+        assert!(
+            state
+                .view(&native_key)
+                .unwrap()
+                .unwrap()
+                .selected_ids
+                .is_empty()
+        );
+        assert_eq!(
+            state
+                .view(EXTERNAL_WORKSPACE_KEY)
+                .unwrap()
+                .unwrap()
+                .selected_ids
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn shared_model_actions_reject_unknown_ids_and_only_select_current_page() {
+        let (_temp, workspace) = fixture();
+        let root = workspace.scope.clone();
+        for index in 0..30 {
+            std::fs::write(root.join(format!("page-{index:02}.txt")), "x").unwrap();
+        }
+        let state = AssistantFilesState::default();
+        let reports = StoredReports::default();
+        let scan = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            workspace.summary,
+            FileAction::Scan {},
+            &|| false,
+        )
+        .unwrap();
+        let outside = state
+            .lock()
+            .unwrap()
+            .get(EXTERNAL_WORKSPACE_KEY)
+            .unwrap()
+            .entry(PAGE_SIZE)
+            .id;
+        let select = FileAction::Select {
+            revision: scan.revision.clone(),
+            include_ids: vec![outside.clone()],
+            exclude_ids: Vec::new(),
+        };
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root.clone(),
+                scan.summary.clone(),
+                select.clone(),
+                &|| false
+            )
+            .is_err()
+        );
+        assert!(
+            apply_workspace_action(
+                &state,
+                &reports,
+                EXTERNAL_WORKSPACE_KEY,
+                root.clone(),
+                scan.summary.clone(),
+                FileAction::Review {
+                    revision: scan.revision.clone(),
+                    ids: vec![outside.clone()]
+                },
+                &|| false
+            )
+            .is_err()
+        );
+        apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root.clone(),
+            scan.summary.clone(),
+            FileAction::Page {
+                revision: scan.revision,
+                offset: PAGE_SIZE,
+            },
+            &|| false,
+        )
+        .unwrap();
+        let selected = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root,
+            scan.summary,
+            select,
+            &|| false,
+        )
+        .unwrap();
+        assert_eq!(selected.selected_ids, vec![outside]);
+        for raw in [
+            r#"{"kind":"scan","path":"/"}"#,
+            r#"{"kind":"status","nativeSession":"stolen"}"#,
+            r#"{"kind":"confirm","planId":"stolen"}"#,
+            r#"{"kind":"review_named","name":"x","approved":true}"#,
+        ] {
+            assert!(serde_json::from_str::<FileAction>(raw).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn external_review_is_local_only_one_shot_and_exact_cancel_is_idempotent() {
+        let (_temp, workspace) = fixture();
+        let root = workspace.scope.clone();
+        let state = AssistantFilesState::default();
+        state
+            .bind_external(&external_binding(root.clone()))
+            .unwrap();
+        let reports = StoredReports::default();
+        let reviewed = apply_workspace_action(
+            &state,
+            &reports,
+            EXTERNAL_WORKSPACE_KEY,
+            root,
+            workspace.summary,
+            FileAction::ReviewNamed {
+                name: "notes.txt".into(),
+            },
+            &|| false,
+        )
+        .unwrap();
+        let plan = reviewed.plan.unwrap();
+        assert_eq!(plan.expires_at_unix_ms, None);
+        let result = state.tool_result(EXTERNAL_WORKSPACE_KEY, None).unwrap();
+        assert_eq!(result.status, AppToolStatus::ReviewRequired);
+        assert_eq!(
+            result.data["workspace"]["revision"],
+            result.presentation.as_ref().unwrap()["workspace"]["revision"]
+        );
+        assert_eq!(result.data["workspace"]["reviewReady"], true);
+        let public = crate::app_tools::model_context(&result).unwrap();
+        assert!(!public.contains(&plan.id));
+        assert!(!public.contains(&plan.entries[0].path));
+        assert!(!public.contains("presentation"));
+        assert!(!public.contains("opt-in"));
+        assert!(cancel_external_plan(&state, reviewed.revision.clone(), "wrong".into()).is_err());
+        assert_eq!(
+            state
+                .claim(EXTERNAL_WORKSPACE_KEY, &reviewed.revision, &plan.id, true)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            state
+                .claim(EXTERNAL_WORKSPACE_KEY, &reviewed.revision, &plan.id, true)
+                .is_err()
+        );
+        cancel_external_plan(&state, reviewed.revision.clone(), plan.id.clone()).unwrap();
+        assert!(cancel_external_plan(&state, reviewed.revision, "other".into()).is_err());
+    }
+
+    #[test]
+    fn stale_external_dismissal_leaves_newer_plans_unchanged_after_every_invalidation() {
+        for invalidation in [
+            "scan",
+            "largest",
+            "search",
+            "browse",
+            "parent",
+            "review_named",
+            "select",
+            "review",
+            "prepare",
+            "replace",
+            "forget",
+            "cleanup_revoke",
+            "scope_revoke",
+            "invalidate",
+            "claim",
+        ] {
+            let (_temp, workspace) = fixture();
+            let root = workspace.scope.clone();
+            let summary = workspace.summary.clone();
+            let mut binding = external_binding(root.clone());
+            let state = AssistantFilesState::default();
+            let reports = StoredReports::default();
+            state.bind_external(&binding).unwrap();
+            let mut current = state.insert(EXTERNAL_WORKSPACE_KEY, workspace).unwrap();
+            let run = |operation| {
+                apply_workspace_action(
+                    &state,
+                    &reports,
+                    EXTERNAL_WORKSPACE_KEY,
+                    root.clone(),
+                    summary.clone(),
+                    operation,
+                    &|| false,
+                )
+                .unwrap()
+            };
+            if invalidation == "parent" {
+                let folder = current
+                    .entries
+                    .iter()
+                    .find(|entry| entry.is_directory)
+                    .unwrap();
+                current = run(FileAction::Browse {
+                    revision: current.revision.clone(),
+                    entry_id: folder.id.clone(),
+                });
+            }
+            let target = current
+                .entries
+                .iter()
+                .find(|entry| !entry.is_directory)
+                .unwrap()
+                .id
+                .clone();
+            let reviewed = run(FileAction::Review {
+                revision: current.revision.clone(),
+                ids: vec![target.clone()],
+            });
+            let old_revision = reviewed.revision;
+            let old_plan_id = reviewed.plan.unwrap().id;
+            match invalidation {
+                "scan" => {
+                    run(FileAction::Scan {});
+                }
+                "largest" => {
+                    run(FileAction::Largest {});
+                }
+                "search" => {
+                    run(FileAction::Search {
+                        query: "notes".into(),
+                    });
+                }
+                "browse" => {
+                    let folder = current
+                        .entries
+                        .iter()
+                        .find(|entry| entry.is_directory)
+                        .unwrap();
+                    run(FileAction::Browse {
+                        revision: old_revision.clone(),
+                        entry_id: folder.id.clone(),
+                    });
+                }
+                "parent" => {
+                    run(FileAction::Parent {
+                        revision: old_revision.clone(),
+                    });
+                }
+                "review_named" => {
+                    run(FileAction::ReviewNamed {
+                        name: "notes.txt".into(),
+                    });
+                }
+                "select" => {
+                    run(FileAction::Select {
+                        revision: old_revision.clone(),
+                        include_ids: Vec::new(),
+                        exclude_ids: vec![target.clone()],
+                    });
+                }
+                "review" => {
+                    run(FileAction::Review {
+                        revision: old_revision.clone(),
+                        ids: vec![target],
+                    });
+                }
+                "prepare" => {
+                    prepare(&state, EXTERNAL_WORKSPACE_KEY, &old_revision, &|| false).unwrap();
+                }
+                "replace" => {
+                    state
+                        .insert(
+                            EXTERNAL_WORKSPACE_KEY,
+                            scan_workspace(root.clone(), root.clone(), &reports, &|| false)
+                                .unwrap(),
+                        )
+                        .unwrap();
+                }
+                "forget" => {
+                    state.forget(EXTERNAL_WORKSPACE_KEY).unwrap();
+                }
+                "cleanup_revoke" => {
+                    binding.cleanup_epoch += 1;
+                    binding.cleanup_allowed = false;
+                    state.bind_external(&binding).unwrap();
+                }
+                "scope_revoke" => {
+                    binding.scope_epoch += 1;
+                    state.bind_external(&binding).unwrap();
+                }
+                "invalidate" => {
+                    state.invalidate_external().unwrap();
+                }
+                "claim" => {
+                    state
+                        .claim(EXTERNAL_WORKSPACE_KEY, &old_revision, &old_plan_id, true)
+                        .unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let before = serde_json::to_value(state.view(EXTERNAL_WORKSPACE_KEY).unwrap()).unwrap();
+            let before_operation = state.external_lock().unwrap().operation.clone();
+            cancel_external_plan(&state, old_revision.clone(), old_plan_id.clone()).unwrap();
+            // Unknown but valid-shaped dismissals are equally harmless; no nonce grants execution.
+            cancel_external_plan(&state, "f".repeat(32), "e".repeat(32)).unwrap();
+            assert_eq!(
+                serde_json::to_value(state.view(EXTERNAL_WORKSPACE_KEY).unwrap()).unwrap(),
+                before,
+                "{invalidation}"
+            );
+            assert_eq!(
+                state.external_lock().unwrap().operation,
+                before_operation,
+                "{invalidation}"
+            );
+            assert!(
+                state
+                    .claim(EXTERNAL_WORKSPACE_KEY, &old_revision, &old_plan_id, true)
+                    .is_err(),
+                "{invalidation}"
+            );
+            assert!(root.join("notes.txt").exists() && root.join("promo-video/clip.mp4").exists());
+        }
+    }
+
+    #[test]
+    fn old_external_dismissal_has_no_history_limit_and_active_cancel_still_clears_only_its_plan() {
+        let (_temp, workspace) = fixture();
+        let state = AssistantFilesState::default();
+        state
+            .bind_external(&external_binding(workspace.scope.clone()))
+            .unwrap();
+        let view = state.insert(EXTERNAL_WORKSPACE_KEY, workspace).unwrap();
+        let target = view
+            .entries
+            .iter()
+            .find(|entry| !entry.is_directory)
+            .unwrap()
+            .id
+            .clone();
+        state
+            .select(EXTERNAL_WORKSPACE_KEY, &view.revision, vec![target])
+            .unwrap();
+        let first = prepare(&state, EXTERNAL_WORKSPACE_KEY, &view.revision, &|| false)
+            .unwrap()
+            .plan
+            .unwrap();
+        for _ in 0..20 {
+            prepare(&state, EXTERNAL_WORKSPACE_KEY, &view.revision, &|| false).unwrap();
+        }
+        let current = state.view(EXTERNAL_WORKSPACE_KEY).unwrap().unwrap();
+        let new_id = current.plan.as_ref().unwrap().id.clone();
+        assert_ne!(new_id, first.id);
+        let before = serde_json::to_value(&current).unwrap();
+        state.external_lock().unwrap().operation =
+            Some(json!({"state":"completed","outcome":"inspected","performed":false}));
+        let before_operation = state.external_lock().unwrap().operation.clone();
+        cancel_external_plan(&state, current.revision.clone(), first.id.clone()).unwrap();
+        cancel_external_plan(&state, "f".repeat(32), "e".repeat(32)).unwrap();
+        assert_eq!(
+            serde_json::to_value(state.view(EXTERNAL_WORKSPACE_KEY).unwrap().unwrap()).unwrap(),
+            before
+        );
+        assert_eq!(state.external_lock().unwrap().operation, before_operation);
+        assert!(
+            state
+                .claim(EXTERNAL_WORKSPACE_KEY, &current.revision, &first.id, true)
+                .is_err()
+        );
+        for (revision, plan_id) in [
+            ("short".into(), new_id.clone()),
+            (current.revision.clone(), "x".repeat(32)),
+            ("a".repeat(33), new_id.clone()),
+        ] {
+            assert!(cancel_external_plan(&state, revision, plan_id).is_err());
+        }
+        assert_eq!(
+            state
+                .view(EXTERNAL_WORKSPACE_KEY)
+                .unwrap()
+                .unwrap()
+                .plan
+                .unwrap()
+                .id,
+            new_id
+        );
+        cancel_external_plan(&state, current.revision.clone(), new_id.clone()).unwrap();
+        let cancelled = state.view(EXTERNAL_WORKSPACE_KEY).unwrap().unwrap();
+        assert!(cancelled.plan.is_none() && cancelled.selected_ids.is_empty());
+        assert_eq!(
+            state.external_lock().unwrap().operation.as_ref().unwrap()["outcome"],
+            "cancelled"
+        );
+        assert!(
+            state
+                .claim(EXTERNAL_WORKSPACE_KEY, &current.revision, &new_id, true)
+                .is_err()
+        );
+        cancel_external_plan(&state, current.revision, new_id).unwrap();
+    }
+
+    #[test]
+    fn external_scope_aba_and_cleanup_regrant_do_not_restore_previous_plans() {
+        let (_temp, workspace) = fixture();
+        let mut binding = external_binding(workspace.scope.clone());
+        let state = AssistantFilesState::default();
+        state.bind_external(&binding).unwrap();
+        let view = state.insert(EXTERNAL_WORKSPACE_KEY, workspace).unwrap();
+        state
+            .select(
+                EXTERNAL_WORKSPACE_KEY,
+                &view.revision,
+                vec![view.entries[0].id.clone()],
+            )
+            .unwrap();
+        let plan = prepare(&state, EXTERNAL_WORKSPACE_KEY, &view.revision, &|| false)
+            .unwrap()
+            .plan
+            .unwrap();
+        binding.cleanup_epoch += 1;
+        binding.cleanup_allowed = false;
+        state.bind_external(&binding).unwrap();
+        let current = state.view(EXTERNAL_WORKSPACE_KEY).unwrap().unwrap();
+        assert!(current.plan.is_none() && current.selected_ids.is_empty());
+        assert!(
+            state
+                .claim(EXTERNAL_WORKSPACE_KEY, &view.revision, &plan.id, true)
+                .is_err()
+        );
+        cancel_external_plan(&state, view.revision, plan.id).unwrap();
+        binding.cleanup_epoch += 1;
+        binding.cleanup_allowed = true;
+        state.bind_external(&binding).unwrap();
+        assert!(
+            state
+                .view(EXTERNAL_WORKSPACE_KEY)
+                .unwrap()
+                .unwrap()
+                .plan
+                .is_none()
+        );
+        binding.scope_epoch += 2; // A -> B -> A has the same path but a different authority.
+        state.bind_external(&binding).unwrap();
+        assert!(state.view(EXTERNAL_WORKSPACE_KEY).unwrap().is_none());
+        assert_eq!(
+            state
+                .tool_result(EXTERNAL_WORKSPACE_KEY, None)
+                .unwrap()
+                .data["workspace"]["freshScan"],
+            false
+        );
+    }
+
+    #[test]
+    fn external_status_distinguishes_running_failure_cancel_and_partial_moves_without_paths() {
+        let state = AssistantFilesState::default();
+        state.external_lock().unwrap().operation =
+            Some(json!({"state":"running","operationId":"opaque","outcome":"pending"}));
+        let running = state.tool_result(EXTERNAL_WORKSPACE_KEY, None).unwrap();
+        assert_eq!(running.status, AppToolStatus::Running);
+        assert_eq!(running.data["workspace"]["freshScan"], false);
+        state.external_lock().unwrap().operation =
+            Some(json!({"state":"failed","outcome":"failed","performed":false}));
+        assert_eq!(
+            state
+                .tool_result(EXTERNAL_WORKSPACE_KEY, None)
+                .unwrap()
+                .status,
+            AppToolStatus::Failed
+        );
+        let actual = trash_actions::TrashOperationResult {
+            operation_id: "local-only-operation".into(),
+            requested_count: 2,
+            moved_count: 1,
+            moved_bytes: 8,
+            cancelled: true,
+            stopped_early: true,
+            journal_complete: false,
+            journal_path: "/private/journal".into(),
+            items: vec![trash_actions::TrashItemResult {
+                path: "/private/target".into(),
+                logical_bytes: 8,
+                status: trash_actions::TrashItemStatus::Skipped,
+                message: Some("private detail".into()),
+            }],
+        };
+        let outcome = trash_outcome(&actual);
+        assert_eq!(outcome["outcome"], "partial");
+        assert_eq!(outcome["movedCount"], 1);
+        assert_eq!(outcome["skippedCount"], 1);
+        state.external_lock().unwrap().operation = Some(outcome);
+        let completed = state.tool_result(EXTERNAL_WORKSPACE_KEY, None).unwrap();
+        assert_eq!(completed.status, AppToolStatus::Completed);
+        assert_eq!(completed.data["workspace"]["freshScan"], false);
+        assert!(
+            !crate::app_tools::model_context(&completed)
+                .unwrap()
+                .contains("private")
+        );
     }
     #[test]
     fn cleanup_tree_seed_rejects_old_revision_missing_workspace_and_replaced_map() {

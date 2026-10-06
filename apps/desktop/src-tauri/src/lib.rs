@@ -1877,6 +1877,8 @@ pub fn run() {
             assistant_files::select_assistant_files,
             assistant_files::prepare_assistant_file_plan,
             assistant_files::confirm_assistant_file_plan,
+            assistant_files::confirm_external_file_plan,
+            assistant_files::cancel_external_file_plan,
             cleanup_tree::open_cleanup_tree,
             cleanup_tree::get_cleanup_tree,
             cleanup_tree::load_cleanup_tree_children,

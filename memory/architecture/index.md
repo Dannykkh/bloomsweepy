@@ -13,4 +13,5 @@
 - [009 — 선택적 권한 유지](009-opt-in-permission-lifetime.md): 기본 session, 명시적 remember, 정확한 폴더·기준 재검증과 영속 철회. 계획·최종 승인은 제외.
 - [010 — 선택 폴더 검사](010-selected-folder-inspection.md): 검사 스위치 없이 앱 폴더 선택으로 범위 연결. 외부 임의 경로·자동 삭제는 불가.
 - [011 — 채팅 삭제 결정](011-conversational-trash-consent.md): 한 번 예/아니오, 단순 직접 명령만 native 확인 생략 opt-in, 무시간 일회용 계획과 실행 재검증.
-- [012 — CLI 모델·추론 선택](012-cli-model-selection.md): 하단/설정 공유, 공급자/모델별 선호, 실제 model/effort 인자, 목록과 접근권 분리.
+- [012 — CLI 모델·추론 선택](012-cli-model-selection.md): 컴팩트 입력/설정 공유, 실제 model/effort·미지원 fallback 차단; 빈 목록 원인·읽기 전용 예시와 실제 선택 분리.
+- [013 — 공통 파일·MCP 결과](013-common-file-mcp-results.md): 작은 기능 index/상세, 같은 파일 dispatcher, 외부 범위 epoch, 상태 분석 전용 응답.

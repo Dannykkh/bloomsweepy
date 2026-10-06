@@ -1,0 +1,121 @@
+.assistant-composer-controls {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  container-type: inline-size;
+}
+.assistant-composer-controls__triggers { display: flex; align-items: center; min-width: 0; gap: 2px; }
+.assistant-composer-controls button { font: inherit; color: var(--text); cursor: pointer; }
+.assistant-composer-controls button:disabled { cursor: default; opacity: 0.5; }
+.assistant-composer-controls button:focus-visible,
+.assistant-composer-controls input:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; box-shadow: none; }
+.assistant-composer-controls button:active:not(:disabled) { transform: scale(0.98); }
+.assistant-composer-controls__trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 44px;
+  border: 0;
+  border-radius: 10px;
+  padding: 6px 9px;
+  background: transparent;
+}
+.assistant-composer-controls__trigger:hover:not(:disabled),
+.assistant-composer-controls__trigger[aria-expanded="true"] { background: var(--surface-strong); }
+.assistant-composer-controls__model-trigger { flex: 0 1 auto; max-width: 58%; }
+.assistant-composer-controls__effort-trigger { flex: 0 1 auto; max-width: 48%; }
+.assistant-composer-controls__trigger > span,
+.assistant-composer-controls__model-subtitle > span,
+.assistant-composer-controls__model-options button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assistant-composer-controls__trigger > svg,
+.assistant-composer-controls__model-subtitle > svg,
+.assistant-composer-controls__model-options button > svg { flex-shrink: 0; }
+.assistant-composer-controls__popup {
+  position: absolute;
+  z-index: 10;
+  inset-inline-start: 0;
+  bottom: calc(100% + 8px);
+  width: min(360px, 100%);
+  min-width: 0;
+  box-sizing: border-box;
+  max-height: min(420px, calc(100dvh - 180px));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  background: var(--canvas-elevated);
+  color: var(--text);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--canvas) 75%, transparent);
+  animation: assistant-composer-popup-in 100ms ease-out;
+}
+.assistant-composer-controls__heading { display: flex; align-items: center; gap: 9px; min-width: 0; min-height: 44px; }
+.assistant-composer-controls__heading > strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 1rem; font-weight: 600; }
+.assistant-composer-controls__heading > svg { flex-shrink: 0; }
+.assistant-composer-controls__heading > .assistant-composer-controls__current { color: var(--accent-violet); }
+.assistant-composer-controls__heading--reasoning { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 4px; }
+.assistant-composer-controls__heading--reasoning > svg { justify-self: center; }
+.assistant-composer-controls__heading--reasoning > strong { text-align: center; }
+.assistant-composer-controls__icon-button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.assistant-composer-controls__icon-button:hover:not(:disabled) { background: var(--surface-strong); }
+.assistant-composer-controls__model-subtitle { display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; min-width: 0; min-height: 44px; padding: 6px 0; border: 0; background: transparent; }
+.assistant-composer-controls__model-subtitle:hover { text-decoration: underline; text-underline-offset: 3px; }
+.assistant-composer-controls__slider { padding: 14px 0 4px; }
+.assistant-composer-controls__range-wrap { position: relative; height: 44px; }
+.assistant-composer-controls__range-track { position: absolute; inset: 3px 0 auto; height: 38px; border-radius: 99px; background: linear-gradient(90deg, var(--primary), var(--accent-violet)); pointer-events: none; }
+.assistant-composer-controls__range-track > span { position: absolute; inset: 0 22px; }
+.assistant-composer-controls__range-track i { position: absolute; top: 50%; width: 4px; height: 4px; border-radius: 50%; transform: translate(-50%, -50%); background: var(--text); opacity: 0.6; }
+.assistant-composer-controls__range-wrap > input { position: relative; display: block; appearance: none; -webkit-appearance: none; width: 100%; height: 44px; padding: 0; margin: 0; border: 0; background: transparent; cursor: pointer; }
+.assistant-composer-controls__range-wrap > input::-webkit-slider-runnable-track { height: 38px; border: 0; border-radius: 99px; background: transparent; }
+.assistant-composer-controls__range-wrap > input::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 44px; height: 44px; margin-top: -3px; border: 2px solid var(--canvas-elevated); border-radius: 50%; background: var(--text); }
+.assistant-composer-controls__range-wrap > input::-moz-range-track { height: 38px; border: 0; border-radius: 99px; background: transparent; }
+.assistant-composer-controls__range-wrap > input::-moz-range-thumb { width: 40px; height: 40px; border: 2px solid var(--canvas-elevated); border-radius: 50%; background: var(--text); }
+.assistant-composer-controls__range-wrap > input:disabled { cursor: default; }
+.assistant-composer-controls__range-labels { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: var(--text-muted); }
+.assistant-composer-controls__range-labels > span { min-width: 0; overflow-wrap: anywhere; }
+.assistant-composer-controls__detail { margin: 12px 0 0; color: var(--text-muted); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.assistant-composer-controls__documentation-link { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; color: var(--text); font-size: 14px; line-height: 1.5; text-underline-offset: 3px; overflow-wrap: anywhere; }
+.assistant-composer-controls__documentation-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 4px; }
+.assistant-composer-controls__documentation-link:hover { text-decoration-thickness: 2px; }
+.assistant-composer-controls__reference { min-width: 0; margin-top: 12px; font-size: 14px; line-height: 1.5; }
+.assistant-composer-controls__reference > strong { display: block; margin: 0; color: var(--text); font: inherit; font-weight: 600; }
+.assistant-composer-controls__reference p { margin: 0 0 8px; color: var(--text-muted); overflow-wrap: anywhere; }
+.assistant-composer-controls__reference ul { max-height: 240px; overflow: auto; overscroll-behavior: contain; margin: 0; padding: 0; list-style: none; }
+.assistant-composer-controls__reference li { display: grid; gap: 2px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.assistant-composer-controls__reference li:last-child { border-bottom: 0; }
+.assistant-composer-controls__reference li > span { color: var(--text); overflow-wrap: anywhere; }
+.assistant-composer-controls__reference code { color: var(--text-muted); font: inherit; overflow-wrap: anywhere; }
+.assistant-composer-controls__model-options { display: grid; gap: 2px; max-height: 240px; overflow: auto; overscroll-behavior: contain; margin: 2px -6px 0; padding: 3px 6px; }
+.assistant-composer-controls__model-options button { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; min-height: 44px; padding: 8px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; }
+.assistant-composer-controls__model-options button:hover,
+.assistant-composer-controls__model-options button[aria-selected="true"] { background: var(--surface-strong); }
+.assistant-composer-controls__effort-options { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.assistant-composer-controls__effort-options button { min-height: 44px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: transparent; }
+.assistant-composer-controls__effort-options button[aria-pressed="true"] { border-color: var(--line-strong); background: var(--surface-strong); }
+.assistant-composer-controls__warning { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--warning); overflow-wrap: anywhere; }
+.assistant-composer-controls__warning > span { flex: 1 1 260px; }
+.assistant-composer-controls__warning > button { min-height: 44px; padding: 6px 0; border: 0; background: transparent; text-decoration: underline; text-underline-offset: 3px; }
+@container (max-width: 280px) {
+  .assistant-composer-controls__trigger { padding-inline: 6px; gap: 4px; }
+  .assistant-composer-controls__popup { padding-inline: 12px; }
+  .assistant-composer-controls__model-trigger { max-width: 52%; }
+}
+@keyframes assistant-composer-popup-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .assistant-composer-controls__popup { animation: none; }
+  .assistant-composer-controls button:active:not(:disabled) { transform: none; }
+}
