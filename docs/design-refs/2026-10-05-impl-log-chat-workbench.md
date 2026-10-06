@@ -65,3 +65,60 @@ Frontend-design bounded repair: existing tokens/material, no new assets, effects
 dependencies or permission authority. UI audit and Web Interface Guidelines
 review are scoped to these two layout defects, not a new app-wide release audit.
 Fresh rules: https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/command.md.
+
+## Follow-up: One conversational trash decision
+
+User requested fewer steps and no timeout when returning late. Native inspection
+confirmed app-body review required opening a modal, two acknowledgements and a
+two-minute deadline. Local component repair, not a new visual direction: preserve
+approved glass, composer, evidence hierarchy; three candidate renders exempt under
+Render and Critique Loop §1. Main agent owns implementation and rendered critique.
+Existing Product Design absence is unchanged; local adapter, no plugin mutation.
+Contract validated before source implementation. Execution must remain one-shot,
+main-WebView-only, exact-target-bound and freshly revalidated. No real app removal
+or personal-data provider request is part of this UX test.
+
+Follow-up user choice: native, default-OFF “skip additional confirmation” grant
+for original exact-named human removal commands. Session/Remember applies;
+individual plans remain runtime-only. Rust checks opt-in again, models cannot
+grant it. Advice/conditional/ambiguous/multi-plan responses and related app data,
+Docker, process termination, permanent Trash emptying are excluded. Inline human
+yes/no uses no provider round. Native chat plans have no clock deadline but keep
+single-use consumption and fresh target/selection/inventory/kind checks.
+Rendered390px critique: composer remains visible, no horizontal overflow,
+affirmative text wraps. Keyboard focus ring verified; repair file/empty question
+buttons from42px to44px using the existing shared question-action class.
+Product has a fixed dark color scheme, no light-theme switch. Reduced-motion
+rules retained; OS preference toggle NOT RUN. Detailed actual/synthetic boundaries
+are recorded in docs/qa/2026-10-05-conversational-trash-consent.md.
+
+## Follow-up: Shared CLI model selection
+
+User chose the familiar chat-composer model-selection interaction. Add one
+labelled native select below the message field and reuse it in full-span Settings;
+provider-specific local preferences are shared, not copied. Existing tokens,
+glass and dock stay unchanged (Agent Workbench, effect budget0). No new brand
+direction, effects, dependencies or permission authority.
+
+Rendered critique found WKWebView draws an auto-appearance select too compactly;
+reuse the existing lifetime-select pattern with appearance:none,44px height and
+small CSS chevron. Focus/label/name/options and390px overflow were checked.
+Review also repaired busy Settings refresh lock. Installed QA exposed Codex's
+actual visibility:list metadata, repaired separately from UI styling.
+Scoped UI audit8.85/B and all observed versus NOT RUN boundaries are in
+docs/qa/2026-10-06-cli-model-selection.md. Provider metadata is not account-access
+proof. Model selection does not mutate CLI global configuration or permissions.
+
+## Follow-up: Model-specific reasoning effort
+
+Extend the same Picker with a second44px native select and provider/model-scoped
+optional version1 preference. Only explicit Codex model catalog levels appear;
+verified defaults label the null override path. Stale saved levels remain visible
+with an alert/reset and block sending. Unsupported providers/default models do
+not receive invented mappings. No effects/assets/dependencies or new authority.
+
+Synthetic CUA checks cover exact request effort, model restoration, shared Settings,
+default null, catalog failure/support shrink/old host/busy recovery,390px reflow,
+keyboard focus and4locale labels/glyph rendering. Scoped audit8.85/B and native
+versus synthetic evidence/NOT RUN limits are recorded separately in
+docs/qa/2026-10-06-cli-reasoning-selection.md.

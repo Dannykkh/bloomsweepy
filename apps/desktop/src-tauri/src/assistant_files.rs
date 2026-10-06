@@ -25,7 +25,6 @@ use tauri::{AppHandle, Manager, State, WebviewWindow};
 const PAGE_SIZE: usize = 24;
 const MAX_WORKSPACES: usize = 16;
 const MAX_SELECTION: usize = 100;
-const PLAN_TTL: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -85,9 +84,7 @@ pub(crate) struct FileReviewPlan {
     entries: Vec<FileEntryView>,
     logical_bytes: u64,
     requires_nested_ack: bool,
-    expires_at_unix_ms: u64,
-    #[serde(skip)]
-    deadline: Instant,
+    expires_at_unix_ms: Option<u64>,
     #[serde(skip)]
     verified: Vec<VerifiedTrashItem>,
 }
@@ -230,7 +227,7 @@ impl AssistantFilesState {
             "deletionSafety":"unknown; names, sizes and modification times cannot establish backup, necessity or reproducibility",
             "totalEntries":view.total_entries,"truncated":view.truncated,"unreadable":view.unreadable_entries,
             "offset":view.offset,"nextOffset":view.next_offset,"entries":entries,"selectedCount":view.selected_ids.len(),
-            "reviewReady":view.plan.is_some(),"approval":"local final confirmation button only"}).to_string())
+            "reviewReady":view.plan.is_some(),"approval":"main app human decision or native opt-in exact-named removal; model cannot approve"}).to_string())
     }
     fn insert(&self, session_id: &str, workspace: Workspace) -> Result<FileWorkspaceView, String> {
         let view = workspace.view();
@@ -273,9 +270,8 @@ impl AssistantFilesState {
             .plan
             .as_ref()
             .ok_or("확인할 계획이 없습니다. 다시 검토하세요")?;
-        if plan.id != plan_id || plan.deadline <= Instant::now() {
-            workspace.plan = None;
-            return Err("확인 계획이 변경됐거나 만료됐습니다. 다시 검토하세요".into());
+        if plan.id != plan_id {
+            return Err("확인 대상이 변경됐습니다. 다시 검토하세요".into());
         }
         if plan.requires_nested_ack && !nested_ack {
             return Err("폴더의 하위 항목 전체가 이동함을 확인해 주세요".into());
@@ -442,8 +438,7 @@ fn prepare(
         }),
         requires_nested_ack: entries.iter().any(|entry| entry.is_directory),
         entries,
-        expires_at_unix_ms: assistant_tools::unix_ms() + PLAN_TTL.as_millis() as u64,
-        deadline: Instant::now() + PLAN_TTL,
+        expires_at_unix_ms: None,
         verified,
     };
     let mut workspaces = state.lock()?;
@@ -812,10 +807,12 @@ pub(crate) async fn confirm_assistant_file_plan(
     revision: String,
     plan_id: String,
     nested_contents_acknowledged: bool,
+    automatic: Option<bool>,
 ) -> Result<trash_actions::TrashOperationResult, String> {
     if window.label() != "main" {
         return Err("기본 앱 화면에서만 최종 확인할 수 있습니다".into());
     }
+    crate::control_server::require_automatic_trash_access(&app, automatic.unwrap_or(false))?;
     let session =
         assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
     if session.session.scope_kind != AssistantScopeKind::Folder {
@@ -965,7 +962,7 @@ mod tests {
         }
     }
     #[test]
-    fn exact_names_are_unique_not_partial_and_expired_plans_fail() {
+    fn exact_names_are_unique_not_partial_and_plans_are_nonexpiring_one_shot() {
         let (_temp, mut workspace) = fixture();
         let id = unique_exact_id(&workspace, "PROMO-VIDEO").unwrap();
         assert!(unique_exact_id(&workspace, "promo").is_none());
@@ -992,15 +989,8 @@ mod tests {
             .unwrap()
             .plan
             .unwrap();
-        state
-            .lock()
-            .unwrap()
-            .get_mut("test")
-            .unwrap()
-            .plan
-            .as_mut()
-            .unwrap()
-            .deadline = Instant::now();
+        assert_eq!(plan.expires_at_unix_ms, None);
+        assert!(state.claim("test", &view.revision, &plan.id, true).is_ok());
         assert!(state.claim("test", &view.revision, &plan.id, true).is_err());
         assert!(state.view("test").unwrap().unwrap().plan.is_none());
     }

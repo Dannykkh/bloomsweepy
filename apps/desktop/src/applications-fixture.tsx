@@ -87,7 +87,7 @@ mockIPC(async (command, payload) => {
   }
   if (command === "confirm_application_trash" || command === "confirm_application_data_trash") {
     const request = args?.request as { planId: string; bundleOnlyAcknowledged?: boolean; noUninstallerAcknowledged?: boolean; relatedDataAcknowledged?: boolean };
-    if (!plan || request.planId !== plan.planId || plan.expiresAtUnixMs <= Date.now()) throw new Error("Fixture invalid or expired plan");
+    if (!plan || request.planId !== plan.planId) throw new Error("Fixture invalid or consumed plan");
     const bundle = command === "confirm_application_trash";
     if (bundle ? currentKind !== "bundle" || !request.bundleOnlyAcknowledged || !request.noUninstallerAcknowledged : currentKind !== "data" || !request.relatedDataAcknowledged) throw new Error("Fixture acknowledgment required");
     const consumed = plan;

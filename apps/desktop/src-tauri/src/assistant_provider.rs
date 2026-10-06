@@ -16,7 +16,11 @@ const MAX_CHILDREN: usize = 24;
 const MAX_NAME_CHARS: usize = 240;
 const MAX_MODEL_NAME_CHARS: usize = 160;
 const MAX_PROVIDER_MODELS: usize = 64;
+const REASONING_EFFORTS: [&str; 8] = [
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+];
 const MAX_STATUS_OUTPUT_BYTES: u64 = 64 * 1024;
+const MAX_MODEL_CATALOG_BYTES: u64 = 1024 * 1024;
 const MAX_PROVIDER_OUTPUT_BYTES: u64 = 64 * 1024;
 const MAX_PROVIDER_ERROR_BYTES: u64 = 1024 * 1024;
 const DEFAULT_PROVIDER_TIMEOUT: Duration = Duration::from_secs(120);
@@ -102,6 +106,8 @@ pub(crate) struct AssistantProviderStatus {
     busy: bool,
     detail: String,
     models: Vec<AssistantProviderModel>,
+    model_selection: AssistantModelSelection,
+    model_catalog_source: AssistantModelCatalogSource,
     state: AssistantCliState,
     executable_path: Option<String>,
     version: Option<String>,
@@ -163,6 +169,14 @@ impl AssistantResponseLanguage {
 }
 
 impl AssistantProviderKind {
+    fn model_selection(self) -> AssistantModelSelection {
+        match self {
+            Self::Codex | Self::ClaudeCode => AssistantModelSelection::Optional,
+            Self::Ollama => AssistantModelSelection::Required,
+            Self::Grok | Self::Antigravity => AssistantModelSelection::Unsupported,
+        }
+    }
+
     fn executable_name(self) -> &'static str {
         match self {
             Self::Codex => "codex",
@@ -220,6 +234,27 @@ pub(crate) enum AssistantAuthentication {
 pub(crate) struct AssistantProviderModel {
     id: String,
     label: String,
+    supported_reasoning_efforts: Vec<String>,
+    default_reasoning_effort: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AssistantModelSelection {
+    Optional,
+    Required,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum AssistantModelCatalogSource {
+    Cli,
+    Bundled,
+    Aliases,
+    Installed,
+    Unavailable,
+    Unsupported,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -231,6 +266,8 @@ pub(crate) struct AssistantChatRequest {
     session_id: Option<String>,
     provider: AssistantProviderKind,
     model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
     message: String,
     history: Vec<AssistantChatTurn>,
     summary: AssistantFolderSummary,
@@ -335,6 +372,7 @@ pub(crate) struct AssistantChatResponse {
     provider: AssistantProviderKind,
     label: &'static str,
     model: Option<String>,
+    reasoning_effort: Option<String>,
     message: String,
     docker_context: Option<super::docker_tools::DockerAssistantContext>,
     empty_workspace: Option<super::assistant_tools::EmptyWorkspaceView>,
@@ -463,6 +501,9 @@ async fn ask_assistant_inner(
     if !status.available {
         return Err(status.detail);
     }
+    if request.model.is_some() && status.model_selection == AssistantModelSelection::Unsupported {
+        return Err("이 CLI 설치본에서는 모델 선택 지원을 확인하지 못했습니다. CLI 기본값을 사용하거나 CLI를 업데이트해 주세요".to_owned());
+    }
     let program = program.ok_or_else(|| "AI CLI 실행 경로를 확인하지 못했습니다".to_owned())?;
     let request_id = state.next_request_id.fetch_add(1, Ordering::AcqRel);
     let workspace = app
@@ -483,6 +524,7 @@ async fn ask_assistant_inner(
         .map_err(|error| format!("Docker 사용량 요약을 준비하지 못했습니다: {error}"))?;
     let base_prompt = build_prompt(&request, docker_context_json.as_deref())?;
     let response_model = request.model.clone();
+    let response_reasoning_effort = request.reasoning_effort.clone();
     let tool_scope = if let Some(session_id) = &request.session_id {
         let session =
             super::assistant_sessions::get_assistant_session(app.clone(), session_id.clone())
@@ -538,6 +580,7 @@ async fn ask_assistant_inner(
         let run_program = program.clone();
         let run_workspace = workspace.clone();
         let run_model = response_model.clone();
+        let run_reasoning_effort = response_reasoning_effort.clone();
         let cancellation = std::sync::Arc::clone(&state.cancellation);
         emit_progress(&app, &request, "analyzing", round, None);
         let raw = tauri::async_runtime::spawn_blocking(move || {
@@ -545,6 +588,7 @@ async fn ask_assistant_inner(
                 provider,
                 run_program,
                 run_model,
+                run_reasoning_effort,
                 run_workspace,
                 request_id.wrapping_add(round as u64),
                 prompt,
@@ -701,6 +745,7 @@ async fn ask_assistant_inner(
         provider,
         label: provider.label(),
         model: response_model,
+        reasoning_effort: response_reasoning_effort,
         message,
         docker_context,
         empty_workspace,
@@ -759,19 +804,71 @@ fn validate_request(request: &AssistantChatRequest) -> Result<(), String> {
             }
         }
     }
-    match (request.provider, request.model.as_deref()) {
-        (AssistantProviderKind::Ollama, Some(model))
-            if !model.trim().is_empty()
-                && model.chars().count() <= MAX_MODEL_NAME_CHARS
-                && !model.chars().any(char::is_control) => {}
-        (AssistantProviderKind::Ollama, _) => {
+    validate_model_selection(request.provider, request.model.as_deref())?;
+    validate_reasoning_selection(
+        request.provider,
+        request.model.as_deref(),
+        request.reasoning_effort.as_deref(),
+    )?;
+    Ok(())
+}
+
+fn validate_model_selection(
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+) -> Result<(), String> {
+    match (provider.model_selection(), model) {
+        (AssistantModelSelection::Required, None) => {
             return Err("Ollama에서 사용할 모델을 선택해 주세요".to_owned());
         }
-        (_, Some(_)) => {
+        (AssistantModelSelection::Unsupported, Some(_)) => {
             return Err("선택한 AI CLI에는 별도 모델 값을 보낼 수 없습니다".to_owned());
         }
-        (_, None) => {}
+        (_, Some(model)) if !valid_model_id(model) => {
+            return Err(
+                "모델 이름이 올바르지 않습니다. 공백 없이 지원되는 모델 ID를 선택해 주세요"
+                    .to_owned(),
+            );
+        }
+        _ => {}
     }
+    Ok(())
+}
+
+fn valid_model_id(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= MAX_MODEL_NAME_CHARS
+        && model.as_bytes()[0].is_ascii_alphanumeric()
+        && model
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'-' | b'_' | b'.' | b':' | b'/'))
+}
+
+fn valid_reasoning_effort(effort: &str) -> bool {
+    REASONING_EFFORTS.contains(&effort)
+}
+
+fn validate_reasoning_selection(
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Result<(), String> {
+    let Some(effort) = reasoning_effort else {
+        return Ok(());
+    };
+    if provider != AssistantProviderKind::Codex {
+        return Err("현재 추론 강도 선택은 Codex에서만 지원합니다".to_owned());
+    }
+    if model.is_none() {
+        return Err("추론 강도를 지정하려면 먼저 Codex 모델을 선택해 주세요".to_owned());
+    }
+    if !valid_reasoning_effort(effort) {
+        return Err(
+            "추론 강도가 올바르지 않습니다. 선택한 모델의 지원 목록에서 골라 주세요".to_owned(),
+        );
+    }
+    // Model-specific support is supplied by the bounded catalog in the UI.
+    // Do not re-query it per turn: the CLI/server makes the final compatibility check.
     Ok(())
 }
 
@@ -845,6 +942,7 @@ fn run_provider(
         provider,
         program,
         model,
+        None,
         workspace,
         request_id,
         prompt,
@@ -858,6 +956,7 @@ fn run_provider_budget(
     provider: AssistantProviderKind,
     program: ExternalProgram,
     model: Option<String>,
+    reasoning_effort: Option<String>,
     workspace: PathBuf,
     request_id: u64,
     prompt: String,
@@ -867,6 +966,8 @@ fn run_provider_budget(
     if prompt.len() > MAX_PROVIDER_PROMPT_BYTES {
         return Err("AI 입력이 전송 상한을 넘었습니다. 질문과 조회 범위를 좁혀 주세요".to_owned());
     }
+    validate_model_selection(provider, model.as_deref())?;
+    validate_reasoning_selection(provider, model.as_deref(), reasoning_effort.as_deref())?;
     fs::create_dir_all(&workspace)
         .map_err(|error| format!("대화 작업 폴더를 만들지 못했습니다: {error}"))?;
     let nonce = SystemTime::now()
@@ -903,24 +1004,14 @@ fn run_provider_budget(
     let mut prompt_via_stdin = true;
     match provider {
         AssistantProviderKind::Codex => {
-            command
-                .arg("exec")
-                .arg("--ephemeral")
-                .arg("--ignore-user-config")
-                .arg("--ignore-rules")
-                .arg("--skip-git-repo-check")
-                .arg("--sandbox")
-                .arg("read-only")
-                .arg("--config")
-                .arg("approval_policy=\"never\"")
-                .arg("--color")
-                .arg("never")
-                .arg("--cd")
-                .arg(&workspace)
-                .arg("--output-last-message")
-                .arg(&response_path)
-                .arg("-")
-                .stdout(Stdio::null());
+            configure_codex_chat(
+                &mut command,
+                &workspace,
+                &response_path,
+                model.as_deref(),
+                reasoning_effort.as_deref(),
+            )?;
+            command.stdout(Stdio::null());
         }
         AssistantProviderKind::ClaudeCode => {
             let response_file = File::create(&response_path)
@@ -972,6 +1063,9 @@ fn run_provider_budget(
                 .env("OLLAMA_NOHISTORY", "1")
                 .stdout(Stdio::from(response_file));
         }
+    }
+    if provider != AssistantProviderKind::Codex {
+        configure_selected_model(&mut command, provider, model.as_deref())?;
     }
     // Anonymous file-backed stdin cannot block on a full pipe when a CLI stops
     // reading. No persistent prompt file, writer thread or cancellation race.
@@ -1057,8 +1151,10 @@ fn run_provider_budget(
     if !status.success() {
         // Server errors can arrive on stdout. Classify both bounded streams,
         // but never return raw provider output or account details on failure.
-        return Err(provider_failure_message(
+        return Err(provider_failure_message_for_selection(
             provider,
+            model.as_deref(),
+            reasoning_effort.as_deref(),
             &format!(
                 "{provider_error}\n{}",
                 response.as_deref().unwrap_or_default()
@@ -1166,8 +1262,100 @@ fn provider_failure_message(provider: AssistantProviderKind, stderr: &str) -> St
     }
 }
 
+fn provider_failure_message_for_model(
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+    stderr: &str,
+) -> String {
+    let lower = stderr.to_ascii_lowercase();
+    if model.is_some()
+        && (lower.contains("model_not_found")
+            || lower.contains("unsupported_model")
+            || lower.contains("invalid_model")
+            || (lower.contains("model")
+                && [
+                    "not supported",
+                    "unsupported",
+                    "not found",
+                    "does not exist",
+                    "not available",
+                    "not allowed",
+                    "do not have access",
+                    "don't have access",
+                    "unknown model",
+                    "invalid model",
+                ]
+                .iter()
+                .any(|reason| lower.contains(reason))))
+    {
+        return format!(
+            "{}가 선택한 모델을 거부했습니다. 모델 목록이나 계정의 모델 사용 권한을 확인하고 다른 모델을 선택해 주세요. CLI 기본 모델로 자동 전환하지 않았습니다",
+            provider.label()
+        );
+    }
+    provider_failure_message(provider, stderr)
+}
+
+fn provider_failure_message_for_selection(
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+    stderr: &str,
+) -> String {
+    let lower = stderr.to_ascii_lowercase();
+    if reasoning_effort.is_some()
+        && lower.contains("reasoning")
+        && [
+            "not supported",
+            "unsupported",
+            "invalid",
+            "not allowed",
+            "not available",
+            "unknown",
+            "does not support",
+            "supported values",
+        ]
+        .iter()
+        .any(|reason| lower.contains(reason))
+    {
+        return format!(
+            "{}가 선택한 모델의 추론 강도를 거부했습니다. 모델의 지원 목록을 새로고침하거나 기본 강도를 선택해 주세요. 모델이나 강도를 자동 전환하지 않았습니다",
+            provider.label()
+        );
+    }
+    provider_failure_message_for_model(provider, model, stderr)
+}
+
 fn provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
-    resolve_provider(provider, busy).0
+    let (mut status, program) = resolve_provider(provider, busy);
+    // Catalog discovery belongs to the status refresh, not each chat round or
+    // execution preflight. A failed catalog never invalidates a healthy CLI.
+    if status.available
+        && status.model_selection == AssistantModelSelection::Optional
+        && let Some(program) = program
+    {
+        match provider {
+            AssistantProviderKind::Codex => {
+                let (models, source) = codex_models(&program);
+                status.models = models;
+                status.model_catalog_source = source;
+            }
+            AssistantProviderKind::ClaudeCode => {
+                status.models = ["sonnet", "opus", "haiku"]
+                    .into_iter()
+                    .map(|alias| AssistantProviderModel {
+                        id: alias.to_owned(),
+                        label: alias.to_owned(),
+                        supported_reasoning_efforts: Vec::new(),
+                        default_reasoning_effort: None,
+                    })
+                    .collect();
+                status.model_catalog_source = AssistantModelCatalogSource::Aliases;
+            }
+            _ => {}
+        }
+    }
+    status
 }
 
 fn empty_provider_status(provider: AssistantProviderKind, busy: bool) -> AssistantProviderStatus {
@@ -1183,6 +1371,13 @@ fn empty_provider_status(provider: AssistantProviderKind, busy: bool) -> Assista
             provider.label()
         ),
         models: Vec::new(),
+        model_selection: provider.model_selection(),
+        model_catalog_source: if provider.model_selection() == AssistantModelSelection::Unsupported
+        {
+            AssistantModelCatalogSource::Unsupported
+        } else {
+            AssistantModelCatalogSource::Unavailable
+        },
         state: AssistantCliState::NotInstalled,
         executable_path: None,
         version: None,
@@ -1287,11 +1482,66 @@ const CLAUDE_CHAT_ARGS: &[&str] = &[
     "text",
 ];
 
+fn configure_codex_chat(
+    command: &mut std::process::Command,
+    workspace: &Path,
+    response_path: &Path,
+    model: Option<&str>,
+    reasoning_effort: Option<&str>,
+) -> Result<(), String> {
+    validate_reasoning_selection(AssistantProviderKind::Codex, model, reasoning_effort)?;
+    command
+        .arg("exec")
+        .arg("--ephemeral")
+        .arg("--ignore-user-config")
+        .arg("--ignore-rules")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("read-only")
+        .arg("--config")
+        .arg("approval_policy=\"never\"")
+        .arg("--color")
+        .arg("never")
+        .arg("--cd")
+        .arg(workspace)
+        .arg("--output-last-message")
+        .arg(response_path);
+    configure_selected_model(command, AssistantProviderKind::Codex, model)?;
+    if let Some(effort) = reasoning_effort {
+        command
+            .arg("--config")
+            .arg(format!("model_reasoning_effort=\"{effort}\""));
+    }
+    command.arg("-");
+    Ok(())
+}
+
 fn configure_claude_chat(command: &mut std::process::Command) {
     command
         .args(CLAUDE_CHAT_ARGS)
         .env("ENABLE_CLAUDEAI_MCP_SERVERS", "false")
         .env("DISABLE_AUTOUPDATER", "1");
+}
+
+fn configure_selected_model(
+    command: &mut std::process::Command,
+    provider: AssistantProviderKind,
+    model: Option<&str>,
+) -> Result<(), String> {
+    validate_model_selection(provider, model)?;
+    if matches!(
+        provider,
+        AssistantProviderKind::Codex | AssistantProviderKind::ClaudeCode
+    ) && let Some(model) = model
+    {
+        command.arg("--model").arg(model);
+    }
+    Ok(())
+}
+
+fn help_has_option(help: &str, option: &str) -> bool {
+    help.split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '-')
+        .any(|token| token == option)
 }
 
 fn missing_chat_options(provider: AssistantProviderKind, help: &str) -> Vec<&'static str> {
@@ -1399,6 +1649,12 @@ fn inspect_candidate(
                     );
                     return status;
                 }
+                if !help_has_option(&output.stdout, "--model") {
+                    // The default integration can still work on an older CLI;
+                    // never pass an unadvertised optional model switch.
+                    status.model_selection = AssistantModelSelection::Unsupported;
+                    status.model_catalog_source = AssistantModelCatalogSource::Unsupported;
+                }
             }
             _ => {
                 status.state = AssistantCliState::CheckFailed;
@@ -1419,6 +1675,7 @@ fn inspect_candidate(
         }) {
             Ok(models) => {
                 status.models = models;
+                status.model_catalog_source = AssistantModelCatalogSource::Installed;
                 status.available = !status.models.is_empty();
                 status.state = if status.available {
                     AssistantCliState::Ready
@@ -1500,17 +1757,121 @@ fn parse_ollama_models(output: &str) -> Vec<AssistantProviderModel> {
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .filter(|name| !name.eq_ignore_ascii_case("name"))
-        .filter(|name| {
-            !name.is_empty()
-                && name.chars().count() <= MAX_MODEL_NAME_CHARS
-                && !name.chars().any(char::is_control)
-        })
+        .filter(|name| valid_model_id(name))
         .take(MAX_PROVIDER_MODELS)
         .map(|name| AssistantProviderModel {
             id: name.to_owned(),
             label: name.to_owned(),
+            supported_reasoning_efforts: Vec::new(),
+            default_reasoning_effort: None,
         })
         .collect()
+}
+
+fn codex_models(
+    program: &ExternalProgram,
+) -> (Vec<AssistantProviderModel>, AssistantModelCatalogSource) {
+    for (arguments, timeout, source) in [
+        (
+            &["debug", "models"][..],
+            Duration::from_secs(5),
+            AssistantModelCatalogSource::Cli,
+        ),
+        (
+            &["debug", "models", "--bundled"][..],
+            Duration::from_secs(3),
+            AssistantModelCatalogSource::Bundled,
+        ),
+    ] {
+        if let Ok(output) = status_probe_cancellable_limit(
+            program,
+            arguments,
+            timeout,
+            None,
+            MAX_MODEL_CATALOG_BYTES,
+        ) && output.success
+            && let Ok(models) = parse_codex_models(&output.stdout)
+            && !models.is_empty()
+        {
+            return (models, source);
+        }
+    }
+    (Vec::new(), AssistantModelCatalogSource::Unavailable)
+}
+
+fn parse_codex_models(output: &str) -> Result<Vec<AssistantProviderModel>, ProbeError> {
+    if output.len() as u64 > MAX_MODEL_CATALOG_BYTES {
+        return Err(ProbeError::OutputLimit);
+    }
+    let catalog: serde_json::Value = serde_json::from_str(output).map_err(|_| ProbeError::Read)?;
+    let entries = catalog
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(ProbeError::Read)?;
+    let mut seen = std::collections::HashSet::new();
+    // Return display metadata and whitelisted reasoning IDs only. Catalogs also
+    // contain model instructions and arbitrary descriptions that stay private.
+    Ok(entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.get("visibility").and_then(serde_json::Value::as_str),
+                Some("list" | "show_ui")
+            )
+        })
+        .filter_map(|entry| {
+            let id = entry.get("slug")?.as_str()?;
+            if !valid_model_id(id) || !seen.insert(id.to_owned()) {
+                return None;
+            }
+            let label = entry
+                .get("display_name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|label| {
+                    !label.trim().is_empty()
+                        && label.chars().count() <= MAX_MODEL_NAME_CHARS
+                        && !label.chars().any(char::is_control)
+                })
+                .unwrap_or(id);
+            let mut supported_reasoning_efforts = Vec::new();
+            if let Some(levels) = entry
+                .get("supported_reasoning_levels")
+                .and_then(serde_json::Value::as_array)
+            {
+                for effort in levels
+                    .iter()
+                    .filter_map(|level| level.get("effort").and_then(serde_json::Value::as_str))
+                {
+                    if valid_reasoning_effort(effort)
+                        && !supported_reasoning_efforts
+                            .iter()
+                            .any(|known| known == effort)
+                    {
+                        supported_reasoning_efforts.push(effort.to_owned());
+                        if supported_reasoning_efforts.len() == REASONING_EFFORTS.len() {
+                            break;
+                        }
+                    }
+                }
+            }
+            let default_reasoning_effort = entry
+                .get("default_reasoning_level")
+                .and_then(serde_json::Value::as_str)
+                .filter(|effort| {
+                    supported_reasoning_efforts
+                        .iter()
+                        .any(|known| known == effort)
+                })
+                .map(str::to_owned);
+            Some(AssistantProviderModel {
+                id: id.to_owned(),
+                label: label.to_owned(),
+                supported_reasoning_efforts,
+                default_reasoning_effort,
+            })
+        })
+        .take(MAX_PROVIDER_MODELS)
+        .collect())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -1546,6 +1907,22 @@ fn status_probe_cancellable(
     timeout: Duration,
     cancellation: Option<&AtomicBool>,
 ) -> Result<ProbeOutput, ProbeError> {
+    status_probe_cancellable_limit(
+        program,
+        arguments,
+        timeout,
+        cancellation,
+        MAX_STATUS_OUTPUT_BYTES,
+    )
+}
+
+fn status_probe_cancellable_limit(
+    program: &ExternalProgram,
+    arguments: &[&str],
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+    output_limit: u64,
+) -> Result<ProbeOutput, ProbeError> {
     if cancellation.is_some_and(|flag| flag.load(Ordering::Acquire)) {
         return Err(ProbeError::Cancelled);
     }
@@ -1576,7 +1953,7 @@ fn status_probe_cancellable(
         }
         let oversized = [&stdout, &stderr].iter().any(|file| {
             file.metadata()
-                .map_or(true, |metadata| metadata.len() > MAX_STATUS_OUTPUT_BYTES)
+                .map_or(true, |metadata| metadata.len() > output_limit)
         });
         if oversized {
             let _ = child.kill();
@@ -1587,8 +1964,8 @@ fn status_probe_cancellable(
             Ok(Some(status)) => {
                 return Ok(ProbeOutput {
                     success: status.success(),
-                    stdout: read_probe_file(&mut stdout)?,
-                    stderr: read_probe_file(&mut stderr)?,
+                    stdout: read_probe_file(&mut stdout, output_limit)?,
+                    stderr: read_probe_file(&mut stderr, output_limit)?,
                 });
             }
             Ok(None) if started.elapsed() < timeout => {
@@ -1603,14 +1980,14 @@ fn status_probe_cancellable(
     }
 }
 
-fn read_probe_file(file: &mut File) -> Result<String, ProbeError> {
+fn read_probe_file(file: &mut File, output_limit: u64) -> Result<String, ProbeError> {
     file.seek(SeekFrom::Start(0))
         .map_err(|_| ProbeError::Read)?;
     let mut bytes = Vec::new();
-    file.take(MAX_STATUS_OUTPUT_BYTES + 1)
+    file.take(output_limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| ProbeError::Read)?;
-    if bytes.len() as u64 > MAX_STATUS_OUTPUT_BYTES {
+    if bytes.len() as u64 > output_limit {
         return Err(ProbeError::OutputLimit);
     }
     String::from_utf8(bytes).map_err(|_| ProbeError::Read)
@@ -1732,6 +2109,7 @@ esac
             AssistantProviderKind::ClaudeCode,
             program.clone(),
             None,
+            None,
             dir.path().join("workspace"),
             1,
             "x".repeat(128 * 1024),
@@ -1749,6 +2127,7 @@ esac
         let result = run_provider_budget(
             AssistantProviderKind::ClaudeCode,
             program,
+            None,
             None,
             dir.path().join("workspace"),
             2,
@@ -2137,6 +2516,7 @@ esac
             session_id: None,
             provider: AssistantProviderKind::Codex,
             model: None,
+            reasoning_effort: None,
             message: "이 폴더에서 용량이 큰 부분을 알려줘".to_owned(),
             history: Vec::new(),
             scope_kind: AssistantScopeKind::Folder,
@@ -2294,6 +2674,427 @@ esac
                 .collect::<Vec<_>>(),
             vec!["qwen3-coder:30b", "bge-m3:latest"]
         );
+    }
+
+    #[test]
+    fn model_selection_validates_defaults_explicit_ids_and_unsupported_providers() {
+        let mut request = valid_request();
+        for provider in [
+            AssistantProviderKind::Codex,
+            AssistantProviderKind::ClaudeCode,
+        ] {
+            request.provider = provider;
+            request.model = None;
+            assert!(validate_request(&request).is_ok());
+            for model in ["gpt-6-astra", "sonnet", "claude-opus-4-6", "org/model:v2"] {
+                request.model = Some(model.to_owned());
+                assert!(validate_request(&request).is_ok());
+            }
+            for model in [
+                "",
+                " ",
+                "--model",
+                "-gpt",
+                "two words",
+                "x\ny",
+                "x\u{0000}",
+                "모델",
+                "m;echo",
+            ] {
+                request.model = Some(model.to_owned());
+                assert!(validate_request(&request).is_err(), "accepted {model:?}");
+            }
+            request.model = Some("x".repeat(MAX_MODEL_NAME_CHARS + 1));
+            assert!(validate_request(&request).is_err());
+        }
+        for provider in [
+            AssistantProviderKind::Grok,
+            AssistantProviderKind::Antigravity,
+        ] {
+            request.provider = provider;
+            request.model = None;
+            assert!(validate_request(&request).is_ok());
+            request.model = Some("any-model".to_owned());
+            assert!(validate_request(&request).is_err());
+        }
+    }
+
+    #[test]
+    fn reasoning_selection_requires_codex_explicit_model_and_whitelisted_effort() {
+        let mut request = valid_request();
+        request.reasoning_effort = Some("medium".to_owned());
+        assert!(
+            validate_request(&request)
+                .unwrap_err()
+                .contains("모델을 선택")
+        );
+        request.model = Some("gpt-visible".to_owned());
+        for effort in REASONING_EFFORTS {
+            request.reasoning_effort = Some(effort.to_owned());
+            assert!(validate_request(&request).is_ok());
+        }
+        for effort in [
+            "",
+            "Medium",
+            "high ",
+            "unsupported",
+            "high\n",
+            "high\";echo",
+            "--config",
+        ] {
+            request.reasoning_effort = Some(effort.to_owned());
+            assert!(validate_request(&request).is_err(), "accepted {effort:?}");
+        }
+        request.reasoning_effort = Some("high".to_owned());
+        for provider in [
+            AssistantProviderKind::ClaudeCode,
+            AssistantProviderKind::Grok,
+            AssistantProviderKind::Antigravity,
+            AssistantProviderKind::Ollama,
+        ] {
+            assert!(validate_reasoning_selection(provider, Some("a-model"), Some("high")).is_err());
+            assert!(validate_reasoning_selection(provider, Some("a-model"), None).is_ok());
+        }
+        request.reasoning_effort = None;
+        request.provider = AssistantProviderKind::Codex;
+        assert!(validate_request(&request).is_ok());
+    }
+
+    #[test]
+    fn older_chat_request_without_reasoning_effort_keeps_cli_default() {
+        let request: AssistantChatRequest = serde_json::from_value(serde_json::json!({
+            "provider":"codex", "model":null, "message":"test", "history":[],
+            "scopeKind":"folder", "includeDockerStatus":false, "responseLanguage":"ko",
+            "summary": {
+                "scopeName":"fixture", "completedAtUnixMs":1, "totalLogicalBytes":0,
+                "totalFiles":0, "totalDirectories":0, "unreadableEntries":0,
+                "emptyDirectoryCount":0, "childrenTruncated":false, "children":[]
+            }
+        }))
+        .unwrap();
+        assert!(request.reasoning_effort.is_none());
+        assert!(validate_request(&request).is_ok());
+    }
+
+    #[test]
+    fn model_selection_wire_metadata_distinguishes_default_required_and_sources() {
+        let codex =
+            serde_json::to_value(empty_provider_status(AssistantProviderKind::Codex, false))
+                .unwrap();
+        assert_eq!(codex["modelSelection"], "optional");
+        assert_eq!(codex["modelCatalogSource"], "unavailable");
+        let ollama =
+            serde_json::to_value(empty_provider_status(AssistantProviderKind::Ollama, false))
+                .unwrap();
+        assert_eq!(ollama["modelSelection"], "required");
+        let grok = serde_json::to_value(empty_provider_status(AssistantProviderKind::Grok, false))
+            .unwrap();
+        assert_eq!(grok["modelSelection"], "unsupported");
+        assert_eq!(grok["modelCatalogSource"], "unsupported");
+        for (source, expected) in [
+            (AssistantModelCatalogSource::Cli, "cli"),
+            (AssistantModelCatalogSource::Bundled, "bundled"),
+            (AssistantModelCatalogSource::Aliases, "aliases"),
+            (AssistantModelCatalogSource::Installed, "installed"),
+        ] {
+            assert_eq!(serde_json::to_value(source).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn codex_catalog_keeps_only_bounded_visible_unique_display_metadata() {
+        let models = parse_codex_models(r#"{"models":[
+            {"slug":"gpt-visible","display_name":"Visible Model","visibility":"show_ui","instructions":"secret instructions"},
+            {"slug":"gpt-hidden","display_name":"Hidden","visibility":"hide"},
+            {"slug":"gpt-visible","display_name":"Duplicate","visibility":"show_ui"},
+            {"slug":"--unsafe","visibility":"show_ui"},
+            {"slug":"gpt-unknown","visibility":"future_visibility"},
+            {"slug":"gpt-fallback","display_name":"bad\nlabel","visibility":"show_ui"},
+            {"slug":"gpt-list","display_name":"Listed Model","visibility":"list"}
+        ]}"#).unwrap();
+        assert_eq!(models.len(), 3);
+        assert_eq!(models[0].id, "gpt-visible");
+        assert_eq!(models[0].label, "Visible Model");
+        assert_eq!(models[1].label, "gpt-fallback");
+        assert_eq!(models[2].id, "gpt-list");
+        assert_eq!(models[2].label, "Listed Model");
+        let payload = serde_json::to_string(&models).unwrap();
+        assert!(!payload.contains("instructions"));
+        assert!(!payload.contains("secret"));
+        assert!(!payload.contains("gpt-hidden"));
+        assert!(parse_codex_models("not-json").is_err());
+        assert!(parse_codex_models(r#"{"unexpected":[]}"#).is_err());
+        assert_eq!(
+            parse_codex_models(&"x".repeat(MAX_MODEL_CATALOG_BYTES as usize + 1)).unwrap_err(),
+            ProbeError::OutputLimit
+        );
+        let entries = (0..MAX_PROVIDER_MODELS + 10)
+            .map(|index| serde_json::json!({"slug":format!("model-{index}"),"visibility":"list"}))
+            .collect::<Vec<_>>();
+        let large = serde_json::to_string(&serde_json::json!({"models":entries})).unwrap();
+        assert_eq!(
+            parse_codex_models(&large).unwrap().len(),
+            MAX_PROVIDER_MODELS
+        );
+    }
+
+    #[test]
+    fn codex_catalog_reasoning_metadata_is_whitelisted_bounded_and_has_valid_default() {
+        let models = parse_codex_models(
+            r#"{"models":[
+            {"slug":"gpt-with-efforts","visibility":"list",
+             "supported_reasoning_levels":[{"effort":"medium","description":"private"},
+                {"effort":"high"},{"effort":"medium"},{"effort":"future"},
+                {"effort":"high\n"},"low",{"effort":12},{"other":"low"}],
+             "default_reasoning_level":"medium"},
+            {"slug":"gpt-invalid-default","visibility":"list",
+             "supported_reasoning_levels":[{"effort":"low"}], "default_reasoning_level":"high"},
+            {"slug":"gpt-no-efforts","visibility":"list", "default_reasoning_level":"medium"},
+            {"slug":"gpt-invalid-shape","visibility":"list", "supported_reasoning_levels":"high"}
+        ]}"#,
+        )
+        .unwrap();
+        assert_eq!(models[0].supported_reasoning_efforts, ["medium", "high"]);
+        assert_eq!(
+            models[0].default_reasoning_effort.as_deref(),
+            Some("medium")
+        );
+        assert_eq!(models[1].supported_reasoning_efforts, ["low"]);
+        assert!(models[1].default_reasoning_effort.is_none());
+        assert!(models[2].supported_reasoning_efforts.is_empty());
+        assert!(models[2].default_reasoning_effort.is_none());
+        assert!(models[3].supported_reasoning_efforts.is_empty());
+        let wire = serde_json::to_value(&models).unwrap();
+        assert_eq!(
+            wire[0]["supportedReasoningEfforts"],
+            serde_json::json!(["medium", "high"])
+        );
+        assert_eq!(wire[0]["defaultReasoningEffort"], "medium");
+        assert!(wire[1]["defaultReasoningEffort"].is_null());
+        let payload = serde_json::to_string(&wire).unwrap();
+        assert!(!payload.contains("description"));
+        assert!(!payload.contains("private"));
+        assert!(!payload.contains("future"));
+        let efforts = REASONING_EFFORTS
+            .iter()
+            .chain(REASONING_EFFORTS.iter())
+            .map(|effort| serde_json::json!({"effort":effort}))
+            .collect::<Vec<_>>();
+        let full = serde_json::json!({"models":[{"slug":"gpt-full","visibility":"list",
+            "supported_reasoning_levels":efforts,"default_reasoning_level":"ultra"}]})
+        .to_string();
+        let full = parse_codex_models(&full).unwrap();
+        assert_eq!(full[0].supported_reasoning_efforts.len(), 8);
+        assert_eq!(full[0].default_reasoning_effort.as_deref(), Some("ultra"));
+        for model in parse_ollama_models("NAME ID\nlocal:latest abc") {
+            assert!(model.supported_reasoning_efforts.is_empty());
+            assert!(model.default_reasoning_effort.is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_catalog_falls_back_to_bundled_without_claiming_connection_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let fallback = fake_cli(
+            dir.path(),
+            "catalog-fallback",
+            r#"
+if [ "$3" = "--bundled" ]; then
+  printf '%s' '{"models":[{"slug":"bundled-model","display_name":"Bundled","visibility":"list"}]}'
+else
+  printf 'network error' >&2; exit 1
+fi
+"#,
+        );
+        let (models, source) = codex_models(&fallback);
+        assert_eq!(source, AssistantModelCatalogSource::Bundled);
+        assert_eq!(models[0].id, "bundled-model");
+        let failure = fake_cli(dir.path(), "catalog-failure", "exit 1");
+        let (models, source) = codex_models(&failure);
+        assert!(models.is_empty());
+        assert_eq!(source, AssistantModelCatalogSource::Unavailable);
+        let wide = fake_cli(dir.path(), "catalog-wide", "head -c 100000 /dev/zero");
+        assert!(status_probe(&wide, &[]).is_err());
+        assert!(
+            status_probe_cancellable_limit(
+                &wide,
+                &[],
+                Duration::from_secs(1),
+                None,
+                MAX_MODEL_CATALOG_BYTES
+            )
+            .is_ok()
+        );
+        let oversized = fake_cli(dir.path(), "catalog-too-wide", "head -c 1048577 /dev/zero");
+        assert!(matches!(
+            status_probe_cancellable_limit(
+                &oversized,
+                &[],
+                Duration::from_secs(1),
+                None,
+                MAX_MODEL_CATALOG_BYTES
+            ),
+            Err(ProbeError::OutputLimit)
+        ));
+    }
+
+    #[test]
+    fn selected_model_arguments_preserve_isolation_and_never_invoke_a_shell() {
+        let mut codex = std::process::Command::new("codex");
+        configure_codex_chat(
+            &mut codex,
+            Path::new("workspace"),
+            Path::new("response.txt"),
+            Some("gpt-6-astra"),
+            Some("high"),
+        )
+        .unwrap();
+        let args = codex
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(args[0], "exec");
+        assert_eq!(args.last(), Some(&"-"));
+        for pair in [
+            ["--model", "gpt-6-astra"],
+            ["--sandbox", "read-only"],
+            ["--config", "approval_policy=\"never\""],
+            ["--config", "model_reasoning_effort=\"high\""],
+        ] {
+            assert!(args.windows(2).any(|actual| actual == pair));
+        }
+        assert!(args.contains(&"--ignore-user-config"));
+        assert!(args.contains(&"--ignore-rules"));
+        let mut default = std::process::Command::new("codex");
+        configure_codex_chat(
+            &mut default,
+            Path::new("workspace"),
+            Path::new("response.txt"),
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!default.get_args().any(|arg| arg == "--model"));
+        assert!(
+            !default
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains("model_reasoning_effort"))
+        );
+        let mut explicit_default = std::process::Command::new("codex");
+        configure_codex_chat(
+            &mut explicit_default,
+            Path::new("workspace"),
+            Path::new("response.txt"),
+            Some("gpt-visible"),
+            None,
+        )
+        .unwrap();
+        assert!(
+            !explicit_default
+                .get_args()
+                .any(|arg| arg.to_string_lossy().contains("model_reasoning_effort"))
+        );
+        let mut invalid = std::process::Command::new("codex");
+        assert!(
+            configure_codex_chat(
+                &mut invalid,
+                Path::new("workspace"),
+                Path::new("response.txt"),
+                Some("gpt-visible"),
+                Some("high\";echo")
+            )
+            .is_err()
+        );
+        assert!(invalid.get_args().next().is_none());
+        let mut claude = std::process::Command::new("claude");
+        configure_claude_chat(&mut claude);
+        configure_selected_model(
+            &mut claude,
+            AssistantProviderKind::ClaudeCode,
+            Some("sonnet"),
+        )
+        .unwrap();
+        let args = claude
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|actual| actual == ["--model", "sonnet"])
+        );
+        assert!(args.windows(2).any(|actual| actual == ["--tools", ""]));
+        assert!(args.contains(&"--no-session-persistence"));
+        assert!(
+            configure_selected_model(
+                &mut claude,
+                AssistantProviderKind::ClaudeCode,
+                Some("--unsafe")
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejected_model_does_not_prompt_for_login_or_fall_back_to_default() {
+        for reason in [
+            "model_not_found",
+            "The requested model is not supported by your account",
+            "You do not have access to this model. authentication required",
+            "unknown model",
+        ] {
+            let error = provider_failure_message_for_model(
+                AssistantProviderKind::Codex,
+                Some("gpt-unavailable"),
+                reason,
+            );
+            assert!(error.contains("선택한 모델"));
+            assert!(error.contains("자동 전환하지 않았습니다"));
+            assert!(!error.contains(REAUTHENTICATION_PREFIX));
+            assert!(!error.contains("gpt-unavailable"));
+        }
+        assert!(
+            provider_failure_message_for_model(
+                AssistantProviderKind::Codex,
+                Some("gpt-visible"),
+                "oauth access token has expired"
+            )
+            .contains(REAUTHENTICATION_PREFIX)
+        );
+    }
+
+    #[test]
+    fn rejected_reasoning_keeps_selection_and_does_not_leak_provider_output() {
+        for reason in [
+            "Unsupported reasoning effort for this model PRIVATE_TOKEN",
+            "invalid model_reasoning_effort high",
+            "reasoning effort must be one of the supported values",
+        ] {
+            let error = provider_failure_message_for_selection(
+                AssistantProviderKind::Codex,
+                Some("gpt-visible"),
+                Some("high"),
+                reason,
+            );
+            assert!(error.contains("추론 강도를 거부"));
+            assert!(error.contains("자동 전환하지 않았습니다"));
+            assert!(!error.contains("PRIVATE_TOKEN"));
+            assert!(!error.contains(REAUTHENTICATION_PREFIX));
+        }
+        let model_error = provider_failure_message_for_selection(
+            AssistantProviderKind::Codex,
+            Some("gpt-unavailable"),
+            Some("high"),
+            "model_not_found",
+        );
+        assert!(model_error.contains("선택한 모델을 거부"));
+        let auth_error = provider_failure_message_for_selection(
+            AssistantProviderKind::Codex,
+            Some("gpt-visible"),
+            Some("high"),
+            "oauth access token has expired",
+        );
+        assert!(auth_error.contains(REAUTHENTICATION_PREFIX));
     }
 
     #[test]

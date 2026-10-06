@@ -23,6 +23,7 @@ import {
   configureControlCleanupAccess,
   configureControlInspectionAccess,
   configureControlPermissionLifetime,
+  configureChatTrashPermission,
   listenToAppToolReview,
   listenToAppToolCompleted,
   getActionHistory,
@@ -456,9 +457,9 @@ function App() {
     appToolReviewRef.current = null; setAppToolReview(null);
     window.requestAnimationFrame(() => { if (appToolReviewTrigger.current?.isConnected) appToolReviewTrigger.current.focus({ preventScroll: true }); });
   }
-  function completedAppToolReview(completion: AppToolReviewCompletion) {
+  function completedAppToolReview(completion: AppToolReviewCompletion, sessionId = appToolReviewRef.current?.sessionId ?? null) {
     setAppToolNotice(completion.message);
-    setAppToolCompletion({ sequence: Date.now(), sessionId: appToolReviewRef.current?.sessionId ?? null, message: completion.message, trashResult: completion.trashResult });
+    setAppToolCompletion({ sequence: Date.now(), sessionId, message: completion.message, trashResult: completion.trashResult });
     if (completion.dockerStatus) setDockerStatus(completion.dockerStatus);
     if (completion.mutated) {
       invalidateAnalysisReports(); setFileCatalogStale(true);
@@ -888,6 +889,14 @@ function App() {
     } finally {
       setPermissionLifetimeUpdating(false);
     }
+  }
+
+  async function changeChatTrashPermission(enabled: boolean) {
+    if (permissionLifetimeUpdating || selectionBlocked || !controlStatus.bridgeAvailable) return;
+    setPermissionLifetimeUpdating(true); setPermissionLifetimeError(null);
+    try { applyControlStatus(await configureChatTrashPermission(enabled)); }
+    catch (reason) { setPermissionLifetimeError(normalizeError(reason)); }
+    finally { setPermissionLifetimeUpdating(false); }
   }
 
   async function openPendingCleanupReview() {
@@ -1781,6 +1790,7 @@ function App() {
     permissionControlsLocked: permissionLifetimeUpdating,
     permissionLifetimeLocked: selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating,
     onPermissionLifetimeChange: lifetime => void changePermissionLifetime(lifetime),
+    onChatTrashPermissionChange: enabled => void changeChatTrashPermission(enabled),
     canEnableSearch: Boolean(fileCatalog || documentIndex),
     updatingSearchAccess: controlAccessUpdating,
     searchAccessError: controlAccessError,
@@ -2064,12 +2074,14 @@ function App() {
           launchRequest={assistantLaunchRequest}
           onLaunchRequestHandled={() => setAssistantLaunchRequest(null)}
           onPickFolder={() => pickStorageFolder({ stayOnView: true })}
-          onConfirmEmptyPlan={(sessionId, revision, planId) => runTrashAction("assistant", () => confirmAssistantEmptyPlan(sessionId, revision, planId))}
-          onConfirmFilePlan={(sessionId, revision, planId, nestedAck) => runTrashAction("assistant", () => confirmAssistantFilePlan(sessionId, revision, planId, nestedAck))}
+          onConfirmEmptyPlan={(sessionId, revision, planId, automatic) => runTrashAction("assistant", () => confirmAssistantEmptyPlan(sessionId, revision, planId, automatic))}
+          onConfirmFilePlan={(sessionId, revision, planId, nestedAck, automatic) => runTrashAction("assistant", () => confirmAssistantFilePlan(sessionId, revision, planId, nestedAck, automatic))}
           onDirectoryReport={acceptAssistantDirectoryReport}
           onOpenCleanupTree={(sessionId, revision) => void openCandidateTree({ kind: "assistant", sessionId, revision })}
           onAppToolView={showAppToolView}
           onAppToolReview={openAppToolReview}
+          onAppToolCompleted={completedAppToolReview}
+          onAppTrashBusyChange={setApplicationRunning}
           appToolCompletion={appToolCompletion}
         />
       ) : null}

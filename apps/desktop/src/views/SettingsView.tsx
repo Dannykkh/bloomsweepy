@@ -3,6 +3,7 @@ import { DockerManagementPanel } from "../components/DockerManagementPanel";
 import { McpConnectionPanel } from "../components/McpConnectionPanel";
 import { StartupSettingsPanel } from "../components/StartupSettingsPanel";
 import { MenuBarSettingsPanel } from "../components/MenuBarSettingsPanel";
+import { AssistantModelSettingsPanel } from "../components/AssistantModelSettingsPanel";
 import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { useLanguage, type LanguagePreference } from "../i18n";
 import type { DockerManagementStatus, ScanConfig } from "../types";
@@ -46,6 +47,7 @@ export function SettingsView({
         </div>
         <ControlStatusPanel {...controlSettings} />
       </section>
+      <AssistantModelSettingsPanel />
       <section className="settings-panel settings-language-panel">
         <div className="settings-panel__heading">
           <Languages size={20} aria-hidden="true" />

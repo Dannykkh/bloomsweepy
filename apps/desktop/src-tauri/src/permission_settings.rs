@@ -65,6 +65,8 @@ pub(crate) struct PermissionPreferences {
     version: u32,
     pub lifetime: PermissionLifetime,
     pub inspection_allowed: bool,
+    #[serde(default)]
+    pub chat_trash_without_confirmation: bool,
     pub file_root: Option<ApprovedRoot>,
     pub document_root: Option<ApprovedRoot>,
     pub scan: Option<ScanGrant>,
@@ -77,6 +79,7 @@ impl Default for PermissionPreferences {
             version: 1,
             lifetime: PermissionLifetime::Session,
             inspection_allowed: false,
+            chat_trash_without_confirmation: false,
             file_root: None,
             document_root: None,
             scan: None,
@@ -120,6 +123,7 @@ impl PermissionPreferences {
             })
         };
         (!self.inspection_allowed || previous.inspection_allowed)
+            && (!self.chat_trash_without_confirmation || previous.chat_trash_without_confirmation)
             && root_subset(&self.file_root, &previous.file_root)
             && root_subset(&self.document_root, &previous.document_root)
             && self.scan.as_ref().is_none_or(|next| {
@@ -182,6 +186,7 @@ pub(crate) fn load(path: &Path) -> Result<PermissionPreferences, String> {
     if settings.version != 1
         || (settings.lifetime == PermissionLifetime::Session
             && (settings.inspection_allowed
+                || settings.chat_trash_without_confirmation
                 || settings.file_root.is_some()
                 || settings.document_root.is_some()
                 || settings.scan.is_some()
@@ -273,6 +278,31 @@ mod tests {
         assert_eq!(restored.scan.as_ref().unwrap().approved_at_unix_ms, 123);
         assert_eq!(restored.cleanup_approved_at_unix_ms, Some(456));
         assert!(!restored.revalidate());
+    }
+
+    #[test]
+    fn chat_trash_permission_is_closed_by_default_opt_in_and_lifetime_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grants.sqlite3");
+        assert!(!PermissionPreferences::default().chat_trash_without_confirmation);
+        let mut settings = remembered(dir.path());
+        let previous = settings.clone();
+        settings.chat_trash_without_confirmation = true;
+        assert!(!settings.only_restricts(&previous));
+        save(&path, &settings).unwrap();
+        assert!(load(&path).unwrap().chat_trash_without_confirmation);
+        let mut revoked = settings.clone();
+        revoked.chat_trash_without_confirmation = false;
+        assert!(revoked.only_restricts(&settings));
+        settings.lifetime = PermissionLifetime::Session;
+        save(&path, &settings).unwrap();
+        assert!(!load(&path).unwrap().chat_trash_without_confirmation);
+        let mut old = serde_json::to_value(previous).unwrap();
+        old.as_object_mut()
+            .unwrap()
+            .remove("chatTrashWithoutConfirmation");
+        let restored: PermissionPreferences = serde_json::from_value(old).unwrap();
+        assert!(!restored.chat_trash_without_confirmation);
     }
 
     #[test]
@@ -404,6 +434,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "chatTrashWithoutConfirmation",
                 "cleanupApprovedAtUnixMs",
                 "documentRoot",
                 "fileRoot",

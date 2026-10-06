@@ -31,6 +31,8 @@ export type AssistantAuthentication =
 export interface AssistantProviderModel {
   id: string;
   label: string;
+  supportedReasoningEfforts?: string[];
+  defaultReasoningEffort?: string | null;
 }
 
 export interface AssistantProviderStatus {
@@ -42,6 +44,8 @@ export interface AssistantProviderStatus {
   busy: boolean;
   detail: string;
   models: AssistantProviderModel[];
+  modelSelection?: "optional" | "required" | "unsupported";
+  modelCatalogSource?: "cli" | "bundled" | "aliases" | "installed" | "unavailable" | "unsupported";
   state: "notInstalled" | "broken" | "incompatible" | "loginRequired"
     | "checkFailed" | "serviceUnavailable" | "noModels" | "ready";
   executablePath: string | null;
@@ -78,6 +82,7 @@ export interface AssistantChatRequest {
   sessionId?: string;
   provider: AssistantProviderKind;
   model: string | null;
+  reasoningEffort?: string | null;
   message: string;
   history: AssistantChatTurn[];
   summary: AssistantFolderSummary;
@@ -98,6 +103,7 @@ export interface AssistantChatResponse {
   provider: AssistantProviderKind;
   label: string;
   model: string | null;
+  reasoningEffort?: string | null;
   message: string;
   dockerContext: AssistantDockerContext | null;
   emptyWorkspace: AssistantEmptyWorkspace | null;
@@ -137,7 +143,7 @@ export interface AssistantFileWorkspace {
   sizeRanked: boolean; mapGeneration: number | null;
   summary: AssistantFolderSummary; totalEntries: number; truncated: boolean; unreadableEntries: number;
   offset: number; nextOffset: number | null; entries: AssistantFileEntry[]; selectedIds: string[];
-  plan: { id: string; entries: AssistantFileEntry[]; logicalBytes: number; requiresNestedAck: boolean; expiresAtUnixMs: number } | null;
+  plan: { id: string; entries: AssistantFileEntry[]; logicalBytes: number; requiresNestedAck: boolean; expiresAtUnixMs: number | null } | null;
 }
 export type AssistantFileAction =
   | { kind: "scan" }
@@ -157,7 +163,7 @@ export interface AssistantEmptyWorkspace {
   omittedCount: number;
   candidates: { id: string; number: number; name: string; path: string }[];
   selectedIds: string[];
-  plan: { id: string; candidateIds: string[]; expiresAtUnixMs: number } | null;
+  plan: { id: string; candidateIds: string[]; expiresAtUnixMs: number | null } | null;
 }
 
 export interface AssistantSessionSummary {
@@ -380,6 +386,7 @@ export interface ControlStatus {
   scanAccess: ControlScanAccess;
   cleanupAccess: ControlCleanupAccess;
   inspectionAllowed?: boolean;
+  chatTrashWithoutConfirmation?: boolean;
   permissionLifetime?: PermissionLifetime;
   permissionWarning?: string | null;
 }

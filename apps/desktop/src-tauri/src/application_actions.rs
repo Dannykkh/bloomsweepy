@@ -70,7 +70,7 @@ pub(crate) struct ApplicationPlan {
     plan_id: String,
     display_name: String,
     path: String,
-    expires_at_unix_ms: u64,
+    expires_at_unix_ms: Option<u64>,
     related_data: Vec<DataCandidate>,
     warnings: Vec<String>,
 }
@@ -108,6 +108,8 @@ pub(crate) struct ConfirmApplicationRequest {
     plan_id: String,
     bundle_only_acknowledged: bool,
     no_uninstaller_acknowledged: bool,
+    #[serde(default)]
+    automatic: bool,
 }
 
 #[derive(Deserialize)]
@@ -115,6 +117,8 @@ pub(crate) struct ConfirmApplicationRequest {
 pub(crate) struct ConfirmApplicationDataRequest {
     plan_id: String,
     related_data_acknowledged: bool,
+    #[serde(default)]
+    automatic: bool,
 }
 
 fn opaque_id() -> Result<String, String> {
@@ -414,6 +418,7 @@ pub(crate) async fn confirm_application_trash(
     request: ConfirmApplicationRequest,
 ) -> Result<trash_actions::TrashOperationResult, String> {
     require_main(&window)?;
+    crate::control_server::require_automatic_trash_access(&app, request.automatic)?;
     if !request.bundle_only_acknowledged || !request.no_uninstaller_acknowledged {
         return Err("앱 본체만 이동하며 전용 제거기가 없음을 확인해야 합니다".to_owned());
     }
@@ -428,6 +433,7 @@ pub(crate) async fn confirm_application_data_trash(
     request: ConfirmApplicationDataRequest,
 ) -> Result<trash_actions::TrashOperationResult, String> {
     require_main(&window)?;
+    crate::control_server::require_automatic_trash_access(&app, request.automatic)?;
     if !request.related_data_acknowledged {
         return Err("선택한 캐시·환경설정 이동을 별도로 확인해야 합니다".to_owned());
     }
@@ -553,9 +559,8 @@ mod mac {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     use std::path::{Component, Path, PathBuf};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
 
-    const PLAN_TTL: Duration = Duration::from_secs(120);
     const MAX_TREE_ENTRIES: usize = 20_000;
     const MAX_TREE_DEPTH: usize = 64;
     const MAX_TREE_PATH_BYTES: usize = 8 * 1024 * 1024;
@@ -602,7 +607,6 @@ mod mac {
         pub(super) inventory_id: String,
         pub(super) application_id: String,
         data_only: bool,
-        deadline: Instant,
         pub(super) items: Vec<ApplicationItem>,
     }
 
@@ -693,9 +697,7 @@ mod mac {
 
     impl ActionsInner {
         pub(super) fn has_live_plan(&self) -> bool {
-            self.pending
-                .as_ref()
-                .is_some_and(|plan| plan.deadline > Instant::now())
+            self.pending.is_some()
         }
         fn record(&self, request: &PrepareApplicationRequest) -> Result<Record, String> {
             if self.inventory_id != request.inventory_id {
@@ -727,10 +729,6 @@ mod mac {
                 || plan.data_only != data_only
             {
                 return Err("앱 정리 확인 대상 또는 종류가 다릅니다".to_owned());
-            }
-            if plan.deadline <= Instant::now() {
-                self.pending = None;
-                return Err("앱 정리 확인 시간이 만료됐습니다. 다시 검토하세요".to_owned());
             }
             Ok(self.pending.take().expect("validated application plan"))
         }
@@ -980,11 +978,7 @@ mod mac {
             plan_id: opaque_id()?,
             display_name: record.view.display_name.clone(),
             path: bundle.path.to_string_lossy().into_owned(),
-            expires_at_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64
-                + PLAN_TTL.as_millis() as u64,
+            expires_at_unix_ms: None,
             related_data: candidates
                 .iter()
                 .map(|candidate| candidate.view.clone())
@@ -1017,7 +1011,6 @@ mod mac {
             inventory_id: request.inventory_id,
             application_id: request.application_id,
             data_only,
-            deadline: Instant::now() + PLAN_TTL,
             items,
         });
         Ok(view)
@@ -1538,29 +1531,31 @@ mod mac {
                         plan_id: "plan".to_owned(),
                         display_name: "Fixture".to_owned(),
                         path: "/Applications/Fixture.app".to_owned(),
-                        expires_at_unix_ms: 1,
+                        expires_at_unix_ms: None,
                         related_data: Vec::new(),
                         warnings: Vec::new(),
                     },
                     inventory_id: "inventory".to_owned(),
                     application_id: "app".to_owned(),
                     data_only,
-                    deadline: Instant::now() + PLAN_TTL,
                     items: Vec::new(),
                 }),
             }
         }
 
         #[test]
-        fn application_plans_are_kind_bound_one_shot_expiring_and_refresh_invalidated() {
+        fn application_plans_are_kind_bound_one_shot_nonexpiring_and_refresh_invalidated() {
             let mut state = plan_fixture(false);
             assert!(state.claim("plan", true).is_err());
             assert!(state.claim("foreign", false).is_err());
             assert!(state.claim("plan", false).is_ok());
             assert!(state.claim("plan", false).is_err());
             let mut state = plan_fixture(true);
-            state.pending.as_mut().unwrap().deadline = Instant::now();
-            assert!(state.claim("plan", true).is_err());
+            assert_eq!(
+                state.pending.as_ref().unwrap().view.expires_at_unix_ms,
+                None
+            );
+            assert!(state.claim("plan", true).is_ok());
             assert!(state.pending.is_none());
             let mut state = plan_fixture(false);
             state.inventory_id = "new inventory".to_owned();

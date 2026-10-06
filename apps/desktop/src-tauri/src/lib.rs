@@ -1852,6 +1852,7 @@ pub fn run() {
             control_server::configure_control_cleanup_access,
             control_server::configure_control_inspection_access,
             control_server::configure_control_permission_lifetime,
+            control_server::configure_chat_trash_permission,
             control_server::get_pending_cleanup_plan,
             control_server::approve_cleanup_plan,
             control_server::reject_cleanup_plan,

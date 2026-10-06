@@ -1,5 +1,4 @@
 import { FolderOpen, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
 import { useLanguage } from "../i18n";
 import type { AssistantEmptyWorkspace, TrashOperationResult } from "../types";
 import { formatCount } from "../lib/format";
@@ -14,15 +13,7 @@ interface Props {
 
 export function AssistantEmptyFolderCard({ workspace, busy, onSelect, onPrepare, onConfirm }: Props) {
   const { t } = useLanguage();
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!workspace.plan) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [workspace.plan?.id]);
   const plan = workspace.plan;
-  const expired = Boolean(plan && now >= plan.expiresAtUnixMs);
   const selected = new Set(workspace.selectedIds);
   const rows = plan ? workspace.candidates.filter((candidate) => plan.candidateIds.includes(candidate.id)) : workspace.candidates;
 
@@ -55,13 +46,13 @@ export function AssistantEmptyFolderCard({ workspace, busy, onSelect, onPrepare,
         </li>)}
       </ul>
       {rows.length === 0 ? <p>{t("검토할 빈 폴더가 없습니다.")}</p> : null}
-      {plan ? <p role="status">{expired ? t("확인 시간이 만료됐습니다. 선택을 다시 검토하세요.") : t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
-      <footer>
+      {plan ? <p>{t("휴지통으로 이동할까요?")} {t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
+      <footer className="assistant-trash-question-actions">
         <small>{t("파일 내용은 읽지 않습니다. 빈 폴더 정리는 큰 용량 확보를 보장하지 않습니다.")}</small>
         {plan ? <>
-          <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect(workspace.selectedIds)}>{t("선택 다시 검토")}</button>
-          <button type="button" className="trash-confirm-button" disabled={busy || expired} onClick={onConfirm}>
-            <Trash2 size={16} aria-hidden="true" />{t("확인한 {{count}}개 휴지통으로 이동", { count: formatCount(plan.candidateIds.length) })}
+          <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect([])}>{t("아니오")}</button>
+          <button type="button" className="trash-confirm-button" disabled={busy} onClick={onConfirm}>
+            <Trash2 size={16} aria-hidden="true" />{t("예, {{count}}개 휴지통으로 이동", { count: formatCount(plan.candidateIds.length) })}
           </button>
         </> : <button type="button" className="secondary-button" disabled={busy || selected.size === 0} onClick={onPrepare}>{t("선택한 폴더 최종 검토")}</button>}
       </footer>

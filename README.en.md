@@ -13,9 +13,28 @@
 
 BroomSweepy is a project building a **conversational file management system** for Windows and macOS. Its goal is to make conversation the primary way to find files, scan folders, review candidates, refine conditions, confirm actions, and inspect results in one continuous workflow.
 
+Development update: chat Trash moves use one inline Yes/No question, without a
+second review modal or elapsed-time expiry. Settings can explicitly allow skipping
+extra confirmation for a human request naming the exact files, folders or app
+bundle to remove; it is off by default and follows Session/Remember duration.
+Advice, ambiguous targets, app-related data, permanent deletion, Docker cleanup and
+process termination do not qualify. Identity/content checks and one-shot execution
+remain, and neither models nor MCP receive an execution tool. Individual plans are
+not restored after restart. See [QA](docs/qa/2026-10-05-conversational-trash-consent.md).
+
 **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
 ## Current development build — conversational files and folders
+
+Chat Trash moves use one inline **Yes/No** question, without a second review dialog
+or a timer deadline. Enable **Settings → Connections and permissions → Allow skipping
+additional confirmation** to act directly on simple direct commands naming every target,
+such as `delete promo-video`. This opt-in is off by default and follows the existing
+Session/Remember lifetime. Conditional, advisory, quoted, compound, or unsupported
+phrasing falls back to Yes/No. Ambiguous requests, app-related
+data, process termination, Docker cleanup, and permanent deletion are excluded.
+Rust rechecks permission and targets before execution. Models/MCP receive no
+execution or automatic-approval tool. [Consent QA](docs/qa/2026-10-05-conversational-trash-consent.md)
 
 **Cleanup candidates → Folder tree** supports expanding folders and selecting all or individual items. Parent selection includes descendants; excluding a child prevents moving the parent itself. Enter from the storage map or a measured AI file list, then review exact targets before moving them to Trash. Whole-folder review on this new page strictly checks hidden protected items, links, clouds, and device boundaries. State is capped at 2,048 nodes and rendering at 200 rows; unmeasured, partial, and expired results remain explicit. This Mac's new installation passed three temporary targets/209B moved to Trash, child preservation, cancellation, rescan, local AI-card entry, and history after restart. Windows, external-model investigation end-to-end, and long-duration memory tests remain pending. [Tree QA](docs/qa/2026-10-05-cleanup-tree.md) · [Native Mac QA](docs/qa/2026-10-05-cleanup-tree-native.md)
 
@@ -23,7 +42,7 @@ Ask “What is the largest folder or data here? Can I delete it?” to freshly m
 
 Ask the assistant to scan files, find a name, or delete a named folder such as `promo-video`. Rust performs the actual name search, size scan, child-folder browsing, and trash review, including nonempty folders. The same conversation's local cards provide Open, Reveal, selection, final confirmation, and per-item results. Models request app operations; they never receive deletion authority.
 
-Search retains at most 200 results, model/UI pages contain 24, and a trash review allows 100 selected items. Search-only folder sizes are unmeasured, not zero. Ambiguous names or incomplete searches never auto-select a target. Review exact local paths, contents, and logical sizes; folders require acknowledgment of all nested contents. Plans are single-use, expire after five minutes, and revalidate changes, links, clouds, and protected paths before OS Trash. Permanent deletion, arbitrary shell commands, conversational renaming, ordinary moves, and folder creation are not provided.
+Search retains at most 200 results, model/UI pages contain 24, and a trash review allows 100 selected items. Search-only folder sizes are unmeasured, not zero. Ambiguous names or incomplete searches never auto-select a target. Review exact local paths, contents, and logical sizes; the affirmative button explicitly includes descendants. Chat plans are single-use without a timer deadline, and revalidate changes, links, clouds, and protected paths before OS Trash. Permanent deletion, arbitrary shell commands, conversational renaming, ordinary moves, and folder creation are not provided.
 
 These source/development additions are not in the existing GitHub v1.7.0 downloads. Real Codex scan/nonempty-folder review requests and native macOS Trash moves of synthetic items have been tested. Windows runtime and long-duration resource validation remain pending.
 
@@ -121,6 +140,10 @@ Memory cleanup does not purge system RAM, other apps, WebView helper processes, 
 Docker management is off by default. When enabled, cleanup uses fixed commands, excludes volumes, and requires a separate irreversible-action confirmation.
 
 ## AI, CLI, and MCP
+
+The development build shares one model preference between **AI model below the chat composer** and **Settings → AI model**. Codex and Claude Code support an explicit model or the CLI default; Ollama uses installed models. Choices are remembered per provider on this computer without changing global CLI settings, sign-in, or removal permissions. A listed model does not guarantee account access, and errors do not silently switch models. Grok and Antigravity currently use their CLI defaults. This is not part of the public v1.7.0 download. [Model-selection contract](docs/architecture/assistant-model-selection.md)
+
+An explicit Codex model also offers **Reasoning effort** from its CLI-reported supported levels, remembered per model. The default leaves the choice to the CLI; an unsupported saved choice requires attention instead of silent fallback. Updating never automatically replaces your selected model. CLI0.160.1 on this Mac lists seven visible models including GPT-6.1-Sol. [Reasoning-selection verification](docs/qa/2026-10-06-cli-reasoning-selection.md)
 
 Installing the Codex desktop app does not establish that the Codex CLI is installed. Check your provider's CLI installation, compatible version, and sign-in state in BroomSweepy. The earlier summary-response flow was checked with Codex; the new v1.7.0 empty-folder tool flow still needs end-to-end validation. Adapters also exist for Claude Code, Grok, Antigravity, and Ollama, but not all were live-tested for this Mac release.
 

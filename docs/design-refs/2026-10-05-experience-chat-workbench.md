@@ -52,12 +52,28 @@ Permissions and diagnostics live in Settings and a target-adjacent modal.
 ## CTA Strategy
 
 Primary: send/stop in the bottom composer. Secondary: new session, history,
-evidence disclosure. Existing final approval controls remain distinct from sending.
+evidence disclosure. Trash reviews show exact targets and one inline question:
+`예, 휴지통으로 이동` / `아니오`. No separate review-opening modal or repeated
+checkbox acknowledgement in chat. The affirmative label includes descendants or
+app-body-only scope when applicable. A direct, unambiguous human yes/no reply to
+the sole pending trash question is handled locally, without a provider round.
 
 ## Trust Strategy
 
 Show partial-result and permission/failure signals even when evidence is collapsed.
-Never change permissions merely by opening settings; never treat chat as approval.
+Never change permissions merely by opening settings. Model text and MCP requests
+cannot approve execution. The main UI owns either the human decision for an
+already-shown exact pending plan or a native opt-in exact-named removal request.
+Advice (`삭제해도 돼?`) is not approval.
+Trash confirmation has no elapsed-time deadline in this app session: native code
+revalidates identity, contents and running state immediately before moving.
+Selection/inventory changes, cancellation, execution and app restart still invalidate
+the plan. Permanent Trash emptying, Docker pruning and process termination retain
+their distinct safety flows. Settings provide an explicit, default-off permission
+to skip extra confirmation for a human request naming every exact removal target.
+Advice, negation, alternate paths, incomplete names and ambiguous/multiple plans
+do not qualify. Rust checks the permission again at execution. The existing
+Session/Remember lifetime applies to this preference, not individual plans.
 
 ## Asset Provenance
 
@@ -90,6 +106,7 @@ requirement still applies. Other screens keep their existing scroll ownership.
 | working | Request | Actual phase + elapsed time | Stop | Draft preserved on save failure |
 | error | Query/provider failure | Visible error above input | Retry/check connection | No false success |
 | success | Response | Reply plus compact evidence | Follow up/review | Read older messages freely |
+| confirmation | Exact trash plan ready | Target, scope, recovery and yes/no | Approve once or decline | Time alone does not expire; changed targets require a new review |
 
 ## Performance Budget
 
@@ -132,3 +149,5 @@ SUCCESS — Input and status stay visible; modal usable; permission values uncha
 - Readback scroll is not yanked by provider progress.
 - Actual native phase events reject stale request/session identifiers.
 - Narrow layout, keyboard, cancellation, error and modal focus work in rendered UI.
+- A waiting trash question accepts one direct human answer, never model output;
+  declines do no filesystem work and completion comes only from native results.

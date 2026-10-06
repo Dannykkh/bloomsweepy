@@ -10,6 +10,7 @@ export interface ControlStatusPanelProps {
   permissionControlsLocked?: boolean;
   permissionLifetimeLocked?: boolean;
   onPermissionLifetimeChange?: (lifetime: PermissionLifetime) => void;
+  onChatTrashPermissionChange?: (enabled: boolean) => void;
   canEnableSearch: boolean;
   updatingSearchAccess: boolean;
   searchAccessError: string | null;
@@ -108,6 +109,7 @@ export function ControlStatusPanel({
   permissionControlsLocked,
   permissionLifetimeLocked,
   onPermissionLifetimeChange,
+  onChatTrashPermissionChange,
   canEnableSearch,
   updatingSearchAccess,
   searchAccessError,
@@ -198,7 +200,7 @@ export function ControlStatusPanel({
           <div>
             <label htmlFor="control-permission-lifetime"><strong>{t("권한 유지 방식")}</strong></label>
             <p id="control-permission-lifetime-description">{remember
-              ? t("허용한 권한·폴더·검사 설정을 이 컴퓨터에 저장합니다. 실제 삭제와 앱 제거는 매번 별도로 확인합니다.")
+              ? t("허용한 권한과 삭제 확인 방식을 이 컴퓨터에 저장합니다. 개별 실행 계획은 저장하지 않습니다.")
               : t("앱을 완전히 종료하면 허용이 꺼집니다. 창만 닫아 메뉴 막대에 남아 있으면 유지됩니다.")}</p>
             <small>{t("유지 방식을 바꿔도 꺼진 권한은 자동으로 켜지지 않습니다.")}</small>
             {permissionLifetimeError ? <small role="alert">{t("권한 저장 오류: {{detail}}", { detail: permissionLifetimeError })}</small> : null}
@@ -211,6 +213,15 @@ export function ControlStatusPanel({
             <option value="session">{t("이번 실행만")}</option>
             <option value="remember">{t("이 컴퓨터에서 기억")}</option>
           </select>
+        </div>
+        <div className="control-permission">
+          <div><strong>{t("명확한 삭제 요청은 추가 확인 없이 진행")}</strong>
+            <p id="chat-trash-permission-description">{t("사용자가 이름을 지정해 삭제를 요청한 파일·폴더·앱 본체만 재검사 후 휴지통으로 이동합니다. 모호한 요청과 삭제 상담은 확인하며, 영구 삭제·Docker 정리·프로세스 종료에는 적용하지 않습니다.")}</p>
+            <small>{t("꺼짐: 채팅에서 예/아니오 한 번 확인 · 켜짐: 명확한 요청 즉시 처리")}</small>
+          </div>
+          <label className="control-permission__scan-button"><input type="checkbox" checked={status.chatTrashWithoutConfirmation === true}
+            disabled={!status.bridgeAvailable || permissionControlsLocked || cleanupAccessLocked || !onChatTrashPermissionChange}
+            aria-describedby="chat-trash-permission-description" onChange={event => onChatTrashPermissionChange?.(event.target.checked)} />{t("추가 확인 생략 허용")}</label>
         </div>
         <div className="control-permission">
           <div><strong>{t("시스템·앱 조회 허용")}</strong>

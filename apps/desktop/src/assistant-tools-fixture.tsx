@@ -2,7 +2,7 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import { createRoot } from "react-dom/client";
-import { useCallback, useState } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import { AssistantView } from "./views/AssistantView";
 import { AppShell } from "./components/AppShell";
 import { SettingsView } from "./views/SettingsView";
@@ -57,6 +57,14 @@ const fileSeed: AssistantFileWorkspace = {
 let fileWorkspace: AssistantFileWorkspace | null = null;
 let executions = 0;
 let preparations = 0;
+let queries = 0;
+let lastModel: string | null = null;
+let lastReasoningEffort: string | null = null;
+let lastModelProvider = "codex";
+let modelStatusChecks = 0;
+let automaticAllowed = params.has("auto-trash");
+const consumedApplicationPlans = new Set<string>();
+const counterListeners = new Set<() => void>();
 let cancelPending: (() => void) | null = null;
 const appToolsMode = params.has("app-tools");
 const clone = <T,>(value: T): T => structuredClone(value);
@@ -65,10 +73,31 @@ const control: ControlStatus = { revision: 1, bridgeAvailable: true, connectedCl
   protocolVersion: 3, searchAccess: { files: false, documents: false },
   scanAccess: { enabled: false, root: null, approvedAtUnixMs: null }, cleanupAccess: { enabled: false, approvedAtUnixMs: null } };
 
-mockIPC((command, raw) => {
+function invokeFixture(command: string, raw: unknown) {
   const args = raw as Record<string, unknown>;
   if (command === "set_application_language") return null;
   if (command === "get_mcp_registration_statuses") return [];
+  if (command === "get_assistant_provider_status" && params.has("models")) {
+    const modelBusy = params.has("models-busy") && modelStatusChecks++ === 0;
+    return [
+    { provider: "codex", label: "Codex · QA mock", installed: true, authentication: "authenticated",
+      available: true, busy: modelBusy, detail: "Synthetic catalog — no AI requests", state: "ready", executablePath: null,
+      version: "fixture", modelSelection: params.has("old-host") ? undefined : "optional", modelCatalogSource: params.has("bundled") ? "bundled" : params.has("no-catalog") ? "unavailable" : "cli",
+      models: params.has("no-catalog") ? [] : [{ id: "fixture-fast", label: "Fast · synthetic",
+        ...(params.has("old-host") || params.has("no-reasoning-catalog") ? {} : {
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", ...(params.has("limited-reasoning") ? [] : ["ultra"])], defaultReasoningEffort: "low" }) },
+        { id: "fixture-deep", label: "Deep · synthetic",
+          ...(params.has("old-host") || params.has("no-reasoning-catalog") ? {} : { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"], defaultReasoningEffort: "medium" }) }] },
+    { provider: "claudeCode", label: "Claude Code · QA mock", installed: true, authentication: "authenticated",
+      available: true, busy: modelBusy, detail: "Synthetic aliases — no AI requests", state: "ready", executablePath: null,
+      version: "fixture", modelSelection: "optional", modelCatalogSource: "aliases",
+      models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }, { id: "haiku", label: "Haiku" }] },
+    { provider: "ollama", label: "Ollama · QA mock", installed: true, authentication: "notRequired",
+      available: true, busy: modelBusy, detail: "Synthetic installed models — no AI requests", state: "ready", executablePath: null,
+      version: "fixture", modelSelection: "required", modelCatalogSource: "installed",
+      models: [{ id: "fixture-local:small", label: "Local · synthetic" }] },
+    ];
+  }
   if (command === "get_assistant_provider_status") return [{ provider: "codex", label: "Codex · QA mock",
     installed: true, authentication: "authenticated", available: true, busy: false, detail: "Synthetic test adapter — no AI requests",
     models: [], state: "ready", executablePath: null, version: "fixture" }];
@@ -98,7 +127,14 @@ mockIPC((command, raw) => {
   }
   if (command === "cancel_assistant") { cancelPending?.(); return true; }
   if (command === "ask_assistant") {
-    const request = args.request as { message: string; progressId?: string; sessionId?: string };
+    queries++;
+    const request = args.request as { message: string; progressId?: string; sessionId?: string; provider?: string; model?: string | null; reasoningEffort?: string | null };
+    lastModel = request.model ?? null;
+    lastReasoningEffort = request.reasoningEffort ?? null;
+    lastModelProvider = request.provider ?? "codex";
+    if (params.has("models")) return { provider: lastModelProvider, label: `${lastModelProvider} · QA mock`, model: lastModel, reasoningEffort: lastReasoningEffort,
+      message: "선택한 모델 값을 받은 합성 응답입니다. 실제 CLI·파일 작업·외부 전송은 없습니다.",
+      analysisComplete: true, appToolResults: [], dockerContext: null, emptyWorkspace: null, fileWorkspace: null, toolAction: null };
     if (layoutState) return new Promise((resolve, reject) => {
       const timers: ReturnType<typeof setTimeout>[] = [];
       const cleanup = () => { timers.forEach(clearTimeout); cancelPending = null; };
@@ -130,7 +166,7 @@ mockIPC((command, raw) => {
       if (/문서/.test(request.message)) appToolResults = [{ ...common, capability: "documents.search", data: { query: "예산", contentExcerptsShared: true, returnedCount: 1, items: [{ name: "Budget.txt", logicalBytes: 2400, snippet: "허용한 일치 본문 <img src=x> — 실행되는 HTML이 아닙니다." }] }, presentation: { kind: "documentSearch" } }];
       if (/메모리 정리/.test(request.message)) appToolResults = [{ ...common, capability: "memory.review", status: "review_required", data: { executed: false }, presentation: { view: "performance", reviewKind: "memory", scope: "broomSweepyHostAllocator" } }];
       if (/종료/.test(request.message)) appToolResults = [{ ...common, capability: "processes.review", status: "review_required", data: { displayName: "Synthetic Editor", terminationRequested: false }, presentation: { view: "performance", reviewKind: "process", preview: { previewId: "mock-preview", displayName: "Synthetic Editor", pid: 123, capturedAtUnixMs: now, expiresAtUnixMs: now + 300_000 } } }];
-      if (/앱 삭제/.test(request.message)) appToolResults = [{ ...common, capability: "applications.review", status: "review_required", data: { displayName: "Synthetic Editor", removed: false }, presentation: { view: "applications", reviewKind: "applicationBundle", inventoryId: "mock-inventory", applicationId: "mock-app", candidateIds: [], inventory: { platform: "macos", inventoryId: "mock-inventory", issues: [], applications: [{ id: "mock-app", displayName: "Synthetic Editor", displayVersion: "1.2", publisher: null, installLocation: "/Demo/Synthetic Editor.app", estimatedBytes: null, removalMode: "trashBundle", protectionReason: null }] }, plan: { planId: "mock-prepared-plan", displayName: "Synthetic Editor", path: "/Demo/Synthetic Editor.app", expiresAtUnixMs: now + 300_000, relatedData: [], warnings: [] } } }];
+      if (/앱 삭제|Synthetic Editor.*삭제/.test(request.message)) appToolResults = [{ ...common, capability: "applications.review", status: "review_required", data: { displayName: "Synthetic Editor", removed: false }, presentation: { view: "applications", reviewKind: "applicationBundle", inventoryId: "mock-inventory", applicationId: "mock-app", candidateIds: [], inventory: { platform: "macos", inventoryId: "mock-inventory", issues: [], applications: [{ id: "mock-app", displayName: "Synthetic Editor", displayVersion: "1.2", publisher: null, installLocation: "/Demo/Synthetic Editor.app", estimatedBytes: null, removalMode: "trashBundle", protectionReason: null }] }, plan: { planId: `mock-prepared-plan-${queries}`, displayName: "Synthetic Editor", path: "/Demo/Synthetic Editor.app", expiresAtUnixMs: params.has("expired") ? 1 : null, relatedData: [], warnings: [] } } }];
       fileWorkspace = clone(fileSeed);
       return { provider: "codex", label: "Codex · QA mock", model: null, message: "실제 앱 목록을 두 번 받아 분석했습니다. Editor가 가장 큰 메모리 사용 항목이며 Unmeasured app의 크기는 아직 모릅니다. 파일 카드가 있어도 이 최종 분석을 보존합니다.", analysisComplete: true, appToolResults, dockerContext: null, emptyWorkspace: null, fileWorkspace: clone(fileWorkspace), toolAction: "app" };
     }
@@ -143,8 +179,15 @@ mockIPC((command, raw) => {
         fileWorkspace.selectedIds = [fileWorkspace.entries[0].id];
         prepareFiles();
       }
+      const ownReview: AppToolResult = { source: "broomsweepy", capability: "files.workspace",
+        status: fileWorkspace.plan ? "review_required" : "completed", capturedAtUnixMs: Date.now(), truncated: false,
+        data: { workspace: { freshScan: true, revision: fileWorkspace.revision, reviewReady: Boolean(fileWorkspace.plan) },
+          reviewPrepared: Boolean(fileWorkspace.plan), deleted: false } };
+      const appToolResults = [ownReview];
+      if (params.has("multiple-reviews")) appToolResults.push({ ...ownReview, capability: "memory.review", data: { executed: false },
+        presentation: { view: "performance", reviewKind: "memory", scope: "broomSweepyHostAllocator" } });
       return { provider: "codex", label: "Codex · QA mock", model: null, message: "Synthetic file tool result",
-        dockerContext: null, emptyWorkspace: null, fileWorkspace: clone(fileWorkspace), toolAction: "files" };
+        appToolResults, dockerContext: null, emptyWorkspace: null, fileWorkspace: clone(fileWorkspace), toolAction: "files" };
     }
     let action: "scan" | "selection" | null = null;
     if (request.message.includes("검사") || request.message.includes("scan")) { workspace = clone(seed); action = "scan"; }
@@ -157,6 +200,11 @@ mockIPC((command, raw) => {
   if (command === "prepare_application_trash" || command === "prepare_application_data_trash") { preparations++; throw new Error("Prepared tool reviews must not be prepared again"); }
   if (command === "dismiss_application_plan") return null;
   if (command === "confirm_application_trash" || command === "confirm_application_data_trash") {
+    const request = args.request as { planId: string; automatic?: boolean };
+    if (request.automatic && (!automaticAllowed || params.has("permission-revoked"))) throw new Error("Synthetic permission revoked before execution");
+    if (consumedApplicationPlans.has(request.planId)) throw new Error("Synthetic consumed plan");
+    consumedApplicationPlans.add(request.planId);
+    if (params.has("changed-target")) throw new Error("Synthetic target changed; nothing moved");
     executions++; return { requestedCount: 1, movedCount: 1, movedBytes: 0, cancelled: false, journalComplete: true, items: [{ path: "/Demo/Synthetic Editor.app", logicalBytes: 0, status: "moved", message: null }] };
   }
   if (command === "assistant_file_action") {
@@ -177,8 +225,10 @@ mockIPC((command, raw) => {
   }
   if (command === "prepare_assistant_file_plan" && fileWorkspace) { prepareFiles(); return clone(fileWorkspace); }
   if (command === "confirm_assistant_file_plan" && fileWorkspace?.plan) {
+    if (args.automatic && (!automaticAllowed || params.has("permission-revoked"))) throw new Error("Synthetic permission revoked before execution");
+    if (params.has("changed-target")) { fileWorkspace = null; throw new Error("Synthetic target changed; nothing moved"); }
     const plan = fileWorkspace.plan;
-    if (args.planId !== plan.id || (plan.requiresNestedAck && !args.nestedContentsAcknowledged) || plan.expiresAtUnixMs <= Date.now()) throw new Error("Unconfirmed or expired plan");
+    if (args.planId !== plan.id || (plan.requiresNestedAck && !args.nestedContentsAcknowledged)) throw new Error("Unconfirmed or consumed plan");
     fileWorkspace = null; executions += 1;
     document.getElementById("fixture-executions")!.textContent = `Mock executions: ${executions}`;
     return { operationId: "fixture-files-only", requestedCount: plan.entries.length, movedCount: plan.entries.length, movedBytes: plan.logicalBytes,
@@ -202,6 +252,10 @@ mockIPC((command, raw) => {
       items: items.map(item => ({ path: item.path, logicalBytes: 0, status: "moved", message: null })) } satisfies TrashOperationResult;
   }
   throw new Error(`Synthetic fixture rejects command: ${command}`);
+}
+mockIPC((command, raw) => {
+  try { return invokeFixture(command, raw); }
+  finally { queueMicrotask(() => counterListeners.forEach(listener => listener())); }
 }, { shouldMockEvents: true });
 function prepareFiles() {
   if (!fileWorkspace) throw new Error("No file workspace");
@@ -211,7 +265,8 @@ function prepareFiles() {
 }
 const noop = () => undefined;
 function Fixture() {
-  const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, permissionLifetime: params.has("remember") ? "remember" : "session" });
+  useSyncExternalStore(listener => { counterListeners.add(listener); return () => { counterListeners.delete(listener); }; }, () => `${preparations}-${executions}-${queries}`);
+  const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, chatTrashWithoutConfirmation: automaticAllowed, permissionLifetime: params.has("remember") ? "remember" : "session" });
   const [permissionError, setPermissionError] = useState<string | null>(null);
   const [view, setView] = useState<ViewId>(params.get("view") === "settings" ? "settings" : "assistant");
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -227,7 +282,7 @@ function Fixture() {
     }, onToggleInspectionAccess: () => setPermissionStatus(current => ({ ...current, inspectionAllowed: !current.inspectionAllowed })),
     onToggleSearchAccess: noop, scanAccessError: null, canEnableCleanup: false,
     cleanupAccessLocked: false, updatingCleanupAccess: false, cleanupAccessError: null, onToggleCleanupAccess: noop,
-    onReviewPending: noop };
+    onReviewPending: noop, onChatTrashPermissionChange: (enabled: boolean) => { automaticAllowed = enabled; setPermissionStatus(current => ({ ...current, chatTrashWithoutConfirmation: enabled })); } };
   return <><div style={{ display: "contents" }} inert={appReview !== null}>
     <AppShell activeView={view} root={null} report={null} volume={null} mobileNavigationOpen={mobileOpen}
       selectionBlocked={false} dockerEnabled={false} onMobileNavigationChange={setMobileOpen} onNavigate={setView} onPickFolder={noop}>
@@ -245,7 +300,8 @@ function Fixture() {
       onAppToolReview={(prepared) => setAppReview(prepared)} onAppToolView={(result) => setLocalNotice(`Explicit navigation: ${result.capability}`)} />}
     </AppShell></div>
     {appReview ? <AssistantAppToolReview result={appReview} onClose={() => setAppReview(null)} onCompleted={(result) => setLocalNotice(result.message)} /> : null}
-    <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions}</output>
+    <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions} · Mock queries: {queries}</output>
+    {params.has("models") ? <output data-testid="model-fixture-request">Mock provider: {lastModelProvider} · Mock model: {lastModel ?? "CLI default"} · Mock reasoning effort: {lastReasoningEffort ?? "CLI default"}</output> : null}
   </>;
 }
 createRoot(document.getElementById("root")!).render(<LanguageProvider><Fixture /></LanguageProvider>);

@@ -1,6 +1,7 @@
 # 일반 파일·폴더의 앱 소유 대화 작업 공간
 
-status: CURRENT
+status: SUPERSEDED
+superseded-by: [[011-conversational-trash-consent]] — 2026-10-05 사용자 요청으로 버튼 전용/5분 TTL을 단일 인간 결정·선택적 native 확인 생략·무시간 일회용 계획으로 변경. 앱 소유 범위/프로토콜/상한은 계승.
 date: 2026-10-04
 source: codex
 tags: conversational-files, app-owned-tools, one-shot-plan, bounded-search, token-privacy

@@ -29,7 +29,13 @@ import {
 import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../components/AssistantEmptyFolderCard";
 import { AssistantFileCard } from "../components/AssistantFileCard";
-import { AssistantAppToolCard, appToolTitles, appToolStatusKeys } from "../components/AssistantAppToolCard";
+import { AssistantAppToolCard, appToolTitles, appToolStatusKeys, type AppToolReviewCompletion } from "../components/AssistantAppToolCard";
+import { AssistantApplicationConfirmation } from "../components/AssistantApplicationConfirmation";
+import { AssistantModelPicker } from "../components/AssistantModelPicker";
+import { useAssistantModelPreference } from "../hooks/useAssistantModelPreference";
+import { assistantModelRequestValue, assistantModelSelection, assistantReasoningStatus } from "../lib/assistantModelPreference";
+import { applicationTrashQuestion, humanTrashDecision, solePendingTrash, namedTrashRequest, workspaceReviewMatches, canAutomaticallyTrashFiles } from "../lib/assistantConfirmation";
+import { confirmApplicationTrash, confirmApplicationDataTrash, dismissApplicationPlan } from "../lib/applicationBridge";
 import "./AssistantView.css";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
 import { useLanguage, type Translate } from "../i18n";
@@ -89,9 +95,6 @@ interface AssistantDisplayTurn extends AssistantChatTurn {
   sequence?: number;
 }
 
-const providerPreferenceKey = "bloomsweepy.assistant-provider";
-const ollamaModelPreferenceKey = "bloomsweepy.ollama-model";
-
 interface AssistantViewProps {
   controlSettings: ControlStatusPanelProps;
   directoryProgress: DirectoryScanProgress | null;
@@ -101,12 +104,14 @@ interface AssistantViewProps {
   launchRequest: { id: number; target: "docker" } | null;
   onLaunchRequestHandled: () => void;
   onPickFolder: () => Promise<DirectoryScanReport | null>;
-  onConfirmEmptyPlan: (sessionId: string, revision: string, planId: string) => Promise<TrashOperationResult>;
-  onConfirmFilePlan: (sessionId: string, revision: string, planId: string, nestedAck: boolean) => Promise<TrashOperationResult>;
+  onConfirmEmptyPlan: (sessionId: string, revision: string, planId: string, automatic?: boolean) => Promise<TrashOperationResult>;
+  onConfirmFilePlan: (sessionId: string, revision: string, planId: string, nestedAck: boolean, automatic?: boolean) => Promise<TrashOperationResult>;
   onDirectoryReport: (report: DirectoryScanReport, open: boolean) => void;
   onOpenCleanupTree?: (sessionId: string, revision: string) => void;
   onAppToolView?: (result: AppToolResult) => void;
   onAppToolReview?: (result: AppToolResult, sessionId: string) => void;
+  onAppToolCompleted?: (completion: AppToolReviewCompletion, sessionId: string) => void;
+  onAppTrashBusyChange?: (busy: boolean) => void;
   appToolCompletion?: AppToolLocalCompletion | null;
 }
 
@@ -125,6 +130,8 @@ export function AssistantView({
   onOpenCleanupTree,
   onAppToolView,
   onAppToolReview,
+  onAppToolCompleted,
+  onAppTrashBusyChange,
   appToolCompletion,
 }: AssistantViewProps) {
   const { language, t } = useLanguage();
@@ -132,18 +139,15 @@ export function AssistantView({
   const [connectionOpen, setConnectionOpen] = useState(false);
   const connectionDialog = useRef<HTMLDialogElement>(null);
   const connectionTrigger = useRef<HTMLButtonElement>(null);
-  const initialProviderPreference = useRef(readProviderPreference());
-  const initialOllamaModelPreference = useRef(readOllamaModelPreference());
+  const modelPreference = useAssistantModelPreference();
+  const initialProviderPreference = useRef(modelPreference.hasSavedProvider);
+  const selectedProviderKind = modelPreference.provider;
+  const selectedModel = modelPreference.modelFor(selectedProviderKind);
+  const selectedReasoningEffort = modelPreference.reasoningEffortFor(selectedProviderKind, selectedModel);
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
   const [appToolResults, setAppToolResults] = useState<AppToolResult[]>([]);
   const handledCompletion = useRef<number | null>(null);
-  const [selectedProviderKind, setSelectedProviderKind] = useState<AssistantProviderKind>(
-    initialProviderPreference.current ?? "codex",
-  );
   const [checkingProviders, setCheckingProviders] = useState(true);
-  const [selectedOllamaModel, setSelectedOllamaModel] = useState(
-    initialOllamaModelPreference.current ?? "",
-  );
   const [providerError, setProviderError] = useState<string | null>(null);
   const [sessions, setSessions] = useState<AssistantSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<AssistantSessionDetail | null>(null);
@@ -155,6 +159,7 @@ export function AssistantView({
   const [sending, setSending] = useState(false);
   const [requestProgress, setRequestProgress] = useState<AssistantProgress | null>(null);
   const [savingResponse, setSavingResponse] = useState(false);
+  const [executingTrash, setExecutingTrash] = useState(false);
   const [requestStarted, setRequestStarted] = useState(0);
   const [clockNow, setClockNow] = useState(0);
   const activeProgressId = useRef<string | null>(null);
@@ -186,16 +191,72 @@ export function AssistantView({
     () => providers.find((candidate) => candidate.provider === selectedProviderKind) ?? null,
     [providers, selectedProviderKind],
   );
-  const providerModelReady = provider?.provider !== "ollama" || Boolean(selectedOllamaModel);
+  const providerModelReady = assistantModelSelection(provider) !== "required" || Boolean(selectedModel);
+  const reasoning = assistantReasoningStatus(provider, selectedModel, selectedReasoningEffort);
   const ready = Boolean(
     activeSession
       && summary
       && provider?.available
+      && !provider.busy
+      && !checkingProviders
       && providerModelReady
+      && !reasoning.stale
       && !sending
       && !cleanupAccessLocked
       && !sessionBusy,
   );
+
+  const pendingTrash = [
+    ...appToolResults.filter(result => applicationTrashQuestion(result)).map(result => ({ kind: "application" as const, result })),
+    ...(fileWorkspace?.plan ? [{ kind: "file" as const }] : []),
+    ...(emptyWorkspace?.plan ? [{ kind: "empty" as const }] : []),
+  ];
+  const canAnswerTrash = Boolean(activeSession && pendingTrash.length && !sending && !sessionBusy && !cleanupAccessLocked);
+
+  async function reportTrashCompletion(completion: AppToolReviewCompletion, sessionId: string) {
+    if (onAppToolCompleted) { onAppToolCompleted(completion, sessionId); return; }
+    setTurns(current => [...current, { role: "assistant", content: completion.message, providerLabel: "BroomSweepy" }]);
+    if (completion.trashResult) { setTrashResult(completion.trashResult); setFileWorkspace(null); setEmptyWorkspace(null); }
+    await appendAssistantMessage({ sessionId, role: "assistant", content: completion.message, provider: null, model: null })
+      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantError(reason, t)));
+  }
+
+  function answerTrash(confirmed: boolean, message?: string, applicationResult?: AppToolResult) {
+    const sessionId = activeSession?.session.id;
+    const pending = applicationResult ? { kind: "application" as const, result: applicationResult } : solePendingTrash(pendingTrash);
+    if (!sessionId || !pending || requestInFlight.current || sending || sessionBusy || cleanupAccessLocked) return;
+    const content = message ?? t(confirmed ? "예, 휴지통으로 이동" : "아니오");
+    setDraft("");
+    followLatest.current = true;
+    setTurns(current => [...current, { role: "user", content }]);
+    void appendAssistantMessage({ sessionId, role: "user", content, provider: null, model: null })
+      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantError(reason, t)));
+    if (pending.kind === "file") { void manageFiles(confirmed ? "confirm" : "select", confirmed ? undefined : [], true); return; }
+    if (pending.kind === "empty") { void manageEmptyFolders(confirmed ? "confirm" : "select", confirmed ? undefined : []); return; }
+    const question = applicationTrashQuestion(pending.result);
+    if (!question) return;
+    requestInFlight.current = true;
+    setSessionBusy(true); setSessionError(null);
+    setExecutingTrash(confirmed);
+    onAppTrashBusyChange?.(true);
+    // Remove the decision immediately; errors are not permission to replay a consumed plan.
+    setAppToolResults(current => current.filter(result => result !== pending.result));
+    void (async () => {
+      let completion: AppToolReviewCompletion;
+      try {
+        if (!confirmed) {
+          await dismissApplicationPlan(question.plan.planId);
+          completion = { message: t("취소했습니다. 휴지통으로 이동한 항목은 없습니다.") };
+        } else {
+          const actual = question.bundle ? await confirmApplicationTrash(question.plan.planId) : await confirmApplicationDataTrash(question.plan.planId);
+          completion = { message: t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: actual.requestedCount, moved: actual.movedCount }), trashResult: actual, mutated: true };
+        }
+      } catch (reason) {
+        completion = { message: t("작업을 완료하지 못했습니다. 대상과 작업 기록을 확인한 뒤 다시 요청하세요. {{detail}}", { detail: normalizeAssistantError(reason, t) }), mutated: confirmed };
+      }
+      await reportTrashCompletion(completion, sessionId);
+    })().finally(() => { requestInFlight.current = false; setSessionBusy(false); setExecutingTrash(false); onAppTrashBusyChange?.(false); });
+  }
 
   useEffect(() => { setAppToolResults([]); }, [activeSession?.session.id]);
   useEffect(() => {
@@ -266,6 +327,7 @@ export function AssistantView({
     setSessionError(null);
     try {
       if (action === "confirm" && fileWorkspace?.plan) {
+        setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision)));
         const result = await onConfirmFilePlan(sessionId, fileWorkspace.revision, fileWorkspace.plan.id, nestedAck);
         setFileWorkspace(null); setEmptyWorkspace(null); setTrashResult(result);
         const content = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })
@@ -280,12 +342,16 @@ export function AssistantView({
             ? await prepareAssistantFilePlan(sessionId, fileWorkspace!.revision)
             : typeof action === "object" ? await assistantFileAction(sessionId, action) : null;
         if (workspace) {
+          const cancelled = action === "select" && ids?.length === 0 && Boolean(fileWorkspace?.plan) && !workspace.plan;
+          if (fileWorkspace?.plan && fileWorkspace.plan.id !== workspace.plan?.id) {
+            setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision)));
+          }
           setFileWorkspace(workspace); setEmptyWorkspace(null); setTrashResult(null);
           if (workspace.query === null && workspace.currentPath === activeScope) setActiveSession((current) => current?.session.id === sessionId
             ? { ...current, folderSummary: workspace.summary } : current);
           // Local navigation/review is evidence for the next AI turn, but paths remain local.
-          if (action !== "select") {
-            const content = fileWorkspaceMessage(workspace, t);
+          if (action !== "select" || cancelled) {
+            const content = cancelled ? t("취소했습니다. 휴지통으로 이동한 항목은 없습니다.") : fileWorkspaceMessage(workspace, t);
             setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
             const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
             updateSessionSummary(mutation.session);
@@ -310,10 +376,21 @@ export function AssistantView({
     setSessionError(null);
     try {
       if (action === "select") {
-        setEmptyWorkspace(await selectAssistantEmptyCandidates(sessionId, emptyWorkspace.revision, ids ?? []));
+        const workspace = await selectAssistantEmptyCandidates(sessionId, emptyWorkspace.revision, ids ?? []);
+        if (emptyWorkspace.plan && emptyWorkspace.plan.id !== workspace.plan?.id) {
+          setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision)));
+        }
+        setEmptyWorkspace(workspace);
+        if (emptyWorkspace.plan && ids?.length === 0 && !workspace.plan) {
+          const content = t("취소했습니다. 휴지통으로 이동한 항목은 없습니다.");
+          setTurns(current => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+          const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
+          updateSessionSummary(mutation.session);
+        }
       } else if (action === "prepare") {
         setEmptyWorkspace(await prepareAssistantEmptyPlan(sessionId, emptyWorkspace.revision));
       } else if (emptyWorkspace.plan) {
+        setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision)));
         const result = await onConfirmEmptyPlan(sessionId, emptyWorkspace.revision, emptyWorkspace.plan.id);
         setEmptyWorkspace(null);
         setTrashResult(result);
@@ -342,10 +419,12 @@ export function AssistantView({
         if (disposed) return;
         setProviders(nextProviders);
         const ollama = nextProviders.find((candidate) => candidate.provider === "ollama");
-        setSelectedOllamaModel((current) => chooseOllamaModel(ollama?.models ?? [], current));
+        if (!modelPreference.modelFor("ollama") && ollama?.models.length) {
+          modelPreference.setModel("ollama", chooseInitialOllamaModel(ollama.models));
+        }
         if (!initialProviderPreference.current) {
           const firstAvailable = nextProviders.find((candidate) => candidate.available);
-          if (firstAvailable) setSelectedProviderKind(firstAvailable.provider);
+          if (firstAvailable) modelPreference.setProvider(firstAvailable.provider);
         }
       })
       .catch((reason) => {
@@ -396,7 +475,9 @@ export function AssistantView({
       const nextProviders = await getAssistantProviderStatus();
       setProviders(nextProviders);
       const ollama = nextProviders.find((candidate) => candidate.provider === "ollama");
-      setSelectedOllamaModel((current) => chooseOllamaModel(ollama?.models ?? [], current));
+      if (!modelPreference.modelFor("ollama") && ollama?.models.length) {
+        modelPreference.setModel("ollama", chooseInitialOllamaModel(ollama.models));
+      }
     } catch (reason) {
       setProviderError(normalizeAssistantError(reason, t));
     } finally {
@@ -405,15 +486,13 @@ export function AssistantView({
   }
 
   function changeProvider(nextProvider: AssistantProviderKind) {
-    setSelectedProviderKind(nextProvider);
+    modelPreference.setProvider(nextProvider);
     setProviderError(null);
-    writeProviderPreference(nextProvider);
   }
 
-  function changeOllamaModel(nextModel: string) {
-    setSelectedOllamaModel(nextModel);
+  function changeModel(nextModel: string) {
+    modelPreference.setModel(selectedProviderKind, nextModel);
     setProviderError(null);
-    writeOllamaModelPreference(nextModel);
   }
 
   function activateSessionDetail(detail: AssistantSessionDetail) {
@@ -595,14 +674,16 @@ export function AssistantView({
     progressUnlisten.current = null;
   }, []);
 
-  useEffect(() => {
-    if (selectedOllamaModel) writeOllamaModelPreference(selectedOllamaModel);
-  }, [selectedOllamaModel]);
-
   async function submitQuestion(event?: FormEvent) {
     event?.preventDefault();
     const message = draft.trim();
     const sessionId = activeSession?.session.id;
+    const decision = humanTrashDecision(message);
+    if (decision !== null && pendingTrash.length) {
+      if (!solePendingTrash(pendingTrash)) { setSessionError(t("확인할 대상이 여러 개입니다. 원하는 카드의 예 또는 아니오를 눌러 주세요.")); return; }
+      answerTrash(decision, message);
+      return;
+    }
     if (requestInFlight.current || !ready || !message || !summary || !sessionId) return;
     const includeDockerStatus = activeScopeKind === "docker" || isDockerManagementQuestion(message);
 
@@ -649,7 +730,8 @@ export function AssistantView({
         progressId,
         sessionId,
         provider: selectedProviderKind,
-        model: selectedProviderKind === "ollama" ? selectedOllamaModel : null,
+        model: assistantModelRequestValue(provider, selectedModel),
+        reasoningEffort: reasoning.requestValue,
         message,
         history: previousTurns,
         summary,
@@ -657,7 +739,17 @@ export function AssistantView({
         includeDockerStatus,
         responseLanguage: language,
       });
-      const assistantMessage = response.analysisComplete !== undefined || response.appToolResults?.length
+      const reviews = (response.appToolResults ?? []).filter(result => result.status === "review_required");
+      const applicationReview = reviews.length === 1 ? reviews[0] : null;
+      const applicationQuestion = applicationReview ? applicationTrashQuestion(applicationReview) : null;
+      const files = response.fileWorkspace;
+      const explicitApp = applicationQuestion?.bundle && namedTrashRequest(message, [applicationQuestion.plan.displayName]);
+      const explicitFiles = canAutomaticallyTrashFiles(message, files, response.appToolResults ?? []);
+      const automaticTrash = controlSettings.status.chatTrashWithoutConfirmation === true
+        && !response.emptyWorkspace?.plan
+        && ((explicitApp && !files?.plan) || explicitFiles);
+      const assistantMessage = automaticTrash ? t("요청한 대상을 확인했습니다. 설정한 권한에 따라 재검사 후 휴지통으로 이동합니다.")
+        : response.analysisComplete !== undefined || response.appToolResults?.length
         ? formatAssistantPlainText(response.message)
         : response.fileWorkspace
         ? fileWorkspaceMessage(response.fileWorkspace, t)
@@ -687,7 +779,7 @@ export function AssistantView({
         {
           role: "assistant",
           content: assistantMessage,
-          providerLabel: response.toolAction && !response.analysisComplete ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
+          providerLabel: automaticTrash || response.toolAction && !response.analysisComplete ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
         },
       ]);
       setDockerContext(response.dockerContext);
@@ -697,8 +789,8 @@ export function AssistantView({
           sessionId,
           role: "assistant",
           content: assistantMessage,
-          provider: response.toolAction && !response.analysisComplete ? null : response.provider,
-          model: response.toolAction && !response.analysisComplete ? null : response.model,
+          provider: automaticTrash || response.toolAction && !response.analysisComplete ? null : response.provider,
+          model: automaticTrash || response.toolAction && !response.analysisComplete ? null : response.model,
         });
         updateSessionSummary(assistantMutation.session);
       } catch (reason) {
@@ -709,6 +801,25 @@ export function AssistantView({
       setProviders((current) => current.map((candidate) => (
         candidate.provider === response.provider ? { ...candidate, busy: false } : candidate
       )));
+      // The original human request, never the model's reply, determines authority.
+      // Ambiguous/multi-plan answers stay at the inline question even when opted in.
+      if (automaticTrash) {
+        if (explicitApp) onAppTrashBusyChange?.(true);
+        setSavingResponse(false);
+        setSessionBusy(true);
+        setExecutingTrash(true);
+        setAppToolResults(current => current.filter(result => result !== applicationReview
+          && !(explicitFiles && files && workspaceReviewMatches(result, "files.workspace", files.revision))));
+        if (explicitFiles) setFileWorkspace(null);
+        try {
+          const actual = explicitApp
+            ? await confirmApplicationTrash(applicationQuestion!.plan.planId, true)
+            : await onConfirmFilePlan(sessionId, files!.revision, files!.plan!.id, true, true);
+          await reportTrashCompletion({ message: t("설정한 권한으로 요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: actual.requestedCount, moved: actual.movedCount }), trashResult: actual, mutated: true }, sessionId);
+        } catch (reason) {
+          await reportTrashCompletion({ message: t("작업을 완료하지 못했습니다. 대상과 작업 기록을 확인한 뒤 다시 요청하세요. {{detail}}", { detail: normalizeAssistantError(reason, t) }), mutated: true }, sessionId);
+        } finally { setSessionBusy(false); setExecutingTrash(false); if (explicitApp) onAppTrashBusyChange?.(false); }
+      }
     } catch (reason) {
       if (!userMessageSaved) {
         setTurns((current) => current.slice(0, -1));
@@ -880,7 +991,7 @@ export function AssistantView({
           <Settings2 size={18} aria-hidden="true" />
         </button>
         <div
-          className={`assistant-provider-picker ${provider?.available ? "is-ready" : ""} ${provider?.provider === "ollama" ? "has-model" : ""}`}
+          className={`assistant-provider-picker ${provider?.available ? "is-ready" : ""}`}
           title={provider?.detail ?? t("설치된 AI CLI 상태 확인 중")}
         >
           <span className="assistant-provider-picker__dot" aria-hidden="true" />
@@ -898,21 +1009,6 @@ export function AssistantView({
               <option value="codex">{t("AI CLI 확인 중")}</option>
             )}
           </select>
-          {provider?.provider === "ollama" ? (
-            <select
-              className="assistant-provider-picker__model"
-              aria-label={t("Ollama 모델 선택")}
-              value={selectedOllamaModel}
-              disabled={provider.models.length === 0 || sending || sessionBusy}
-              onChange={(event) => changeOllamaModel(event.currentTarget.value)}
-            >
-              {provider.models.length > 0 ? provider.models.map((model) => (
-                <option value={model.id} key={model.id}>{model.label}</option>
-              )) : (
-                <option value="">{t("설치된 모델 없음")}</option>
-              )}
-            </select>
-          ) : null}
           <button
             type="button"
             aria-label={t("AI CLI 상태 다시 확인")}
@@ -968,8 +1064,10 @@ export function AssistantView({
               ? ` · ${t("{{count}}개", { count: Number(result.data.returnedCount ?? result.data.matchedCount) })}` : "")}
             forceOpen={result.status !== "completed"}
             warning={result.truncated || result.data.truncated === true || result.data.sourceMayBeIncomplete === true ? t("일부 결과만 표시합니다.") : undefined}>
-            <AssistantAppToolCard result={result} busy={sending || sessionBusy || cleanupAccessLocked}
+            {applicationTrashQuestion(result) ? <AssistantApplicationConfirmation result={result} busy={sending || sessionBusy || cleanupAccessLocked}
+              onDecision={confirmed => answerTrash(confirmed, undefined, result)} /> : <AssistantAppToolCard result={result} busy={sending || sessionBusy || cleanupAccessLocked}
               onView={onAppToolView} onReview={onAppToolReview && activeSession ? (prepared) => onAppToolReview(prepared, activeSession.session.id) : undefined} />
+            }
           </AssistantEvidence>)}
           {emptyWorkspace ? <AssistantEvidence title={t("빈 폴더")} status={t("{{count}}개", { count: emptyWorkspace.candidates.length })}
             warning={emptyWorkspace.omittedCount > 0 ? t("일부 결과만 표시합니다.") : undefined}
@@ -1045,9 +1143,9 @@ export function AssistantView({
         {provider && !provider.available ? <button type="button" className="assistant-connection-warning" onClick={() => setConnectionOpen(true)}>
           {providerOptionLabel(provider, t)} · {t("연결과 권한")}
         </button> : null}
-        {sending ? <div className="assistant-working">
+        {sending || executingTrash ? <div className="assistant-working">
           <span role="status" aria-live="polite"><LoaderCircle className="is-spinning" size={16} aria-hidden="true" />
-            {cancelling ? t("취소 요청 중…") : savingResponse ? t("대화 기록 저장 중…")
+            {executingTrash ? t("대상을 다시 확인하고 처리 중…") : cancelling ? t("취소 요청 중…") : savingResponse ? t("대화 기록 저장 중…")
               : requestProgress?.phase === "querying"
                 ? t("앱에서 {{task}} 확인 중", { task: t(appToolTitles[requestProgress.capability ?? ""] ?? "파일 검사") })
                 : requestProgress?.phase === "analyzing"
@@ -1076,7 +1174,7 @@ export function AssistantView({
               Boolean(activeSession),
               activeScopeKind,
               provider,
-              selectedOllamaModel,
+              selectedModel,
               t,
             )}
             onChange={(event) => setDraft(event.currentTarget.value)}
@@ -1087,12 +1185,19 @@ export function AssistantView({
               <Square size={16} aria-hidden="true" />
             </button>
           ) : (
-            <button type="submit" aria-label={t("질문 보내기")} disabled={!ready || !draft.trim()}>
+            <button type="submit" aria-label={t("질문 보내기")} disabled={(!ready && !canAnswerTrash) || !draft.trim()}>
               <Send size={18} aria-hidden="true" />
             </button>
           )}
         </form>
-        <p className="assistant-composer-note">{t("앱이 조회하고 AI가 분석합니다. 실행은 별도 확인합니다.")}
+        <AssistantModelPicker provider={provider} value={selectedModel} onChange={changeModel}
+          reasoningEffort={selectedReasoningEffort}
+          onReasoningEffortChange={value => modelPreference.setReasoningEffort(selectedProviderKind, selectedModel, value)}
+          busy={checkingProviders || sending || sessionBusy || Boolean(provider?.busy)} />
+        {modelPreference.storageError ? <p className="assistant-model-storage-error" role="alert">
+          {t("모델 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 모델을 사용합니다.")}
+        </p> : null}
+        <p className="assistant-composer-note">{t(controlSettings.status.chatTrashWithoutConfirmation ? "앱이 조회하고 AI가 분석합니다. 명확한 삭제 요청은 설정한 권한으로 처리합니다." : "앱이 조회하고 AI가 분석합니다. 실행은 별도 확인합니다.")}
           <button type="button" onClick={() => setConnectionOpen(true)}>{t("전송 범위")}</button>
         </p>
         </div>
@@ -1124,8 +1229,8 @@ export function AssistantView({
             {providerPermissionDetail(provider, t)} {t("아래 설정은 별도 터미널 제어용입니다.")}
           </p>
           <p>{activeScopeKind === "docker"
-            ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })
-            : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedOllamaModel, t) })}</p>
+            ? t("폴더나 파일 내용이 아니라, BroomSweepy가 Docker CLI로 읽은 범주별 용량 요약만 {{provider}}에 전달합니다.", { provider: providerConversationLabel(provider, selectedModel, t) })
+            : t("파일 검사는 로컬에서 처리합니다. {{provider}}에는 제한된 이름·크기·후보 요약과 질문·대화 기록이 전달됩니다. 직접 입력한 경로나 내용도 포함될 수 있습니다.", { provider: providerConversationLabel(provider, selectedModel, t) })}</p>
           <p>{t("로컬 문서 검색은 외부로 보내지 않습니다. AI 문서 검색을 허용하면 문서 이름과 일치 본문 일부가 선택한 AI에 전달됩니다.")}</p>
         </div>
         <ControlStatusPanel {...controlSettings} onReviewPending={() => { setConnectionOpen(false); controlSettings.onReviewPending(); }} />
@@ -1428,62 +1533,19 @@ function providerPermissionDetail(provider: AssistantProviderStatus | null, t: T
   }
 }
 
-function readProviderPreference(): AssistantProviderKind | null {
-  try {
-    const value = window.localStorage.getItem(providerPreferenceKey);
-    return value === "codex"
-      || value === "claudeCode"
-      || value === "grok"
-      || value === "antigravity"
-      || value === "ollama"
-      ? value
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function writeProviderPreference(provider: AssistantProviderKind) {
-  try {
-    window.localStorage.setItem(providerPreferenceKey, provider);
-  } catch {
-    // The selection still works for this session when storage is unavailable.
-  }
-}
-
-function readOllamaModelPreference(): string | null {
-  try {
-    return window.localStorage.getItem(ollamaModelPreferenceKey);
-  } catch {
-    return null;
-  }
-}
-
-function writeOllamaModelPreference(model: string) {
-  try {
-    window.localStorage.setItem(ollamaModelPreferenceKey, model);
-  } catch {
-    // The selection still works for this session when storage is unavailable.
-  }
-}
-
-function chooseOllamaModel(
-  models: AssistantProviderStatus["models"],
-  preferred: string,
-): string {
-  if (models.some((model) => model.id === preferred)) return preferred;
+function chooseInitialOllamaModel(models: AssistantProviderStatus["models"]): string {
   const conversational = models.find((model) => !/embed|^bge-/i.test(model.id));
   return conversational?.id ?? models[0]?.id ?? "";
 }
 
 function providerConversationLabel(
   provider: AssistantProviderStatus | null,
-  ollamaModel: string,
+  model: string,
   t: Translate,
 ): string {
   if (!provider) return t("선택한 AI CLI");
-  return provider.provider === "ollama" && ollamaModel
-    ? `${provider.label} · ${ollamaModel}`
+  return assistantModelSelection(provider) !== "unsupported" && model
+    ? `${provider.label} · ${model}`
     : provider.label;
 }
 

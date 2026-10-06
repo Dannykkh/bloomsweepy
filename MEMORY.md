@@ -1,4 +1,4 @@
-# MEMORY.md - 프로젝트 장기기억
+# MEMORY.md
 
 ## 프로젝트 목표
 
@@ -14,6 +14,7 @@
 | 키워드 | 상세 파일 |
 |--------|-----------|
 | 기록공유 | [006](memory/architecture/006-project-record-versioning.md) |
+| cli-model | [012](memory/architecture/012-cli-model-selection.md) |
 | rust, tauri, macos, sidecar, cargo-test | [memory/gotchas.md](memory/gotchas.md) |
 | cli-discovery, authentication-status, claude-safe-mode, chat-qa | [memory/gotchas.md](memory/gotchas.md) |
 | oauth-expiry, stdout-errors, standalone-cli | [memory/gotchas.md](memory/gotchas.md) |
@@ -38,7 +39,7 @@
 | treemap-actions, file-reveal, scan-identity, os-trash | [memory/architecture.md](memory/architecture.md) |
 | conversational-file-management, ai-tools | [memory/architecture.md](memory/architecture.md) |
 | empty-folder-tools, one-shot-plan, structured-envelope, token-privacy | [memory/architecture.md](memory/architecture.md) |
-| conversational-files, app-owned-tools, bounded-search | [001 일반 파일 대화](memory/architecture/001-conversational-file-workspace.md) |
+| conversational-files, trash-consent, native-review | [011](memory/architecture/011-conversational-trash-consent.md) |
 | largest-items, shared-treemap, read-only-advice | [003 지도 공유](memory/architecture/003-conversational-storage-map.md) |
 | folder-trash, symlink, no-follow, metadata-fingerprint | [002 내부 링크 분리](memory/architecture/002-opaque-folder-symlinks.md) |
 | serde-unit-variant, root-link-count, mock-not-live | [memory/gotchas.md](memory/gotchas.md) |
@@ -73,4 +74,4 @@
 ## meta/
 - **프로젝트**: BroomSweepy
 - **생성일**: 2026-09-04
-- **마지막 업데이트**: 2026-10-05
+- **마지막 업데이트**: 2026-10-06

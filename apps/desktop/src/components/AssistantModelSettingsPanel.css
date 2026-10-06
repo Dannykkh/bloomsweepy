@@ -1,0 +1,26 @@
+.assistant-model-settings { grid-column: 1 / -1; }
+.assistant-model-settings .settings-panel__heading { grid-template-columns: auto minmax(0, 1fr) auto; }
+.assistant-model-settings .settings-panel__heading > button { min-height: 44px; min-width: 44px; }
+.assistant-model-settings__controls {
+  display: flex;
+  align-items: start;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 18px;
+}
+.assistant-model-settings__provider { display: grid; gap: 8px; min-width: 0; flex: 1 1 220px; }
+.assistant-model-settings__provider select {
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 8px);
+  background: var(--canvas-elevated);
+  color: var(--text);
+  font: inherit;
+}
+.assistant-model-settings__provider option { background: var(--canvas-elevated); color: var(--text); }
+.assistant-model-settings__provider select:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.assistant-model-settings__provider select:hover:not(:disabled) { border-color: var(--text-muted); }
+.assistant-model-settings__controls > .assistant-model-picker { flex: 2 1 280px; min-width: 0; }

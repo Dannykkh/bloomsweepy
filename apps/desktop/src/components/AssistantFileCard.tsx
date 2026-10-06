@@ -15,18 +15,9 @@ export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepa
 }) {
   const { t } = useLanguage();
   const [query, setQuery] = useState(workspace.query ?? "");
-  const [nestedAck, setNestedAck] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const inspection = useFileInspectionActions({ scopeKey: workspace.revision });
   const plan = workspace.plan;
   useEffect(() => { setQuery(workspace.query ?? ""); }, [workspace.revision]);
-  useEffect(() => {
-    setNestedAck(false); setNow(Date.now());
-    if (!plan) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [plan?.id]);
-  const expired = Boolean(plan && now >= plan.expiresAtUnixMs);
   const selected = new Set(workspace.selectedIds);
   const rows = plan?.entries ?? workspace.entries;
   function search(event: FormEvent) { event.preventDefault(); if (query.trim() && !busy) onAction({ kind: "search", query: query.trim() }); }
@@ -82,12 +73,12 @@ export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepa
       <span>{Math.floor(workspace.offset / 24) + 1} / {Math.ceil(workspace.totalEntries / 24)}</span>
       <button type="button" className="secondary-button" disabled={busy || workspace.nextOffset === null} onClick={() => onAction({ kind: "page", revision: workspace.revision, offset: workspace.nextOffset! })}>{t("다음")}</button>
     </div> : null}
-    {plan?.requiresNestedAck ? <label className="assistant-file-review__ack"><input type="checkbox" checked={nestedAck} disabled={busy || expired} onChange={(event) => setNestedAck(event.currentTarget.checked)} />{t("선택한 폴더와 그 안의 모든 항목이 함께 휴지통으로 이동함을 확인했습니다.")}</label> : null}
-    {plan ? <p role="status">{expired ? t("확인 시간이 만료됐습니다. 선택을 다시 검토하세요.") : t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
-    <footer><small>{t("휴지통 이동 후 운영체제에서 복원을 시도할 수 있습니다. 즉시 여유 공간이 늘어나는 것은 아닙니다.")}</small>
+    {plan?.requiresNestedAck ? <p>{t("선택한 폴더의 하위 항목도 함께 이동합니다.")}</p> : null}
+    {plan ? <p>{t("휴지통으로 이동할까요?")} {t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
+    <footer className="assistant-trash-question-actions"><small>{t("휴지통 이동 후 운영체제에서 복원을 시도할 수 있습니다. 즉시 여유 공간이 늘어나는 것은 아닙니다.")}</small>
       {plan ? <>
-        <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect(workspace.selectedIds)}>{t("선택 다시 검토")}</button>
-        <button type="button" className="trash-confirm-button" disabled={busy || expired || (plan.requiresNestedAck && !nestedAck)} onClick={() => onConfirm(nestedAck)}><Trash2 size={16} aria-hidden="true" />{t("확인한 {{count}}개 휴지통으로 이동", { count: formatCount(plan.entries.length) })}</button>
+        <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect([])}>{t("아니오")}</button>
+        <button type="button" className="trash-confirm-button" disabled={busy} onClick={() => onConfirm(true)}><Trash2 size={16} aria-hidden="true" />{t(plan.requiresNestedAck ? "예, 하위 항목 포함 {{count}}개 휴지통으로 이동" : "예, {{count}}개 휴지통으로 이동", { count: formatCount(plan.entries.length) })}</button>
       </> : <button type="button" className="secondary-button" disabled={busy || !selected.size} onClick={onPrepare}>{t("선택한 항목 최종 검토")}</button>}
     </footer>
   </section>;

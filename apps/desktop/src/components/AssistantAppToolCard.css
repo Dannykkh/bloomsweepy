@@ -16,3 +16,5 @@
 .assistant-app-tool-card footer button { min-height: 44px; display: inline-flex; align-items: center; gap: 8px; }
 @media (max-width: 480px) { .assistant-app-tool-card { padding: 16px; } .assistant-app-tool-list li { flex-direction: column; } .assistant-app-tool-values { text-align: left; } }
 @media (prefers-reduced-motion: reduce) { .assistant-app-tool-card * { transition: none; } }
+.assistant-trash-question-actions { flex-wrap: wrap; }
+.assistant-trash-question-actions button { min-height: 44px; white-space: normal; }

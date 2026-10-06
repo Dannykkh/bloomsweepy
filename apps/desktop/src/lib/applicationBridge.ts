@@ -10,9 +10,9 @@ export function prepareApplicationTrash(inventoryId: string, applicationId: stri
   return invoke("prepare_application_trash", { request: { inventoryId, applicationId } });
 }
 
-export function confirmApplicationTrash(planId: string): Promise<TrashOperationResult> {
+export function confirmApplicationTrash(planId: string, automatic = false): Promise<TrashOperationResult> {
   return invoke("confirm_application_trash", {
-    request: { planId, bundleOnlyAcknowledged: true, noUninstallerAcknowledged: true },
+    request: { planId, bundleOnlyAcknowledged: true, noUninstallerAcknowledged: true, automatic },
   });
 }
 
@@ -20,8 +20,8 @@ export function prepareApplicationDataTrash(inventoryId: string, applicationId: 
   return invoke("prepare_application_data_trash", { request: { inventoryId, applicationId, candidateIds } });
 }
 
-export function confirmApplicationDataTrash(planId: string): Promise<TrashOperationResult> {
-  return invoke("confirm_application_data_trash", { request: { planId, relatedDataAcknowledged: true } });
+export function confirmApplicationDataTrash(planId: string, automatic = false): Promise<TrashOperationResult> {
+  return invoke("confirm_application_data_trash", { request: { planId, relatedDataAcknowledged: true, automatic } });
 }
 
 export function dismissApplicationPlan(planId: string): Promise<void> {

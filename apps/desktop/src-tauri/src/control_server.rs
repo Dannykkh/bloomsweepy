@@ -58,6 +58,7 @@ pub(crate) struct ControlStatus {
     scan_access: ControlScanAccess,
     cleanup_access: ControlCleanupAccess,
     inspection_allowed: bool,
+    chat_trash_without_confirmation: bool,
     permission_lifetime: PermissionLifetime,
     permission_warning: Option<String>,
 }
@@ -78,6 +79,7 @@ impl Default for ControlStatus {
             scan_access: ControlScanAccess::default(),
             cleanup_access: ControlCleanupAccess::default(),
             inspection_allowed: false,
+            chat_trash_without_confirmation: false,
             permission_lifetime: PermissionLifetime::Session,
             permission_warning: None,
         }
@@ -370,6 +372,7 @@ impl ControlStatusStore {
             approved_at_unix_ms: preferences.cleanup_approved_at_unix_ms,
         };
         status.inspection_allowed = preferences.inspection_allowed;
+        status.chat_trash_without_confirmation = preferences.chat_trash_without_confirmation;
         status.permission_lifetime = preferences.lifetime;
         status.permission_warning = warning;
         status.last_error = None;
@@ -1093,6 +1096,34 @@ fn ensure_main_permission_window(window: &WebviewWindow) -> Result<(), String> {
     } else {
         Err("권한 설정은 앱의 메인 화면에서만 변경할 수 있습니다".into())
     }
+}
+
+#[tauri::command]
+pub(crate) fn configure_chat_trash_permission(
+    window: WebviewWindow,
+    app: AppHandle,
+    enabled: bool,
+) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
+    app.state::<ControlStatusStore>()
+        .change_permissions(&app, |preferences| {
+            preferences.chat_trash_without_confirmation = enabled;
+        })
+}
+
+pub(crate) fn require_automatic_trash_access(
+    app: &AppHandle,
+    automatic: bool,
+) -> Result<(), String> {
+    if automatic
+        && !app
+            .state::<ControlStatusStore>()
+            .snapshot()?
+            .chat_trash_without_confirmation
+    {
+        return Err("추가 확인 없는 휴지통 이동 권한이 꺼져 있습니다. 채팅에서 확인하거나 설정을 변경하세요".into());
+    }
+    Ok(())
 }
 
 pub(crate) fn restore_permission_settings(app: &AppHandle) {

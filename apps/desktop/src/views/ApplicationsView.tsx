@@ -316,7 +316,6 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
   const [consumed, setConsumed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [noUninstaller, setNoUninstaller] = useState(false);
-  const [now, setNow] = useState(Date.now());
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TrashOperationResult | null>(null);
   const bundle = target.kind === "bundle";
@@ -341,14 +340,12 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
       if (!next) return;
       issued = next;
       if (disposed) void dismissApplicationPlan(next.planId).catch(() => {});
-      else { setPlan(next); setNow(Date.now()); }
+      else { setPlan(next); }
     }).catch((reason: unknown) => {
       if (!disposed) setError(t("검토를 준비하지 못했습니다: {{detail}}", { detail: detail(reason) }));
     }).finally(() => { if (!disposed) setPreparing(false); });
-    const timer = window.setInterval(() => setNow(Date.now()), 500);
     return () => {
       disposed = true;
-      window.clearInterval(timer);
       if (issued && !consumedRef.current) void dismissApplicationPlan(issued.planId).catch(() => {});
       dialog?.close();
     };
@@ -357,7 +354,7 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
   useEffect(() => { if (consumed && !running) cancelRef.current?.focus(); }, [consumed, running]);
 
   async function confirm() {
-    if (busy || submitting.current || consumedRef.current || !plan || plan.expiresAtUnixMs <= Date.now() || !acknowledged || (bundle && !noUninstaller)) return;
+    if (busy || submitting.current || consumedRef.current || !plan || !acknowledged || (bundle && !noUninstaller)) return;
     submitting.current = true;
     consumedRef.current = true;
     setConsumed(true);
@@ -378,7 +375,6 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
     }
   }
 
-  const expired = !!plan && plan.expiresAtUnixMs <= now;
   return <dialog ref={dialogRef} className="safety-dialog applications-dialog" aria-labelledby="application-review-title" aria-describedby="application-review-scope"
     onCancel={(event) => { event.preventDefault(); if (!submitting.current) onClose(); }}>
     <header><span><AlertTriangle size={23} aria-hidden="true" /></span><div><small>{t("휴지통 이동 최종 확인")}</small><h2 id="application-review-title">{t(bundle ? "앱 본체 정리 검토" : "선택 데이터 정리 검토")}</h2></div></header>
@@ -390,16 +386,15 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
     {preparing ? <p className="safety-dialog__intro" role="status"><LoaderCircle size={17} className="spin" aria-hidden="true" />{t("대상과 실행 중 여부를 확인하고 있습니다.")}</p> : null}
     {!bundle && plan ? <ul className="applications-candidates applications-review-candidates">{plan.relatedData.map((candidate) => <li key={candidate.id}><CandidateDetails candidate={candidate} /></li>)}</ul> : null}
     {plan?.warnings.length ? <ul className="applications-review-warnings">{plan.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
-    {bundle ? <label className="review-acknowledgement"><input type="checkbox" checked={noUninstaller} disabled={preparing || consumed || expired || !plan} onChange={(event) => setNoUninstaller(event.target.checked)} />
+    {bundle ? <label className="review-acknowledgement"><input type="checkbox" checked={noUninstaller} disabled={preparing || consumed || !plan} onChange={(event) => setNoUninstaller(event.target.checked)} />
       <span>{t("이 앱에 전용 제거 프로그램이 필요하지 않음을 확인했습니다.")}</span></label> : null}
-    <label className="review-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={preparing || consumed || expired || !plan} onChange={(event) => setAcknowledged(event.target.checked)} />
+    <label className="review-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={preparing || consumed || !plan} onChange={(event) => setAcknowledged(event.target.checked)} />
       <span>{t(bundle ? "표시한 앱 본체만 이동하며, 설정과 문서는 남겨 둠을 확인했습니다." : "선택 데이터의 경로와 영향을 확인했으며, 해당 데이터만 이동합니다.")}</span></label>
-    {expired && !consumed ? <p className="safety-dialog__error" role="alert">{t("확인 시간이 만료됐습니다. 창을 닫고 다시 검토하세요.")}</p> : null}
     {running ? <p className="safety-dialog__intro" role="status"><LoaderCircle size={17} className="spin" aria-hidden="true" />{t("휴지통 이동을 처리하고 있습니다. 완료할 때까지 기다려 주세요.")}</p> : null}
     {result ? <div role="status"><ApplicationResult result={result} />{bundle && result.movedCount > 0 ? <p>{t("창을 닫으면 관련 데이터를 별도로 검토할 수 있습니다. 자동 선택하거나 삭제하지 않습니다.")}</p> : null}</div> : null}
     {error ? <p className="safety-dialog__error" role="alert">{error}</p> : null}
     <footer><button ref={cancelRef} type="button" className="secondary-button" disabled={running} onClick={onClose}>{t(consumed ? "닫기" : "취소")}</button>
-      {!consumed ? <button type="button" className="trash-confirm-button" disabled={busy || preparing || !plan || expired || !acknowledged || (bundle && !noUninstaller) || (!bundle && !plan?.relatedData.length)} onClick={() => void confirm()}>
+      {!consumed ? <button type="button" className="trash-confirm-button" disabled={busy || preparing || !plan || !acknowledged || (bundle && !noUninstaller) || (!bundle && !plan?.relatedData.length)} onClick={() => void confirm()}>
         <Trash2 size={16} aria-hidden="true" />{t(bundle ? "앱 본체만 휴지통으로 이동" : "선택 데이터만 휴지통으로 이동")}
       </button> : null}
     </footer>

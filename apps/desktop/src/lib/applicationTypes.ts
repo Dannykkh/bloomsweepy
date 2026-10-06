@@ -28,7 +28,7 @@ export interface ApplicationTrashPlan {
   planId: string;
   displayName: string;
   path: string;
-  expiresAtUnixMs: number;
+  expiresAtUnixMs: number | null;
   relatedData: ApplicationDataCandidate[];
   warnings: string[];
 }

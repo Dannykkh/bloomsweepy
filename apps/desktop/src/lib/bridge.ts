@@ -130,8 +130,8 @@ export function prepareAssistantFilePlan(sessionId: string, revision: string): P
   return invoke("prepare_assistant_file_plan", { sessionId, revision });
 }
 // UI confirmation only; deliberately unavailable to the model protocol.
-export function confirmAssistantFilePlan(sessionId: string, revision: string, planId: string, nestedContentsAcknowledged: boolean): Promise<TrashOperationResult> {
-  return invoke("confirm_assistant_file_plan", { sessionId, revision, planId, nestedContentsAcknowledged });
+export function confirmAssistantFilePlan(sessionId: string, revision: string, planId: string, nestedContentsAcknowledged: boolean, automatic = false): Promise<TrashOperationResult> {
+  return invoke("confirm_assistant_file_plan", { sessionId, revision, planId, nestedContentsAcknowledged, automatic });
 }
 
 export function selectAssistantEmptyCandidates(sessionId: string, revision: string, candidateIds: string[]): Promise<AssistantEmptyWorkspace> {
@@ -143,8 +143,12 @@ export function prepareAssistantEmptyPlan(sessionId: string, revision: string): 
 }
 
 // Deliberately absent from the model's allowlisted action protocol.
-export function confirmAssistantEmptyPlan(sessionId: string, revision: string, planId: string): Promise<TrashOperationResult> {
-  return invoke("confirm_assistant_empty_plan", { sessionId, revision, planId });
+export function confirmAssistantEmptyPlan(sessionId: string, revision: string, planId: string, automatic = false): Promise<TrashOperationResult> {
+  return invoke("confirm_assistant_empty_plan", { sessionId, revision, planId, automatic });
+}
+
+export function configureChatTrashPermission(enabled: boolean): Promise<ControlStatus> {
+  return invoke("configure_chat_trash_permission", { enabled });
 }
 
 export function listAssistantSessions(): Promise<AssistantSessionSummary[]> {
