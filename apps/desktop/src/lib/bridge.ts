@@ -11,6 +11,8 @@ import type {
   AssistantEmptyWorkspace,
   AssistantFileWorkspace,
   AssistantFileAction,
+  AssistantFileAccessAction,
+  AssistantPermissionMode,
   AssistantChatResponse,
   AppToolResult,
   AppToolCompletedEvent,
@@ -123,6 +125,9 @@ export function getAssistantDirectoryReport(sessionId: string, revision: string)
 export function assistantFileAction(sessionId: string, operation: AssistantFileAction): Promise<AssistantFileWorkspace> {
   return invoke("assistant_file_action", { sessionId, operation });
 }
+export function assistantFileAccessAction(sessionId: string, operation: AssistantFileAccessAction): Promise<AppToolResult> {
+  return invoke("assistant_file_access_action", { sessionId, operation });
+}
 export function selectAssistantFiles(sessionId: string, revision: string, ids: string[]): Promise<AssistantFileWorkspace> {
   return invoke("select_assistant_files", { sessionId, revision, ids });
 }
@@ -157,6 +162,9 @@ export function confirmAssistantEmptyPlan(sessionId: string, revision: string, p
 
 export function configureChatTrashPermission(enabled: boolean): Promise<ControlStatus> {
   return invoke("configure_chat_trash_permission", { enabled });
+}
+export function configureAssistantPermissionMode(mode: AssistantPermissionMode): Promise<ControlStatus> {
+  return invoke("configure_assistant_permission_mode", { mode });
 }
 
 export function listAssistantSessions(): Promise<AssistantSessionSummary[]> {
@@ -275,8 +283,8 @@ export function getPerformanceSnapshot(): Promise<PerformanceSnapshot> {
   return invoke<PerformanceSnapshot>("get_performance_snapshot");
 }
 
-export function cleanAppMemory(): Promise<AppMemoryCleanupResult> {
-  return invoke<AppMemoryCleanupResult>("clean_app_memory");
+export function cleanAppMemory(assistantPermissionEpoch?: number): Promise<AppMemoryCleanupResult> {
+  return invoke<AppMemoryCleanupResult>("clean_app_memory", { assistantPermissionEpoch });
 }
 
 export function prepareGracefulProcessTermination(

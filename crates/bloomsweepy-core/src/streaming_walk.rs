@@ -118,6 +118,9 @@ struct Frame {
     first: Option<io::Result<fs::DirEntry>>,
 }
 
+type DirectoryGuard<'a> = &'a dyn Fn(&Path, &Metadata) -> io::Result<()>;
+type DirectoryPrune<'a> = &'a dyn Fn(&Path, &Metadata) -> bool;
+
 pub(crate) struct StreamingWalk<'a, C: Fn() -> bool> {
     root: Option<PathBuf>,
     frames: Vec<Frame>,
@@ -127,6 +130,10 @@ pub(crate) struct StreamingWalk<'a, C: Fn() -> bool> {
     finished: bool,
     max_open_directories: usize,
     max_retained_path_bytes: usize,
+    directory_guard: Option<DirectoryGuard<'a>>,
+    directory_prune: Option<DirectoryPrune<'a>>,
+    max_visited_entries: Option<usize>,
+    visited_entries: usize,
     #[cfg(test)]
     peak_open_directories: usize,
     #[cfg(test)]
@@ -144,11 +151,49 @@ impl<'a, C: Fn() -> bool> StreamingWalk<'a, C> {
             finished: false,
             max_open_directories: MAX_OPEN_DIRECTORIES,
             max_retained_path_bytes: MAX_RETAINED_PATH_BYTES,
+            directory_guard: None,
+            directory_prune: None,
+            max_visited_entries: None,
+            visited_entries: 0,
             #[cfg(test)]
             peak_open_directories: 0,
             #[cfg(test)]
             raw_entries_read: 0,
         }
+    }
+
+    /// Apply consumer-specific scope checks before opening a directory stream.
+    pub(crate) fn with_directory_guard(
+        root: &Path,
+        should_cancel: &'a C,
+        directory_guard: DirectoryGuard<'a>,
+        max_visited_entries: usize,
+    ) -> Self {
+        let mut walk = Self::new(root, should_cancel).with_visited_entry_limit(max_visited_entries);
+        walk.directory_guard = Some(directory_guard);
+        walk
+    }
+
+    /// Skip a consumer-specific boundary before opening its directory stream.
+    /// Unlike a guard error, pruning leaves sibling directories available.
+    pub(crate) fn with_directory_prune(mut self, directory_prune: DirectoryPrune<'a>) -> Self {
+        self.directory_prune = Some(directory_prune);
+        self
+    }
+
+    pub(crate) fn with_visited_entry_limit(mut self, max_visited_entries: usize) -> Self {
+        self.max_visited_entries = Some(max_visited_entries);
+        self
+    }
+
+    /// Includes the root and entries excluded before metadata/read_dir.
+    pub(crate) fn visited_entries(&self) -> usize {
+        self.visited_entries
+    }
+
+    pub(crate) fn visit_limit_reached(&self) -> bool {
+        self.max_visited_entries
+            .is_some_and(|limit| self.visited_entries > limit)
     }
 
     pub(crate) fn excluded_entries(&self) -> u64 {
@@ -194,6 +239,16 @@ impl<'a, C: Fn() -> bool> StreamingWalk<'a, C> {
     }
 
     fn visit(&mut self, path: PathBuf, depth: usize) -> Option<Result<WalkEntry, WalkError>> {
+        self.visited_entries = self.visited_entries.saturating_add(1);
+        if self
+            .max_visited_entries
+            .is_some_and(|limit| self.visited_entries > limit)
+        {
+            return Some(Err(self.resource_error(
+                path,
+                "탐색 항목 상한에 도달했습니다. 더 작은 폴더를 선택해 주세요".to_owned(),
+            )));
+        }
         let path_bytes = path.as_os_str().len();
         if path_bytes > MAX_WALK_PATH_BYTES {
             return Some(Err(self.limit(path)));
@@ -216,6 +271,19 @@ impl<'a, C: Fn() -> bool> StreamingWalk<'a, C> {
         }
         let mut empty_directory = false;
         if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            if let Some(guard) = self.directory_guard
+                && let Err(error) = guard(&path, &metadata)
+            {
+                self.stop();
+                return Some(Err(self.access_error(path, error)));
+            }
+            if self
+                .directory_prune
+                .is_some_and(|prune| prune(&path, &metadata))
+            {
+                self.excluded_entries = self.excluded_entries.saturating_add(1);
+                return None;
+            }
             if depth >= self.max_open_directories
                 || self.frames.len() >= self.max_open_directories
                 || self.retained_path_bytes.saturating_add(path_bytes)
@@ -332,6 +400,64 @@ impl<C: Fn() -> bool> Iterator for StreamingWalk<'_, C> {
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn directory_scope_guard_runs_before_reading_any_entry() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join("unvisited"), []).unwrap();
+        let cancel = || false;
+        let reject = |_: &Path, _: &Metadata| Err(io::Error::other("mount boundary"));
+        let mut walk = StreamingWalk::with_directory_guard(temp.path(), &cancel, &reject, 10);
+        assert!(
+            walk.next()
+                .unwrap()
+                .unwrap_err()
+                .to_string()
+                .contains("mount boundary")
+        );
+        assert_eq!(walk.raw_entries_read, 0);
+        assert!(walk.frames.is_empty());
+        assert!(walk.next().is_none());
+    }
+
+    #[test]
+    fn visit_bound_includes_excluded_cloud_entries() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(temp.path().join("Users/test/Library/CloudStorage/provider")).unwrap();
+        let cancel = || false;
+        let allow = |_: &Path, _: &Metadata| Ok(());
+        let mut walk = StreamingWalk::with_directory_guard(temp.path(), &cancel, &allow, 4);
+        assert!(walk.by_ref().take(4).all(|item| item.is_ok()));
+        assert!(walk.next().unwrap().unwrap_err().is_resource_limit());
+        assert!(walk.next().is_none());
+    }
+
+    #[test]
+    fn pruning_skips_directory_contents_and_keeps_siblings_available() {
+        let temp = tempfile::tempdir().unwrap();
+        let excluded = temp.path().join("other-volume");
+        fs::create_dir(&excluded).unwrap();
+        fs::write(excluded.join("private"), []).unwrap();
+        fs::write(temp.path().join("visible"), []).unwrap();
+        let cancel = || false;
+        let prune = |path: &Path, _: &Metadata| path == excluded;
+        let mut walk = StreamingWalk::new(temp.path(), &cancel).with_directory_prune(&prune);
+        let entries: Vec<_> = walk.by_ref().map(Result::unwrap).collect();
+        assert_eq!(walk.raw_entries_read, 2, "excluded read_dir must not open");
+        assert_eq!(walk.excluded_entries(), 1);
+        assert_eq!(
+            walk.visited_entries(),
+            3,
+            "root and excluded root both count"
+        );
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|entry| entry.file_name() == "visible"));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| !entry.path().starts_with(&excluded))
+        );
+    }
 
     #[test]
     fn injected_os_resource_errors_abort_and_release_frames() {

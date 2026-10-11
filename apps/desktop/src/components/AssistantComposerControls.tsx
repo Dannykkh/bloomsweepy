@@ -4,12 +4,15 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { useLanguage } from "../i18n";
 import { assistantModelCatalogPresentation, reasoningEffortAtIndex, reasoningSliderIndex } from "../lib/assistantComposerOptions";
-import { assistantModelSelection, assistantReasoningStatus, type AssistantReasoningEffort } from "../lib/assistantModelPreference";
-import type { AssistantProviderStatus } from "../types";
+import { assistantModelSelection, assistantReasoningStatus, isAssistantProviderKind, type AssistantReasoningEffort } from "../lib/assistantModelPreference";
+import { assistantProviderStatusKey } from "../lib/assistantProviderStatus";
+import type { AssistantProviderKind, AssistantProviderStatus } from "../types";
 import "./AssistantComposerControls.css";
 
 interface AssistantComposerControlsProps {
   provider: AssistantProviderStatus | null;
+  providers: AssistantProviderStatus[];
+  onProviderChange: (provider: AssistantProviderKind) => void;
   value: string;
   onChange: (value: string) => void;
   reasoningEffort?: string;
@@ -17,16 +20,16 @@ interface AssistantComposerControlsProps {
   busy?: boolean;
 }
 
-type PopupKind = "models" | "reasoning";
+type PopupKind = "providers" | "models" | "reasoning";
 interface OpenPopup { kind: PopupKind; provider: string | undefined; model: string }
 
-export function AssistantComposerControls({ provider, value, onChange, reasoningEffort = "", onReasoningEffortChange, busy = false }: AssistantComposerControlsProps) {
+export function AssistantComposerControls({ provider, providers, onProviderChange, value, onChange, reasoningEffort = "", onReasoningEffortChange, busy = false }: AssistantComposerControlsProps) {
   const { t } = useLanguage();
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
-  const modelTriggerRef = useRef<HTMLButtonElement>(null);
-  const reasoningTriggerRef = useRef<HTMLButtonElement>(null);
+  const providerTriggerRef = useRef<HTMLButtonElement>(null);
+  const selectionTriggerRef = useRef<HTMLButtonElement>(null);
   const originRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState<OpenPopup | null>(null);
   const [documentationError, setDocumentationError] = useState<string | null>(null);
@@ -53,6 +56,14 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
   const modelTitle = model && model.label !== model.id ? `${model.label} · ${model.id}` : modelLabel;
   const effortTitle = catalog.placeholder ? t(catalog.placeholder) : reasoningEffort ? effortLabel(reasoningEffort)
     : reasoning.defaultEffort ? t("CLI 기본값 · {{effort}}", { effort: effortLabel(reasoning.defaultEffort) }) : t("CLI 기본값");
+  const providerLabel = provider?.provider === "antigravity" ? "AGY" : provider?.label ?? t("AI CLI 확인 중");
+  const providerTitle = provider
+    ? t(assistantProviderStatusKey(provider), { provider: provider.label, count: provider.models.length })
+    : t("AI CLI 확인 중");
+  const selectionTitle = onReasoningEffortChange ? `${modelTitle} · ${effortTitle}` : modelTitle;
+  // The CLI-owned model and effort default should not repeat the same label.
+  const showEffort = Boolean(onReasoningEffortChange) && !catalog.placeholder
+    && (reasoning.mode === "supported" || reasoning.stale);
   const sliderIndex = reasoning.mode === "supported" && !reasoning.stale
     ? reasoningSliderIndex(reasoning.supportedEfforts, reasoningEffort, reasoning.defaultEffort) : null;
   const dotCount = Math.min(7, reasoning.supportedEfforts.length);
@@ -65,10 +76,11 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
     const element = popupRef.current;
     const first = popup === "reasoning"
       ? element?.querySelector<HTMLInputElement>("input[type=range]:not(:disabled)")
-      : element?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
+      : element?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]:not(:disabled)')
+        ?? element?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
     (first ?? element?.querySelector<HTMLButtonElement>("button:not(:disabled)") ?? element)?.focus({ preventScroll: true });
     const list = element?.querySelector<HTMLDivElement>('[role="listbox"]');
-    if (popup === "models" && first && list) {
+    if (popup !== "reasoning" && first && list) {
       // Reveal the selected row inside its bounded list, without moving the chat.
       list.scrollTop += first.getBoundingClientRect().top - list.getBoundingClientRect().top - (list.clientHeight - first.clientHeight) / 2;
     }
@@ -93,9 +105,10 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
   }, [popup]);
 
   function toggle(kind: PopupKind, trigger: HTMLButtonElement) {
-    if (locked || !provider) return;
+    if (locked || (kind === "providers" ? providers.length === 0 : !provider)) return;
     originRef.current = trigger;
-    setOpen(popup === kind ? null : { kind, provider: provider.provider, model: value });
+    const alreadyOpen = kind === "providers" ? popup === "providers" : popup === "models" || popup === "reasoning";
+    setOpen(alreadyOpen ? null : { kind, provider: provider?.provider, model: value });
   }
 
   function close() {
@@ -117,12 +130,18 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
     close();
   }
 
+  function chooseProvider(next: unknown) {
+    if (locked || !isAssistantProviderKind(next) || !providers.some(item => item.provider === next)) return;
+    onProviderChange(next);
+    close();
+  }
+
   function chooseEffort(next: string) {
     if (locked || !onReasoningEffortChange || (next && (reasoning.mode !== "supported" || !reasoning.supportedEfforts.some(effort => effort === next)))) return;
     onReasoningEffortChange(next);
   }
 
-  function moveModelFocus(event: KeyboardEvent<HTMLDivElement>) {
+  function moveOptionFocus(event: KeyboardEvent<HTMLDivElement>) {
     const keys = ["ArrowDown", "ArrowUp", "Home", "End"];
     if (!keys.includes(event.key)) return;
     const options = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="option"]:not(:disabled)'));
@@ -130,7 +149,8 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
     event.preventDefault();
     const current = options.indexOf(document.activeElement as HTMLButtonElement);
     const index = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
-      : event.key === "ArrowDown" ? (current + 1) % options.length : (current - 1 + options.length) % options.length;
+      : event.key === "ArrowDown" ? (current + 1) % options.length
+      : current < 0 ? options.length - 1 : (current - 1 + options.length) % options.length;
     options[index]?.focus();
   }
 
@@ -139,18 +159,21 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
     if (event.key === "Enter" && event.target instanceof HTMLInputElement && event.target.type === "range") event.preventDefault();
   }}>
     <div className="assistant-composer-controls__triggers">
-      <button ref={modelTriggerRef} type="button" className="assistant-composer-controls__trigger assistant-composer-controls__model-trigger"
-        aria-label={`${t("모델 선택")}: ${modelTitle}`} title={modelTitle} aria-haspopup="dialog" aria-expanded={popup === "models"}
-        aria-controls={popup === "models" ? `${id}-popup` : undefined} disabled={locked || !provider}
-        onClick={event => toggle("models", event.currentTarget)}>
-        <span>{modelLabel}</span><ChevronDown size={14} aria-hidden="true" />
+      <button ref={providerTriggerRef} type="button" className="assistant-composer-controls__trigger assistant-composer-controls__provider-trigger"
+        aria-label={`${t("대화 상대 선택")}: ${providerTitle}`} title={providerTitle} aria-haspopup="dialog" aria-expanded={popup === "providers"}
+        aria-controls={popup === "providers" ? `${id}-popup` : undefined} disabled={locked || providers.length === 0}
+        onClick={event => toggle("providers", event.currentTarget)}>
+        <span>{providerLabel}</span><ChevronDown size={14} aria-hidden="true" />
       </button>
-      {onReasoningEffortChange ? <button ref={reasoningTriggerRef} type="button" className="assistant-composer-controls__trigger assistant-composer-controls__effort-trigger"
-        aria-label={`${t("추론 강도 선택")}: ${effortTitle}`} title={effortTitle} aria-haspopup="dialog" aria-expanded={popup === "reasoning"}
-        aria-controls={popup === "reasoning" ? `${id}-popup` : undefined} disabled={locked || !provider}
-        onClick={event => toggle("reasoning", event.currentTarget)}>
-        <Zap size={15} aria-hidden="true" /><span>{catalog.placeholder ? t(catalog.placeholder) : reasoningEffort ? effortLabel(reasoningEffort) : t("CLI 기본값")}</span><ChevronDown size={14} aria-hidden="true" />
-      </button> : null}
+      <button ref={selectionTriggerRef} type="button" className="assistant-composer-controls__trigger assistant-composer-controls__selection-trigger"
+        aria-label={`${t(onReasoningEffortChange ? "모델과 추론 강도 선택" : "모델 선택")}: ${selectionTitle}`}
+        title={selectionTitle} aria-haspopup="dialog" aria-expanded={popup === "models" || popup === "reasoning"}
+        aria-controls={popup === "models" || popup === "reasoning" ? `${id}-popup` : undefined} disabled={locked || !provider}
+        onClick={event => toggle(onReasoningEffortChange ? "reasoning" : "models", event.currentTarget)}>
+        <span className="assistant-composer-controls__model-label">{modelLabel}</span>
+        {showEffort ? <span className="assistant-composer-controls__effort-label">· {reasoningEffort ? effortLabel(reasoningEffort) : t("CLI 기본값")}</span> : null}
+        <ChevronDown size={14} aria-hidden="true" />
+      </button>
     </div>
     {missing ? <div className="assistant-composer-controls__warning" role="alert">
       <span>{t("{{model}} · 목록에서 확인되지 않음", { model: selected })}</span>
@@ -161,8 +184,17 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
       <button type="button" disabled={locked} onClick={() => chooseEffort("")}>{t("추론 강도 기본값으로 변경")}</button>
     </div> : null}
     {popup ? <div ref={popupRef} id={`${id}-popup`} role="dialog" aria-modal="false" tabIndex={-1}
-      aria-label={t(popup === "reasoning" ? "추론 강도 선택" : "모델 선택")} className="assistant-composer-controls__popup">
-      {popup === "reasoning" ? <>
+      aria-label={t(popup === "providers" ? "대화 상대 선택" : popup === "reasoning" ? "모델과 추론 강도 선택" : "모델 선택")} className="assistant-composer-controls__popup">
+      {popup === "providers" ? <>
+        <div className="assistant-composer-controls__heading"><strong>{t("대화 상대 선택")}</strong><button type="button" className="assistant-composer-controls__icon-button" aria-label={t("닫기")} onClick={close}><X size={18} aria-hidden="true" /></button></div>
+        <div role="listbox" aria-label={t("대화 상대 선택")} className="assistant-composer-controls__model-options" onKeyDown={moveOptionFocus}>
+          {providers.map(item => <button type="button" role="option" key={item.provider} aria-selected={provider?.provider === item.provider}
+            onClick={() => chooseProvider(item.provider)}>
+            <span>{t(assistantProviderStatusKey(item), { provider: item.label, count: item.models.length })}</span>
+            {provider?.provider === item.provider ? <Check size={17} aria-hidden="true" /> : null}
+          </button>)}
+        </div>
+      </> : popup === "reasoning" ? <>
         <div className="assistant-composer-controls__heading assistant-composer-controls__heading--reasoning"><Zap size={21} aria-hidden="true" />
           <strong className="assistant-composer-controls__current" title={effortTitle}>{effortTitle}</strong>
           <button type="button" className="assistant-composer-controls__icon-button" title={t("추론 강도 기본값으로 변경")}
@@ -192,24 +224,24 @@ export function AssistantComposerControls({ provider, value, onChange, reasoning
       </> : <>
         <div className="assistant-composer-controls__heading"><strong>{t("AI 모델")}</strong><button type="button" className="assistant-composer-controls__icon-button" aria-label={t("닫기")} onClick={close}><X size={18} aria-hidden="true" /></button></div>
         <div role="listbox" aria-label={provider ? t("{{provider}} 모델 선택", { provider: provider.label }) : t("모델 선택")}
-          className="assistant-composer-controls__model-options" onKeyDown={moveModelFocus}>
+          className="assistant-composer-controls__model-options" onKeyDown={moveOptionFocus}>
           {selection !== "required" ? <button type="button" role="option" aria-selected={!selected && !catalogChoiceLocked} disabled={catalogChoiceLocked} onClick={() => chooseModel("")}><span>{catalogChoiceLocked && catalog.placeholder ? t(catalog.placeholder) : t("CLI 기본값")}</span>{!selected && !catalogChoiceLocked ? <Check size={17} aria-hidden="true" /> : null}</button> : null}
           {models.map(item => <button type="button" role="option" key={item.id} aria-selected={selected === item.id} title={`${item.label} · ${item.id}`} aria-label={`${item.label} · ${item.id}`}
             onClick={() => chooseModel(item.id)}><span>{item.label}</span>{selected === item.id ? <Check size={17} aria-hidden="true" /> : null}</button>)}
         </div>
       </>}
-      {models.length === 0 && catalog.detail ? <p className="assistant-composer-controls__detail">{t(catalog.detail)}</p> : null}
-      {models.length === 0 && catalog.referenceModels.length ? <section className="assistant-composer-controls__reference" aria-label={t("공식 모델 예시")}>
+      {popup !== "providers" && models.length === 0 && catalog.detail ? <p className="assistant-composer-controls__detail">{t(catalog.detail)}</p> : null}
+      {popup !== "providers" && models.length === 0 && catalog.referenceModels.length ? <section className="assistant-composer-controls__reference" aria-label={t("공식 모델 예시")}>
         <strong>{catalog.referenceUrl ? <a className="assistant-composer-controls__documentation-link" href={catalog.referenceUrl} target="_blank" rel="noopener noreferrer"
           onClick={event => openDocumentation(event, catalog.referenceUrl!)}>{t("공식 모델 예시")}</a> : t("공식 모델 예시")}</strong>
         <p>{t("설치·계정 사용 가능 여부는 아직 확인하지 않았습니다.")}</p>
         <ul role="list">{catalog.referenceModels.map(item => <li key={item.id}><span translate="no">{item.label}</span><code translate="no">{item.id}</code></li>)}</ul>
       </section> : null}
-      {models.length === 0 && catalog.documentationUrl ? <p className="assistant-composer-controls__detail">
+      {popup !== "providers" && models.length === 0 && catalog.documentationUrl ? <p className="assistant-composer-controls__detail">
         <a className="assistant-composer-controls__documentation-link" href={catalog.documentationUrl} target="_blank" rel="noopener noreferrer"
           onClick={event => openDocumentation(event, catalog.documentationUrl!)}>{t("공식 CLI 설치·모델 안내")}</a>
       </p> : null}
-      {documentationError && (documentationError === catalog.documentationUrl || documentationError === catalog.referenceUrl)
+      {popup !== "providers" && documentationError && (documentationError === catalog.documentationUrl || documentationError === catalog.referenceUrl)
         ? <p className="assistant-composer-controls__warning" role="alert">{t("공식 안내를 열지 못했습니다.")}</p> : null}
     </div> : null}
   </div>;

@@ -346,14 +346,37 @@ pub(crate) async fn trash_duplicate_files_internal(
     reports: &StoredReports,
     request: DuplicateTrashRequest,
 ) -> Result<TrashOperationResult, String> {
+    trash_duplicate_files_with_binding(app, runtime, reports, request, None).await
+}
+
+pub(crate) async fn trash_duplicate_files_with_binding(
+    app: AppHandle,
+    runtime: &ScanRuntime,
+    reports: &StoredReports,
+    request: DuplicateTrashRequest,
+    native_binding: Option<crate::control_server::NativeChatBinding>,
+) -> Result<TrashOperationResult, String> {
     let cancellation = runtime.begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
+    if let Some(binding) = native_binding {
+        crate::control_server::with_native_chat_authority(&app, binding, true, || {
+            crate::assistant_access::register_cancellation(&app, &cancellation)
+        })?;
+    }
     let report = reports.scan_report()?;
     let journal_path = action_journal_path(&app)?;
     let app_for_worker = app.clone();
     let cancellation_for_worker = Arc::clone(&cancellation);
 
     let worker_result = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(binding) = native_binding {
+            crate::control_server::with_native_chat_authority(
+                &app_for_worker,
+                binding,
+                true,
+                || Ok(()),
+            )?;
+        }
         let requested_count = request
             .groups
             .iter()
@@ -432,14 +455,37 @@ pub(crate) async fn trash_cleanup_candidates_internal(
     reports: &StoredReports,
     request: CleanupTrashRequest,
 ) -> Result<TrashOperationResult, String> {
+    trash_cleanup_candidates_with_binding(app, runtime, reports, request, None).await
+}
+
+pub(crate) async fn trash_cleanup_candidates_with_binding(
+    app: AppHandle,
+    runtime: &ScanRuntime,
+    reports: &StoredReports,
+    request: CleanupTrashRequest,
+    native_binding: Option<crate::control_server::NativeChatBinding>,
+) -> Result<TrashOperationResult, String> {
     let cancellation = runtime.begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
+    if let Some(binding) = native_binding {
+        crate::control_server::with_native_chat_authority(&app, binding, true, || {
+            crate::assistant_access::register_cancellation(&app, &cancellation)
+        })?;
+    }
     let report = reports.cleanup_report()?;
     let journal_path = action_journal_path(&app)?;
     let app_for_worker = app.clone();
     let cancellation_for_worker = Arc::clone(&cancellation);
 
     let worker_result = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(binding) = native_binding {
+            crate::control_server::with_native_chat_authority(
+                &app_for_worker,
+                binding,
+                true,
+                || Ok(()),
+            )?;
+        }
         validate_requested_count(request.paths.len())?;
         let mut seen_paths = HashSet::new();
         let mut verified = Vec::with_capacity(request.paths.len());

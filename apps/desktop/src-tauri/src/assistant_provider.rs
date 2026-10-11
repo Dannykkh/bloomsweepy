@@ -510,12 +510,16 @@ async fn ask_assistant_inner(
         request.summary = session.folder_summary;
     }
     validate_request(&request)?;
+    let native_permission = super::control_server::native_chat_binding(&app)?;
     state
         .running
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map_err(|_| "이미 AI 응답을 기다리고 있습니다".to_owned())?;
     let _lease = ProviderLease { state: &state };
     state.cancellation.store(false, Ordering::Release);
+    super::control_server::with_native_chat_authority(&app, native_permission, false, || {
+        super::assistant_access::register_cancellation(&app, &state.cancellation)
+    })?;
     emit_progress(&app, &request, "preparing", 0, None);
 
     let provider = request.provider;
@@ -592,6 +596,9 @@ async fn ask_assistant_inner(
     let mut analysis_only = false;
     let mut message = "앱 조회가 아직 완료되지 않았습니다.".to_owned();
     for round in 0..=MAX_INVESTIGATION_ACTIONS {
+        if !super::control_server::native_chat_binding_current(&app, native_permission) {
+            return Err("채팅 권한이 변경됐습니다. 현재 모드에서 다시 요청해 주세요".into());
+        }
         if state.cancellation.load(Ordering::Acquire) {
             return Err("대화 작업이 취소되었습니다".to_owned());
         }
@@ -604,6 +611,7 @@ async fn ask_assistant_inner(
         }
         let mut prompt = base_prompt.clone();
         if tool_scope.is_some() {
+            prompt.push_str(&format!("\n[App-owned native permission]\nmode={:?}. ReadOnly permits inspection only and never selection/review/execution. FullAccess permits native local volume IDs/search; external permissions and document excerpt consent remain independent. Session folder summary is the original anchor; the current workspace may be on a separately selected local volume. Never invent full-disk OS access or missing results.\n",native_permission.mode));
             prompt.push_str(super::assistant_tools::TOOL_CONTRACT);
             prompt.push_str(&bloomsweepy_control::native_prompt_catalog());
             if request.scope_kind == AssistantScopeKind::Folder {
@@ -693,6 +701,9 @@ async fn ask_assistant_inner(
             break;
         }
         let fingerprint = action_fingerprint(&action)?;
+        if !super::control_server::native_chat_binding_current(&app, native_permission) {
+            return Err("채팅 권한이 변경됐습니다. 현재 모드에서 다시 요청해 주세요".into());
+        }
         if let Err(reason) = investigation.admit(fingerprint) {
             message = reason;
             break;
@@ -733,6 +744,7 @@ async fn ask_assistant_inner(
                     bloomsweepy_control::AppToolRequest::FileWorkspace { .. }
                 ) {
                     file_workspace = super::assistant_files::get_assistant_file_workspace(
+                        app.clone(),
                         app.state(),
                         session_id.to_owned(),
                     )?;
@@ -757,6 +769,7 @@ async fn ask_assistant_inner(
                     return Err("대화 작업이 취소되었습니다".to_owned());
                 }
                 file_workspace = super::assistant_files::get_assistant_file_workspace(
+                    app.clone(),
                     app.state(),
                     session_id.to_owned(),
                 )?;
@@ -830,18 +843,20 @@ async fn ask_assistant_inner(
             analysis_only = true;
         }
     }
-    Ok(AssistantChatResponse {
-        provider,
-        label: provider.label(),
-        model: response_model,
-        reasoning_effort: response_reasoning_effort,
-        message,
-        docker_context,
-        empty_workspace,
-        file_workspace,
-        tool_action,
-        app_tool_results,
-        analysis_complete,
+    super::control_server::with_native_chat_authority(&app, native_permission, false, || {
+        Ok(AssistantChatResponse {
+            provider,
+            label: provider.label(),
+            model: response_model,
+            reasoning_effort: response_reasoning_effort,
+            message,
+            docker_context,
+            empty_workspace,
+            file_workspace,
+            tool_action,
+            app_tool_results,
+            analysis_complete,
+        })
     })
 }
 

@@ -29,7 +29,7 @@
 | release-1.7.0, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
 | native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
 | chat-workbench, actual-progress, bottom-input | [008](memory/architecture/008-conversation-workbench.md) |
-| permissions, folder-scan | [009](memory/architecture/009-opt-in-permission-lifetime.md), [010](memory/architecture/010-selected-folder-inspection.md) |
+| permissions, chat-access, webkit-popup | [009·010·015](memory/architecture/index.md) |
 | multi-drive, drive-deck, flip-animation, scan-root | [memory/architecture.md](memory/architecture.md) |
 | macos, disk-image, hdiutil, volume-filter | [memory/architecture.md](memory/architecture.md) |
 | performance-monitor, sysinfo, appkit, graceful-termination | [memory/architecture.md](memory/architecture.md) |
@@ -74,4 +74,4 @@
 ## meta/
 - **프로젝트**: BroomSweepy
 - **생성일**: 2026-09-04
-- **마지막 업데이트**: 2026-10-07
+- **마지막 업데이트**: 2026-10-11

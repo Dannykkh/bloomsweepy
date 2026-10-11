@@ -1,5 +1,6 @@
 use crate::permission_settings::{
-    self, ApprovedRoot, PermissionLifetime, PermissionPreferences, ScanGrant,
+    self, ApprovedRoot, AssistantPermissionMode, PermissionLifetime, PermissionPreferences,
+    ScanGrant,
 };
 use bloomsweepy_control::{
     CleanupCandidatesRequest, CleanupPlanReference, CleanupSource, ControlCommand,
@@ -59,6 +60,7 @@ pub(crate) struct ControlStatus {
     cleanup_access: ControlCleanupAccess,
     inspection_allowed: bool,
     chat_trash_without_confirmation: bool,
+    assistant_permission_mode: AssistantPermissionMode,
     permission_lifetime: PermissionLifetime,
     permission_warning: Option<String>,
 }
@@ -80,6 +82,7 @@ impl Default for ControlStatus {
             cleanup_access: ControlCleanupAccess::default(),
             inspection_allowed: false,
             chat_trash_without_confirmation: false,
+            assistant_permission_mode: AssistantPermissionMode::Confirm,
             permission_lifetime: PermissionLifetime::Session,
             permission_warning: None,
         }
@@ -251,6 +254,7 @@ enum OperationPermission {
 
 #[derive(Clone, Debug)]
 struct OperationAuthority {
+    native_binding: Option<NativeChatBinding>,
     actor: OperationActor,
     session_root: Option<PathBuf>,
     permission: OperationPermission,
@@ -329,6 +333,7 @@ pub(crate) struct ControlStatusStore {
     cleanup_review: Mutex<CleanupReviewState>,
     file_workspace_scope_epoch: AtomicU64,
     file_workspace_cleanup_epoch: AtomicU64,
+    native_chat_epoch: AtomicU64,
 }
 
 impl Default for ControlStatusStore {
@@ -345,6 +350,7 @@ impl Default for ControlStatusStore {
             cleanup_review: Mutex::new(CleanupReviewState::default()),
             file_workspace_scope_epoch: AtomicU64::new(0),
             file_workspace_cleanup_epoch: AtomicU64::new(0),
+            native_chat_epoch: AtomicU64::new(0),
         }
     }
 }
@@ -400,6 +406,7 @@ impl ControlStatusStore {
         };
         status.inspection_allowed = preferences.inspection_allowed;
         status.chat_trash_without_confirmation = preferences.chat_trash_without_confirmation;
+        status.assistant_permission_mode = preferences.assistant_permission_mode;
         status.permission_lifetime = preferences.lifetime;
         status.permission_warning = warning;
         status.last_error = None;
@@ -440,6 +447,9 @@ impl ControlStatusStore {
         previous: &PermissionPreferences,
         next: &PermissionPreferences,
     ) -> Result<(), String> {
+        if previous.assistant_permission_mode != next.assistant_permission_mode {
+            self.native_chat_epoch.fetch_add(1, Ordering::AcqRel);
+        }
         if scan_scope_changed(&previous.scan, &next.scan)? {
             self.file_workspace_scope_epoch
                 .fetch_add(1, Ordering::AcqRel);
@@ -1159,16 +1169,87 @@ pub(crate) fn configure_chat_trash_permission(
         })
 }
 
+#[tauri::command]
+pub(crate) fn configure_assistant_permission_mode(
+    window: WebviewWindow,
+    app: AppHandle,
+    mode: AssistantPermissionMode,
+) -> Result<ControlStatus, String> {
+    ensure_main_permission_window(&window)?;
+    let before = native_chat_binding(&app)?;
+    let status = app
+        .state::<ControlStatusStore>()
+        .change_permissions(&app, |preferences| {
+            preferences.assistant_permission_mode = mode
+        })?;
+    if before != native_chat_binding(&app)? {
+        crate::assistant_access::invalidate(&app)?;
+    }
+    Ok(status)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeChatBinding {
+    pub(crate) epoch: u64,
+    pub(crate) mode: AssistantPermissionMode,
+}
+
+pub(crate) fn native_chat_binding(app: &AppHandle) -> Result<NativeChatBinding, String> {
+    let store = app.state::<ControlStatusStore>();
+    let permissions = store
+        .permissions
+        .lock()
+        .map_err(|_| "채팅 권한을 확인하지 못했습니다")?;
+    Ok(NativeChatBinding {
+        epoch: store.native_chat_epoch.load(Ordering::Acquire),
+        mode: permissions.assistant_permission_mode,
+    })
+}
+
+pub(crate) fn native_chat_binding_current(app: &AppHandle, binding: NativeChatBinding) -> bool {
+    app.state::<ControlStatusStore>()
+        .native_chat_epoch
+        .load(Ordering::Acquire)
+        == binding.epoch
+}
+
+pub(crate) fn with_native_chat_authority<T>(
+    app: &AppHandle,
+    binding: NativeChatBinding,
+    review: bool,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let store = app.state::<ControlStatusStore>();
+    let permissions = store
+        .permissions
+        .lock()
+        .map_err(|_| "채팅 권한을 확인하지 못했습니다")?;
+    if store.native_chat_epoch.load(Ordering::Acquire) != binding.epoch
+        || permissions.assistant_permission_mode != binding.mode
+        || (review && !binding.mode.allows_review())
+    {
+        return Err("채팅 권한이 변경됐거나 조회만 모드입니다. 다시 요청해 주세요".into());
+    }
+    action()
+}
+
+pub(crate) fn require_native_chat_review(app: &AppHandle) -> Result<NativeChatBinding, String> {
+    let binding = native_chat_binding(app)?;
+    if !binding.mode.allows_review() {
+        return Err("조회만 모드에서는 변경 검토와 실행을 할 수 없습니다".into());
+    }
+    Ok(binding)
+}
+
 pub(crate) fn require_automatic_trash_access(
     app: &AppHandle,
     automatic: bool,
 ) -> Result<(), String> {
-    if automatic
-        && !app
-            .state::<ControlStatusStore>()
-            .snapshot()?
-            .chat_trash_without_confirmation
-    {
+    let binding = native_chat_binding(app)?;
+    if automatic && !binding.mode.allows_review() {
+        return Err("조회만 모드에서는 휴지통 이동을 실행할 수 없습니다".into());
+    }
+    if automatic && binding.mode != AssistantPermissionMode::FullAccess {
         return Err("추가 확인 없는 휴지통 이동 권한이 꺼져 있습니다. 채팅에서 확인하거나 설정을 변경하세요".into());
     }
     Ok(())
@@ -1363,6 +1444,9 @@ fn tool_operation_authority(
         _ => return Err("소유/권한 규약이 없는 앱 작업은 시작할 수 없습니다".to_owned()),
     };
     let authority = OperationAuthority {
+        native_binding: (!scope.is_external())
+            .then(|| native_chat_binding(app))
+            .transpose()?,
         actor,
         session_root,
         permission,
@@ -1382,6 +1466,12 @@ fn operation_permission_current(
     scope: &crate::app_tools::ToolScope,
     authority: &OperationAuthority,
 ) -> bool {
+    if authority
+        .native_binding
+        .is_some_and(|binding| !native_chat_binding_current(app, binding))
+    {
+        return false;
+    }
     if !scope.is_external() {
         let current = scope.root().map(Path::canonicalize).transpose();
         if current.as_ref().is_err()
@@ -1503,6 +1593,7 @@ pub(crate) fn reserve_file_workspace_operation(
         app,
         "fileWorkspace",
         OperationAuthority {
+            native_binding: None,
             actor: OperationActor::External,
             session_root: None,
             permission: OperationPermission::FileWorkspace {
@@ -1523,6 +1614,9 @@ fn reserve_operation_authority(
     let cancellation = app
         .state::<super::ScanRuntime>()
         .begin_control(operation_id.clone())?;
+    if matches!(authority.actor, OperationActor::Native(_)) {
+        crate::assistant_access::register_cancellation(app, &cancellation)?;
+    }
     let completion = super::ScanCompletionGuard::for_control(app.clone(), operation_id.clone());
     let operation = app.state::<ControlStatusStore>().start_operation(
         app,
@@ -1660,7 +1754,10 @@ pub(crate) async fn approve_cleanup_plan(
     reports: State<'_, super::StoredReports>,
 ) -> Result<super::trash_actions::TrashOperationResult, String> {
     CleanupPlanReference::new(request.plan_id.clone()).map_err(|error| error.to_string())?;
-    let execution = state.begin_cleanup_plan(&app, &request.plan_id)?;
+    let native_binding = crate::assistant_access::plan_binding(&app, &request.plan_id)?;
+    let execution = crate::assistant_access::with_plan_authority(&app, &request.plan_id, || {
+        state.begin_cleanup_plan(&app, &request.plan_id)
+    })?;
     let action = match reports.cleanup_plan_action(&execution, request.allow_review_candidates) {
         Ok(action) => action,
         Err(error) => {
@@ -1677,20 +1774,22 @@ pub(crate) async fn approve_cleanup_plan(
 
     let result = match action {
         super::CleanupPlanAction::Duplicate(request) => {
-            super::trash_actions::trash_duplicate_files_internal(
+            super::trash_actions::trash_duplicate_files_with_binding(
                 app.clone(),
                 runtime.inner(),
                 reports.inner(),
                 request,
+                native_binding,
             )
             .await
         }
         super::CleanupPlanAction::System(request) => {
-            super::trash_actions::trash_cleanup_candidates_internal(
+            super::trash_actions::trash_cleanup_candidates_with_binding(
                 app.clone(),
                 runtime.inner(),
                 reports.inner(),
                 request,
+                native_binding,
             )
             .await
         }
@@ -2351,6 +2450,7 @@ fn start_storage_scan(app: &AppHandle, request_id: &str) -> Result<Value, Reques
         summary: None,
     };
     let authority = OperationAuthority {
+        native_binding: None,
         actor: OperationActor::External,
         session_root: None,
         permission: OperationPermission::StorageScan(plan.canonical_root.clone()),
@@ -2986,6 +3086,37 @@ mod tests {
     }
 
     #[test]
+    fn native_mode_epoch_rejects_aba_without_expanding_external_epochs() {
+        let store = ControlStatusStore::default();
+        let original = PermissionPreferences::default();
+        let mut full = original.clone();
+        full.assistant_permission_mode = AssistantPermissionMode::FullAccess;
+        let scope = store.file_workspace_scope_epoch.load(Ordering::Acquire);
+        let cleanup = store.file_workspace_cleanup_epoch.load(Ordering::Acquire);
+        let initial = store.native_chat_epoch.load(Ordering::Acquire);
+        store
+            .advance_file_workspace_epochs(&original, &full)
+            .unwrap();
+        let first = store.native_chat_epoch.load(Ordering::Acquire);
+        assert_ne!(initial, first);
+        store
+            .advance_file_workspace_epochs(&full, &original)
+            .unwrap();
+        store
+            .advance_file_workspace_epochs(&original, &full)
+            .unwrap();
+        assert_ne!(first, store.native_chat_epoch.load(Ordering::Acquire));
+        assert_eq!(
+            scope,
+            store.file_workspace_scope_epoch.load(Ordering::Acquire)
+        );
+        assert_eq!(
+            cleanup,
+            store.file_workspace_cleanup_epoch.load(Ordering::Acquire)
+        );
+    }
+
+    #[test]
     fn file_workspace_binding_rejects_aba_config_changes_and_cleanup_regrant() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
@@ -3069,6 +3200,7 @@ mod tests {
             cleanup_allowed: true,
         };
         let authority = OperationAuthority {
+            native_binding: None,
             actor: OperationActor::External,
             session_root: None,
             permission: OperationPermission::FileWorkspace {
@@ -3264,6 +3396,7 @@ mod tests {
 
     fn native_authority(session: &str) -> OperationAuthority {
         OperationAuthority {
+            native_binding: None,
             actor: OperationActor::Native(session.to_owned()),
             session_root: Some(PathBuf::from("selected")),
             permission: OperationPermission::SelectedRoot,
@@ -3309,6 +3442,7 @@ mod tests {
     #[test]
     fn revoked_consent_allows_only_owner_stop_and_redacts_restricted_result() {
         let authority = OperationAuthority {
+            native_binding: None,
             actor: OperationActor::External,
             session_root: None,
             permission: OperationPermission::DocumentSearch(PathBuf::from("approved-documents")),
@@ -3384,6 +3518,7 @@ mod tests {
         ));
         assert!(!operation_root_matches(&authority, None));
         let external = OperationAuthority {
+            native_binding: None,
             actor: OperationActor::External,
             session_root: None,
             permission: OperationPermission::FileSearch(PathBuf::from("original-approved")),

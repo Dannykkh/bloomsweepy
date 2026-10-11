@@ -1,7 +1,8 @@
 import { Terminal } from "lucide-react";
 import { useLanguage, type MessageKey, type Translate } from "../i18n";
 import { formatBytes, formatCount, formatDate } from "../lib/format";
-import type { ControlOperationStatus, ControlStatus, PermissionLifetime } from "../types";
+import type { AssistantPermissionMode, ControlOperationStatus, ControlStatus, PermissionLifetime } from "../types";
+import { isAssistantPermissionMode, normalizeAssistantPermissionMode } from "../lib/assistantPermissionMode";
 
 export interface ControlStatusPanelProps {
   status: ControlStatus;
@@ -11,6 +12,7 @@ export interface ControlStatusPanelProps {
   permissionLifetimeLocked?: boolean;
   onPermissionLifetimeChange?: (lifetime: PermissionLifetime) => void;
   onChatTrashPermissionChange?: (enabled: boolean) => void;
+  onAssistantPermissionModeChange?: (mode: AssistantPermissionMode) => void;
   canEnableSearch: boolean;
   updatingSearchAccess: boolean;
   searchAccessError: string | null;
@@ -110,6 +112,7 @@ export function ControlStatusPanel({
   permissionLifetimeLocked,
   onPermissionLifetimeChange,
   onChatTrashPermissionChange,
+  onAssistantPermissionModeChange,
   canEnableSearch,
   updatingSearchAccess,
   searchAccessError,
@@ -134,6 +137,7 @@ export function ControlStatusPanel({
   const searchEnabled = status.searchAccess.files || status.searchAccess.documents;
   const cleanupEnabled = status.cleanupAccess.enabled;
   const remember = status.permissionLifetime === "remember";
+  const chatMode = normalizeAssistantPermissionMode(status.assistantPermissionMode);
   const allowedSearches = [
     status.searchAccess.files ? t("파일") : null,
     status.searchAccess.documents ? t("문서") : null,
@@ -214,7 +218,26 @@ export function ControlStatusPanel({
             <option value="remember">{t("이 컴퓨터에서 기억")}</option>
           </select>
         </div>
-        <div className="control-permission">
+        <div className="control-permission control-permission--lifetime">
+          <div>
+            <label htmlFor="assistant-permission-mode"><strong>{t("채팅 권한 선택")}</strong></label>
+            <p id="assistant-permission-mode-description">{t(chatMode === "read_only"
+              ? "로컬 파일을 조회하고 검사합니다. 변경이나 휴지통 이동은 실행하지 않습니다."
+              : chatMode === "full_access"
+                ? "로컬 드라이브를 검색하고, 명확한 휴지통 요청은 추가 확인 없이 실행합니다."
+                : "선택한 폴더에서 검토하고, 휴지통 이동은 실행 전에 확인합니다.")}</p>
+            <small>{t("영구 삭제·문서 내용 공개·OS 파일 접근·외부 MCP 권한은 별도입니다.")}</small>
+          </div>
+          <select id="assistant-permission-mode" className="control-permission__lifetime-select" value={chatMode}
+            aria-describedby="assistant-permission-mode-description"
+            disabled={!status.bridgeAvailable || permissionControlsLocked || permissionLifetimeLocked || !isAssistantPermissionMode(status.assistantPermissionMode) || !onAssistantPermissionModeChange}
+            onChange={event => onAssistantPermissionModeChange?.(event.target.value as AssistantPermissionMode)}>
+            <option value="read_only">{t("조회만")}</option>
+            <option value="confirm">{t("확인 후 실행")}</option>
+            <option value="full_access">{t("전체 접근")}</option>
+          </select>
+        </div>
+        {!isAssistantPermissionMode(status.assistantPermissionMode) ? <div className="control-permission">
           <div><strong>{t("명확한 삭제 요청은 추가 확인 없이 진행")}</strong>
             <p id="chat-trash-permission-description">{t("사용자가 이름을 지정해 삭제를 요청한 파일·폴더·앱 본체만 재검사 후 휴지통으로 이동합니다. 모호한 요청과 삭제 상담은 확인하며, 영구 삭제·Docker 정리·프로세스 종료에는 적용하지 않습니다.")}</p>
             <small>{t("꺼짐: 채팅에서 예/아니오 한 번 확인 · 켜짐: 명확한 요청 즉시 처리")}</small>
@@ -222,7 +245,10 @@ export function ControlStatusPanel({
           <label className="control-permission__scan-button"><input type="checkbox" checked={status.chatTrashWithoutConfirmation === true}
             disabled={!status.bridgeAvailable || permissionControlsLocked || cleanupAccessLocked || !onChatTrashPermissionChange}
             aria-describedby="chat-trash-permission-description" onChange={event => onChatTrashPermissionChange?.(event.target.checked)} />{t("추가 확인 생략 허용")}</label>
-        </div>
+        </div> : null}
+        <div className="control-permission"><div><strong>{t("외부 MCP 연결 권한")}</strong>
+          <p>{t("아래 권한은 별도 터미널 연결에만 적용됩니다. 채팅의 전체 접근과는 별개입니다.")}</p>
+        </div></div>
         <div className="control-permission">
           <div><strong>{t("시스템·앱 조회 허용")}</strong>
             <p id="control-inspection-description">{t("외부 AI에 CPU·메모리·작업·설치 앱의 제한된 목록 공개를 허용합니다. 실행·삭제 승인은 아닙니다.")}</p>
@@ -309,7 +335,7 @@ export function ControlStatusPanel({
           </button>
         </div>
       </div>
-      <p className="control-status-panel__notice">{t("폴더 검사는 별도 허용 없이 사용할 수 있습니다. 앱에서 선택한 폴더만 읽고, 삭제는 별도로 확인합니다.")}</p>
+      <p className="control-status-panel__notice">{t("폴더 검사는 별도 허용 없이 사용할 수 있습니다. 기본 범위는 선택한 폴더이며, 삭제는 채팅 권한과 실행 검증을 따릅니다.")}</p>
       {scanAccessError ? <p className="control-status-panel__notice control-status-panel__error" role="alert">{t("외부 AI 검사 연결 오류: {{detail}}", { detail: scanAccessError })}</p> : null}
     </section>
   );

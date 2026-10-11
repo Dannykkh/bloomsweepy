@@ -26,9 +26,11 @@ const BACKGROUND_ARG: &str = "--background";
 mod action_recovery;
 mod app_memory_cleanup;
 mod app_tools;
+mod app_tools_file_changes;
 mod app_tools_search;
 mod app_tools_system;
 mod application_actions;
+mod assistant_access;
 mod assistant_files;
 mod assistant_provider;
 mod assistant_sessions;
@@ -38,6 +40,7 @@ mod control_server;
 mod docker_tools;
 mod empty_trash;
 mod external_program;
+mod file_change_review;
 mod file_inspection;
 mod folder_actions;
 mod mcp_registration;
@@ -1806,11 +1809,13 @@ pub fn run() {
         .manage(app_tools::RequestHistory::default())
         .manage(assistant_tools::AssistantToolsState::default())
         .manage(assistant_files::AssistantFilesState::default())
+        .manage(assistant_access::AssistantAccessState::default())
         .manage(cleanup_tree::CleanupTreeState::default())
         .manage(folder_actions::FolderActionsState::default())
         .manage(empty_trash::EmptyTrashState::default())
         .manage(application_actions::ApplicationActionsState::default())
         .manage(docker_tools::DockerManagerState::default())
+        .manage(file_change_review::FileChangeReviewState::default())
         .manage(control_server::ControlStatusStore::default())
         .manage(mcp_registration::McpRegistrationRuntime::default())
         .manage(Arc::new(
@@ -1831,6 +1836,9 @@ pub fn run() {
                 windows_tray::log_setup_failure(&error);
             }
             let app_handle = app.handle().clone();
+            if let Err(error) = file_change_review::setup(&app_handle) {
+                eprintln!("File-change review unavailable: {error}");
+            }
             control_server::restore_permission_settings(&app_handle);
             match control_server::start(app_handle.clone()) {
                 Ok(server) => {
@@ -1846,6 +1854,10 @@ pub fn run() {
             menu_bar::get_menu_bar_settings,
             menu_bar::set_menu_bar_memory_percent,
             menu_bar::open_menu_bar_panel,
+            file_change_review::get_file_change_review,
+            file_change_review::set_file_change_review_config,
+            file_change_review::request_file_change_review_check,
+            file_change_review::set_file_change_review_disposition,
             control_server::get_control_status,
             control_server::configure_control_search_access,
             control_server::configure_control_scan_access,
@@ -1853,6 +1865,7 @@ pub fn run() {
             control_server::configure_control_inspection_access,
             control_server::configure_control_permission_lifetime,
             control_server::configure_chat_trash_permission,
+            control_server::configure_assistant_permission_mode,
             control_server::get_pending_cleanup_plan,
             control_server::approve_cleanup_plan,
             control_server::reject_cleanup_plan,
@@ -1874,6 +1887,7 @@ pub fn run() {
             assistant_files::get_assistant_file_workspace,
             assistant_files::get_assistant_directory_report,
             assistant_files::assistant_file_action,
+            assistant_access::assistant_file_access_action,
             assistant_files::select_assistant_files,
             assistant_files::prepare_assistant_file_plan,
             assistant_files::confirm_assistant_file_plan,
@@ -1969,6 +1983,7 @@ pub fn run() {
             foreground_activation_requested.stop_listener();
             assistant_provider::shutdown(app_handle);
             docker_tools::shutdown(app_handle);
+            file_change_review::shutdown(app_handle);
             if let Some(runtime) = app_handle.try_state::<ScanRuntime>() {
                 runtime.close_and_cancel();
             }

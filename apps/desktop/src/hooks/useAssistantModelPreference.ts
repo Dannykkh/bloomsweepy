@@ -31,6 +31,11 @@ function getSnapshot(): AssistantModelPreferenceSnapshot {
   return snapshot;
 }
 
+// Async catalog callbacks must read the live shared preference, not a render's old closure.
+export function getAssistantModelPreferenceSnapshot(): AssistantModelPreferenceSnapshot {
+  return getSnapshot();
+}
+
 function subscribe(listener: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
     if (event.key !== null && event.key !== ASSISTANT_MODEL_PREFERENCE_KEY

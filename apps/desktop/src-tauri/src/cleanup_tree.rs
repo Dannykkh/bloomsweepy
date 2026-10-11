@@ -33,6 +33,7 @@ pub(crate) struct CleanupTreeState(Mutex<Option<Tree>>);
 #[derive(Clone)]
 struct Tree {
     id: String,
+    native_binding: Option<crate::control_server::NativeChatBinding>,
     source: TreeSource,
     session_id: Option<String>,
     authority: SourceAuthority,
@@ -297,6 +298,7 @@ impl Tree {
         }
         let mut tree = Self {
             id: assistant_tools::new_id()?,
+            native_binding: None,
             source,
             session_id,
             authority,
@@ -325,6 +327,11 @@ impl Tree {
         Ok(())
     }
     fn check_source_snapshot(&self, app: &AppHandle) -> Result<(), String> {
+        if self.native_binding.is_some_and(|binding| {
+            !crate::control_server::native_chat_binding_current(app, binding)
+        }) {
+            return Err("정리 트리의 채팅 권한이 변경됐습니다. 다시 여세요".into());
+        }
         self.check_source_reports(
             &app.state::<StoredReports>(),
             &app.state::<assistant_files::AssistantFilesState>(),
@@ -361,12 +368,24 @@ impl Tree {
                 assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
             if session.session.scope_kind != crate::assistant_provider::AssistantScopeKind::Folder
                 || Path::new(&session.session.scope_root) != scope_root
-                || !self.scope.starts_with(scope_root)
             {
                 return Err("정리 트리의 대화 폴더가 변경됐습니다".into());
             }
+            let (effective_scope, _) =
+                crate::assistant_access::effective_root(app, session_id, scope_root)?;
+            if !self.scope.starts_with(&effective_scope) {
+                return Err("정리 트리가 현재 대화 범위 밖입니다".into());
+            }
+            if self.is_full_native() {
+                crate::assistant_access::confine_volume(&effective_scope, &self.scope)?;
+            }
         }
         self.check_source_snapshot(app)
+    }
+    fn is_full_native(&self) -> bool {
+        self.native_binding.is_some_and(|binding| {
+            binding.mode == crate::permission_settings::AssistantPermissionMode::FullAccess
+        })
     }
     fn add_branch(
         &mut self,
@@ -711,6 +730,40 @@ impl Tree {
     }
 }
 
+fn with_native_tree_authority<T>(
+    app: &AppHandle,
+    binding: Option<crate::control_server::NativeChatBinding>,
+    review: bool,
+    action: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if let Some(binding) = binding {
+        crate::control_server::with_native_chat_authority(app, binding, review, action)
+    } else {
+        action()
+    }
+}
+
+fn scan_tree_directory(
+    tree: &Tree,
+    path: &Path,
+    config: DirectoryScanConfig,
+    cancelled: &impl Fn() -> bool,
+) -> Result<DirectoryScanReport, String> {
+    if tree.is_full_native() {
+        crate::assistant_access::confine_volume(&tree.scope, path)?;
+        bloomsweepy_core::scan_local_volume_directory_level(
+            path,
+            config,
+            &crate::assistant_access::excluded_mounts(path),
+            |_| {},
+            cancelled,
+        )
+    } else {
+        scan_directory_level(path, config, |_| {}, cancelled)
+    }
+    .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 pub(crate) async fn open_cleanup_tree(
     app: AppHandle,
@@ -719,17 +772,19 @@ pub(crate) async fn open_cleanup_tree(
     _state: State<'_, CleanupTreeState>,
     request: OpenCleanupTreeRequest,
 ) -> Result<CleanupTreeView, String> {
-    let (report, source, session_id, authority) = match request.source {
+    let (report, source, session_id, authority, native_binding) = match request.source {
         CleanupTreeSourceRequest::Directory { generation } => (
             reports.directory_report(generation)?,
             TreeSource::Directory,
             None,
             SourceAuthority::Directory { generation },
+            None,
         ),
         CleanupTreeSourceRequest::Assistant {
             session_id,
             revision,
         } => {
+            let binding = crate::control_server::native_chat_binding(&app)?;
             let session =
                 assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
             if session.session.scope_kind != crate::assistant_provider::AssistantScopeKind::Folder {
@@ -741,32 +796,55 @@ pub(crate) async fn open_cleanup_tree(
                 &session_id,
                 &revision,
             )?;
-            if !Path::new(&report.root).starts_with(&session.session.scope_root) {
+            let anchor = PathBuf::from(&session.session.scope_root);
+            let (effective_scope, _) =
+                crate::assistant_access::effective_root(&app, &session_id, &anchor)?;
+            if !Path::new(&report.root).starts_with(&effective_scope) {
                 return Err("대화 폴더 밖의 정리 트리입니다".into());
+            }
+            if binding.mode == crate::permission_settings::AssistantPermissionMode::FullAccess {
+                crate::assistant_access::confine_volume(&effective_scope, Path::new(&report.root))?;
             }
             let authority = SourceAuthority::Assistant {
                 session_id: session_id.clone(),
                 revision,
                 scope_root: PathBuf::from(session.session.scope_root),
             };
-            (report, TreeSource::Assistant, Some(session_id), authority)
+            (
+                report,
+                TreeSource::Assistant,
+                Some(session_id),
+                authority,
+                Some(binding),
+            )
         }
     };
     let cancellation = runtime.begin()?;
     let completion = ScanCompletionGuard::new(app.clone());
+    if native_binding.is_some() {
+        crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    }
     let worker_completion = completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _worker_completion = worker_completion;
-        let tree = Tree::from_report(report, source, session_id, authority, &|| {
+        let cancelled = || {
             cancellation.load(Ordering::Acquire)
-        })?;
-        if cancellation.load(Ordering::Acquire) {
+                || native_binding.is_some_and(|binding| {
+                    !crate::control_server::native_chat_binding_current(&app, binding)
+                })
+        };
+        let mut tree = Tree::from_report(report, source, session_id, authority, &cancelled)?;
+        tree.native_binding = native_binding;
+        if cancelled() {
             return Err("정리 트리 검사가 취소됐습니다".into());
         }
         tree.check_source_snapshot(&app)?;
-        let view = tree.view();
-        *app.state::<CleanupTreeState>().lock()? = Some(tree);
-        Ok(view)
+        with_native_tree_authority(&app, native_binding, false, || {
+            tree.check_source_snapshot(&app)?;
+            let view = tree.view();
+            *app.state::<CleanupTreeState>().lock()? = Some(tree);
+            Ok(view)
+        })
     })
     .await
     .map_err(|error| format!("정리 트리를 열지 못했습니다: {error}"))?
@@ -780,7 +858,10 @@ pub(crate) async fn get_cleanup_tree(
 ) -> Result<CleanupTreeView, String> {
     let snapshot = state.snapshot(&tree_id)?;
     snapshot.check_source(&app).await?;
-    Ok(snapshot.view())
+    with_native_tree_authority(&app, snapshot.native_binding, false, || {
+        snapshot.check_source_snapshot(&app)?;
+        Ok(snapshot.view())
+    })
 }
 
 #[tauri::command]
@@ -799,14 +880,16 @@ pub(crate) async fn load_cleanup_tree_children(
         {
             return Err("트리 페이지 범위가 올바르지 않습니다".into());
         }
-        let mut stored = state.lock()?;
-        let tree = live_tree(&mut stored, &request.tree_id)?;
-        tree.check_source_snapshot(&app)?;
-        tree.branches
-            .get_mut(&request.parent_id)
-            .ok_or("트리 가지가 변경됐습니다")?
-            .offset = request.offset;
-        return Ok(tree.view());
+        return with_native_tree_authority(&app, snapshot.native_binding, false, || {
+            let mut stored = state.lock()?;
+            let tree = live_tree(&mut stored, &request.tree_id)?;
+            tree.check_source_snapshot(&app)?;
+            tree.branches
+                .get_mut(&request.parent_id)
+                .ok_or("트리 가지가 변경됐습니다")?
+                .offset = request.offset;
+            Ok(tree.view())
+        });
     }
     if request.offset != 0 {
         return Err("먼저 폴더의 첫 페이지를 검사하세요".into());
@@ -825,36 +908,45 @@ pub(crate) async fn load_cleanup_tree_children(
     }
     let cancellation = runtime.begin()?;
     let completion = ScanCompletionGuard::new(app.clone());
+    if snapshot.native_binding.is_some() {
+        crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    }
     let worker_completion = completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _worker_completion = worker_completion;
         let started = Instant::now();
-        let cancelled =
-            || cancellation.load(Ordering::Acquire) || started.elapsed() > REVIEW_BUDGET;
+        let cancelled = || {
+            cancellation.load(Ordering::Acquire)
+                || started.elapsed() > REVIEW_BUDGET
+                || snapshot.native_binding.is_some_and(|binding| {
+                    !crate::control_server::native_chat_binding_current(&app, binding)
+                })
+        };
         snapshot.check_source_snapshot(&app)?;
         validate_cleanup_tree_node_identity(&parent.snapshot).map_err(|error| error.to_string())?;
-        let report = scan_directory_level(
-            &parent.snapshot.path,
+        let report = scan_tree_directory(
+            &snapshot,
+            Path::new(&parent.snapshot.path),
             DirectoryScanConfig {
                 max_children: 512,
                 max_tracked_children: 2_048,
                 max_empty_directories: 0,
                 max_issues: 20,
             },
-            |_| {},
-            cancelled,
-        )
-        .map_err(|error| error.to_string())?;
+            &cancelled,
+        )?;
         validate_cleanup_tree_node_identity(&parent.snapshot).map_err(|error| error.to_string())?;
         if cancelled() {
             return Err("정리 트리 검사가 취소됐거나 시간 상한에 도달했습니다".into());
         }
-        let state = app.state::<CleanupTreeState>();
-        let mut stored = state.lock()?;
-        let tree = live_tree(&mut stored, &snapshot.id)?;
-        tree.check_source_snapshot(&app)?;
-        tree.add_branch(Some(parent_id), report, &cancelled)?;
-        Ok(tree.view())
+        with_native_tree_authority(&app, snapshot.native_binding, false, || {
+            let state = app.state::<CleanupTreeState>();
+            let mut stored = state.lock()?;
+            let tree = live_tree(&mut stored, &snapshot.id)?;
+            tree.check_source_snapshot(&app)?;
+            tree.add_branch(Some(parent_id), report, &cancelled)?;
+            Ok(tree.view())
+        })
     })
     .await
     .map_err(|error| format!("하위 폴더 검사를 완료하지 못했습니다: {error}"))?
@@ -868,11 +960,13 @@ pub(crate) async fn update_cleanup_tree_selection(
 ) -> Result<CleanupTreeView, String> {
     let snapshot = state.snapshot(&request.tree_id)?;
     snapshot.check_source(&app).await?;
-    let mut stored = state.lock()?;
-    let tree = live_tree(&mut stored, &request.tree_id)?;
-    tree.check_source_snapshot(&app)?;
-    tree.select(&request)?;
-    Ok(tree.view())
+    with_native_tree_authority(&app, snapshot.native_binding, true, || {
+        let mut stored = state.lock()?;
+        let tree = live_tree(&mut stored, &request.tree_id)?;
+        tree.check_source_snapshot(&app)?;
+        tree.select(&request)?;
+        Ok(tree.view())
+    })
 }
 
 fn prepare(tree: &Tree, cancelled: &impl Fn() -> bool) -> Result<StoredPlan, String> {
@@ -905,22 +999,23 @@ fn prepare(tree: &Tree, cancelled: &impl Fn() -> bool) -> Result<StoredPlan, Str
             .as_ref()
             .is_none_or(|report| Path::new(&report.root) != parent)
         {
-            parent_report = Some(
-                scan_directory_level(
-                    parent,
-                    DirectoryScanConfig {
-                        max_children: 2_048,
-                        max_tracked_children: 2_048,
-                        max_empty_directories: 0,
-                        max_issues: 20,
-                    },
-                    |_| {},
-                    cancelled,
-                )
-                .map_err(|error| error.to_string())?,
-            );
+            parent_report = Some(scan_tree_directory(
+                tree,
+                parent,
+                DirectoryScanConfig {
+                    max_children: 2_048,
+                    max_tracked_children: 2_048,
+                    max_empty_directories: 0,
+                    max_issues: 20,
+                },
+                &cancelled,
+            )?);
         }
         let report = parent_report.as_ref().expect("parent report loaded");
+        if tree.is_full_native() && (report.tracking_limit_reached || report.unreadable_entries > 0)
+        {
+            return Err("로컬 드라이브 검사에 제외·읽기 오류·상한이 있어 이 범위의 이동을 준비하지 않았습니다. 더 작은 폴더를 선택하세요".into());
+        }
         let live = report
             .children
             .iter()
@@ -973,34 +1068,47 @@ pub(crate) async fn prepare_cleanup_tree_plan(
     state: State<'_, CleanupTreeState>,
     request: PrepareCleanupTreePlanRequest,
 ) -> Result<CleanupTreeView, String> {
-    let snapshot = {
+    let snapshot = state.snapshot(&request.tree_id)?;
+    snapshot.check_source(&app).await?;
+    let snapshot = with_native_tree_authority(&app, snapshot.native_binding, true, || {
         let mut stored = state.lock()?;
         let tree = live_tree(&mut stored, &request.tree_id)?;
+        tree.check_source_snapshot(&app)?;
         if tree.selection_revision != request.selection_revision {
             return Err("선택 상태가 변경됐습니다. 다시 확인하세요".into());
         }
         tree.plan = None;
-        tree.clone()
-    };
-    snapshot.check_source(&app).await?;
+        Ok(tree.clone())
+    })?;
     let cancellation = runtime.begin()?;
     let completion = ScanCompletionGuard::new(app.clone());
+    if snapshot.native_binding.is_some() {
+        crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    }
     let worker_completion = completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _worker_completion = worker_completion;
-        let plan = prepare(&snapshot, &|| cancellation.load(Ordering::Acquire))?;
-        let state = app.state::<CleanupTreeState>();
-        let mut stored = state.lock()?;
-        let tree = live_tree(&mut stored, &snapshot.id)?;
-        if tree.selection_revision != snapshot.selection_revision {
-            return Err("검토 중 선택이 변경됐습니다".into());
-        }
-        if cancellation.load(Ordering::Acquire) {
-            return Err("정리 검토가 취소됐습니다".into());
-        }
-        tree.check_source_snapshot(&app)?;
-        tree.plan = Some(plan);
-        Ok(tree.view())
+        let cancelled = || {
+            cancellation.load(Ordering::Acquire)
+                || snapshot.native_binding.is_some_and(|binding| {
+                    !crate::control_server::native_chat_binding_current(&app, binding)
+                })
+        };
+        let plan = prepare(&snapshot, &cancelled)?;
+        with_native_tree_authority(&app, snapshot.native_binding, true, || {
+            let state = app.state::<CleanupTreeState>();
+            let mut stored = state.lock()?;
+            let tree = live_tree(&mut stored, &snapshot.id)?;
+            if tree.selection_revision != snapshot.selection_revision {
+                return Err("검토 중 선택이 변경됐습니다".into());
+            }
+            if cancelled() {
+                return Err("정리 검토가 취소됐습니다".into());
+            }
+            tree.check_source_snapshot(&app)?;
+            tree.plan = Some(plan);
+            Ok(tree.view())
+        })
     })
     .await
     .map_err(|error| format!("정리 검토를 완료하지 못했습니다: {error}"))?
@@ -1019,10 +1127,17 @@ pub(crate) async fn confirm_cleanup_tree_plan(
     }
     let snapshot = state.snapshot(&request.tree_id)?;
     snapshot.check_source(&app).await?;
+    with_native_tree_authority(&app, snapshot.native_binding, true, || Ok(()))?;
     let cancellation = runtime.begin()?;
     let completion = ScanCompletionGuard::new(app.clone());
-    snapshot.check_source_snapshot(&app)?;
-    let (items, session_id) = state.claim(&request)?;
+    if snapshot.native_binding.is_some() {
+        crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    }
+    let (items, session_id) =
+        with_native_tree_authority(&app, snapshot.native_binding, true, || {
+            snapshot.check_source_snapshot(&app)?;
+            state.claim(&request)
+        })?;
     let result = trash_actions::trash_verified_cleanup_tree_files(
         app.clone(),
         items,
@@ -1042,20 +1157,27 @@ pub(crate) async fn confirm_cleanup_tree_plan(
 
 #[tauri::command]
 pub(crate) fn dismiss_cleanup_tree_plan(
+    app: AppHandle,
     state: State<'_, CleanupTreeState>,
     tree_id: String,
     plan_id: String,
 ) -> Result<CleanupTreeView, String> {
-    let mut stored = state.lock()?;
-    let tree = live_tree(&mut stored, &tree_id)?;
-    if tree
-        .plan
-        .as_ref()
-        .is_some_and(|plan| plan.view.id == plan_id)
-    {
-        tree.plan = None;
-    }
-    Ok(tree.view())
+    let snapshot = state.snapshot(&tree_id)?;
+    with_native_tree_authority(&app, snapshot.native_binding, false, || {
+        let mut stored = state.lock()?;
+        let tree = live_tree(&mut stored, &tree_id)?;
+        if tree.native_binding.is_some() {
+            tree.check_source_snapshot(&app)?;
+        }
+        if tree
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.view.id == plan_id)
+        {
+            tree.plan = None;
+        }
+        Ok(tree.view())
+    })
 }
 
 #[cfg(test)]
@@ -1147,6 +1269,29 @@ mod tests {
         // Review does not execute or modify any fixture item.
         assert!(tree.scope.join("A/B/keep.txt").exists());
         assert!(tree.scope.join("A/B/remove.txt").exists());
+    }
+    #[test]
+    fn full_native_review_rejects_a_parent_with_excluded_cloud_content() {
+        let (_temp, mut tree) = fixture();
+        std::fs::create_dir_all(tree.scope.join("Library/CloudStorage/provider")).unwrap();
+        std::fs::write(
+            tree.scope.join("Library/CloudStorage/provider/private"),
+            b"excluded",
+        )
+        .unwrap();
+        tree.native_binding = Some(crate::control_server::NativeChatBinding {
+            epoch: 0,
+            mode: crate::permission_settings::AssistantPermissionMode::FullAccess,
+        });
+        let a = id(&tree, "A");
+        select(&mut tree, vec![a], vec![]).unwrap();
+        assert!(prepare(&tree, &|| false).is_err());
+        assert!(tree.scope.join("A/B/remove.txt").exists());
+        assert!(
+            tree.scope
+                .join("Library/CloudStorage/provider/private")
+                .exists()
+        );
     }
     #[test]
     fn parent_and_child_selection_are_deduplicated_and_page_changes_preserve_rules() {

@@ -140,6 +140,7 @@ export interface AssistantFileEntry {
 }
 export interface AssistantFileWorkspace {
   revision: string; currentPath: string; currentName: string; canGoUp: boolean; query: string | null;
+  automaticTrashEligible?: boolean;
   sizeRanked: boolean; mapGeneration: number | null;
   summary: AssistantFolderSummary; totalEntries: number; truncated: boolean; unreadableEntries: number;
   offset: number; nextOffset: number | null; entries: AssistantFileEntry[]; selectedIds: string[];
@@ -155,6 +156,12 @@ export type AssistantFileAction =
   | { kind: "page"; revision: string; offset: number }
   | { kind: "select"; revision: string; includeIds: string[]; excludeIds: string[] }
   | { kind: "review"; revision: string; ids: string[] };
+
+export type AssistantFileAccessAction =
+  | { kind: "volumes" }
+  | { kind: "open_volume"; revision: string; volumeId: string }
+  | { kind: "search_all"; query: string }
+  | { kind: "open_search_result"; revision: string; entryId: string };
 
 export interface AssistantEmptyWorkspace {
   revision: string;
@@ -387,11 +394,13 @@ export interface ControlStatus {
   cleanupAccess: ControlCleanupAccess;
   inspectionAllowed?: boolean;
   chatTrashWithoutConfirmation?: boolean;
+  assistantPermissionMode?: AssistantPermissionMode;
   permissionLifetime?: PermissionLifetime;
   permissionWarning?: string | null;
 }
 
 export type PermissionLifetime = "session" | "remember";
+export type AssistantPermissionMode = "read_only" | "confirm" | "full_access";
 
 export interface ControlSearchAccess {
   files: boolean;

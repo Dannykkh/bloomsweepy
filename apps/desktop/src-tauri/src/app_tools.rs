@@ -78,6 +78,22 @@ impl ToolScope {
     }
 }
 
+fn requires_native_review(request: &AppToolRequest) -> bool {
+    matches!(
+        request,
+        AppToolRequest::ApplicationReview { .. }
+            | AppToolRequest::ProcessReview { .. }
+            | AppToolRequest::MemoryReview {}
+            | AppToolRequest::DockerReview { .. }
+            | AppToolRequest::CleanupReview { .. }
+            | AppToolRequest::BuildIndex { .. }
+            | AppToolRequest::OperationCancel { .. }
+    ) || matches!(request, AppToolRequest::FileWorkspace { operation }
+            if matches!(operation, bloomsweepy_control::FileWorkspaceAction::Select { .. }
+                | bloomsweepy_control::FileWorkspaceAction::Review { .. }
+                | bloomsweepy_control::FileWorkspaceAction::ReviewNamed { .. }))
+}
+
 pub(crate) async fn execute(
     app: &AppHandle,
     scope: &ToolScope,
@@ -88,6 +104,20 @@ pub(crate) async fn execute(
     if cancellation.load(Ordering::Acquire) {
         return Err("조회가 취소되었습니다".to_owned());
     }
+    let native_binding = if !scope.is_external() {
+        crate::assistant_access::register_cancellation(app, &cancellation)?;
+        let binding = crate::control_server::native_chat_binding(app)?;
+        if requires_native_review(request) && !binding.mode.allows_review() {
+            return Ok(AppToolResult::with_status(
+                request.capability_id(),
+                AppToolStatus::PermissionRequired,
+                json!({"performed":false,"permissionMode":"read_only","message":"조회만 모드에서는 변경 검토와 실행을 할 수 없습니다"}),
+            ));
+        }
+        Some(binding)
+    } else {
+        None
+    };
     if let ToolScope::Native { session_id, root } = scope {
         let session =
             crate::assistant_sessions::get_assistant_session(app.clone(), session_id.clone())
@@ -122,6 +152,9 @@ pub(crate) async fn execute(
         result
     } else {
         match request {
+            AppToolRequest::FileChanges { offset, filter } => {
+                crate::app_tools_file_changes::read(app, scope, *offset, *filter)?
+            }
             AppToolRequest::Capabilities {} => AppToolResult::completed(
                 request.capability_id(),
                 json!({"catalog":bloomsweepy_control::discovery_index(),"platform":std::env::consts::OS,
@@ -192,6 +225,12 @@ pub(crate) async fn execute(
         ));
     }
     // A per-result cap also applies to external callers; presentation is local-only.
+    if let Some(binding) = native_binding {
+        if !crate::control_server::native_chat_binding_current(app, binding) {
+            return Err("채팅 권한이 변경돼 결과를 전달하지 않았습니다".into());
+        }
+        crate::assistant_access::register_review(app, binding, &mut result)?;
+    }
     bound_model_result(&mut result)?;
     if scope.is_external() && result.status == AppToolStatus::ReviewRequired {
         app.emit("app-tool-review", &result)
@@ -217,6 +256,32 @@ pub(crate) fn model_context(result: &AppToolResult) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readonly_blocks_mutation_reviews_but_keeps_queries_and_native_discovery() {
+        let id = "a".repeat(32);
+        let blocked = [
+            json!({"kind":"memory_review"}),
+            json!({"kind":"docker_review","actions":[]}),
+            json!({"kind":"operation_cancel","operationId":id}),
+            json!({"kind":"file_workspace","operation":{"kind":"review_named","name":"named.txt"}}),
+            json!({"kind":"file_workspace","operation":{"kind":"select","revision":id,"includeIds":[],"excludeIds":[]}}),
+            json!({"kind":"build_index","source":"files"}),
+        ];
+        for value in blocked {
+            let request: AppToolRequest = serde_json::from_value(value.clone()).unwrap();
+            assert!(requires_native_review(&request), "{value}");
+        }
+        for request in [
+            AppToolRequest::StorageOverview {},
+            AppToolRequest::StorageScan {},
+            AppToolRequest::CleanupScan {},
+            AppToolRequest::FileWorkspace {
+                operation: bloomsweepy_control::FileWorkspaceAction::Volumes {},
+            },
+        ] {
+            assert!(!requires_native_review(&request));
+        }
+    }
     #[test]
     fn model_receives_evidence_not_local_paths_or_execution_ids() {
         let result = AppToolResult::completed(

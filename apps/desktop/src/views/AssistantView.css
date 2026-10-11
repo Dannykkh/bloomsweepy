@@ -54,6 +54,7 @@
 .assistant-workspace .assistant-scope__change { display: none; }
 .assistant-workspace .assistant-scope__folder-line { gap: 8px; }
 .assistant-workspace .assistant-provider-picker { margin-left: auto; width: auto; }
+.assistant-provider-picker__status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-connections-button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border: 0; border-radius: 10px; color: var(--text-muted); background: transparent; }
 .assistant-connections-button:hover { background: var(--surface); color: var(--text); }
 .assistant-workspace .assistant-chat {
@@ -97,7 +98,8 @@
 .assistant-workspace .assistant-message p { font-size: 16px; line-height: 1.8; }
 .assistant-workspace .assistant-message strong { font-weight: 600; color: var(--text-muted); }
 .assistant-workspace .assistant-message.is-assistant > span { color: var(--text-muted); }
-.assistant-dock { position: relative; width: min(100%, 800px); margin: 0 auto; padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
+/* Keep composer popups above WKWebView's composited transcript scroll layer. */
+.assistant-dock { position: relative; z-index: 1; width: min(100%, 800px); margin: 0 auto; padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
 .assistant-workspace .assistant-composer {
   display: flex;
   flex-direction: column;
@@ -110,6 +112,12 @@
 }
 .assistant-workspace .assistant-composer textarea { padding: 11px 12px; font-size: 16px; resize: none; field-sizing: content; min-height: 52px; max-height: 120px; }
 .assistant-composer__toolbar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.assistant-composer-settings { position: relative; display: flex; align-items: center; flex: 1; gap: 4px; min-width: 0; }
+@media (max-width: 480px) {
+  .assistant-composer-settings { flex-wrap: wrap; }
+  .assistant-composer-settings > .assistant-composer-controls { flex-basis: 100%; }
+  .assistant-composer__toolbar { align-items: flex-end; }
+}
 .assistant-workspace .assistant-composer__send { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: var(--text); color: var(--canvas); }
 .assistant-workspace .assistant-composer__send:disabled { background: var(--surface); color: var(--text-faint); }
 .assistant-workspace .assistant-composer__send:not(:disabled):hover { background: var(--text-muted); }

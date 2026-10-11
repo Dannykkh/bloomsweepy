@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "macos")]
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
-use tauri::{State, WebviewWindow};
+use tauri::{AppHandle, State, WebviewWindow};
 
 #[cfg(target_os = "macos")]
 const OBSERVATION_SETTLE_TIME: Duration = Duration::from_millis(50);
@@ -102,14 +102,27 @@ impl AppMemoryCleanupState {
 
 #[tauri::command]
 pub(crate) async fn clean_app_memory(
+    app: AppHandle,
     window: WebviewWindow,
     state: State<'_, Arc<AppMemoryCleanupState>>,
+    assistant_permission_epoch: Option<u64>,
 ) -> Result<AppMemoryCleanupResult, String> {
     require_main_window(window.label())?;
     let state = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || state.clean())
-        .await
-        .map_err(|error| format!("앱 메모리 정리 작업을 완료하지 못했습니다: {error}"))
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(epoch) = assistant_permission_epoch {
+            let binding = crate::control_server::require_native_chat_review(&app)?;
+            if binding.epoch != epoch {
+                return Err("채팅 권한이 변경됐습니다. 다시 검토하세요".into());
+            }
+            return crate::control_server::with_native_chat_authority(&app, binding, true, || {
+                Ok(state.clean())
+            });
+        }
+        Ok(state.clean())
+    })
+    .await
+    .map_err(|error| format!("앱 메모리 정리 작업을 완료하지 못했습니다: {error}"))?
 }
 
 fn require_main_window(label: &str) -> Result<(), String> {

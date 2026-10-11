@@ -24,6 +24,7 @@ import {
   configureControlInspectionAccess,
   configureControlPermissionLifetime,
   configureChatTrashPermission,
+  configureAssistantPermissionMode,
   listenToAppToolReview,
   listenToAppToolCompleted,
   getActionHistory,
@@ -83,6 +84,7 @@ import type {
   DriveScanReport,
   ScanConfig,
   PermissionLifetime,
+  AssistantPermissionMode,
   ScanProgress,
   ScanReport,
   ScanUiState,
@@ -895,6 +897,14 @@ function App() {
     if (permissionLifetimeUpdating || selectionBlocked || !controlStatus.bridgeAvailable) return;
     setPermissionLifetimeUpdating(true); setPermissionLifetimeError(null);
     try { applyControlStatus(await configureChatTrashPermission(enabled)); }
+    catch (reason) { setPermissionLifetimeError(normalizeError(reason)); }
+    finally { setPermissionLifetimeUpdating(false); }
+  }
+
+  async function changeAssistantPermissionMode(mode: AssistantPermissionMode) {
+    if (permissionLifetimeUpdating || selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating || !controlStatus.bridgeAvailable) return;
+    setPermissionLifetimeUpdating(true); setPermissionLifetimeError(null);
+    try { applyControlStatus(await configureAssistantPermissionMode(mode)); }
     catch (reason) { setPermissionLifetimeError(normalizeError(reason)); }
     finally { setPermissionLifetimeUpdating(false); }
   }
@@ -1791,6 +1801,7 @@ function App() {
     permissionLifetimeLocked: selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating,
     onPermissionLifetimeChange: lifetime => void changePermissionLifetime(lifetime),
     onChatTrashPermissionChange: enabled => void changeChatTrashPermission(enabled),
+    onAssistantPermissionModeChange: mode => void changeAssistantPermissionMode(mode),
     canEnableSearch: Boolean(fileCatalog || documentIndex),
     updatingSearchAccess: controlAccessUpdating,
     searchAccessError: controlAccessError,

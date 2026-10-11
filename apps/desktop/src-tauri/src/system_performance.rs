@@ -263,15 +263,23 @@ pub(crate) async fn prepare_graceful_process_termination(
 
 #[tauri::command]
 pub(crate) async fn execute_graceful_process_termination(
+    app: tauri::AppHandle,
     window: WebviewWindow,
     state: State<'_, Arc<PerformanceMonitorState>>,
     request: ExecuteTerminationRequest,
 ) -> Result<TerminationResult, String> {
     require_main_window(window.label())?;
+    crate::assistant_access::require_plan_current(&app, &request.preview_id)?;
     let state = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || state.execute_termination(request))
-        .await
-        .map_err(|error| format!("앱 종료 요청을 완료하지 못했습니다: {error}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::assistant_access::require_plan_current(&app, &request.preview_id)?;
+        let id = request.preview_id.clone();
+        crate::assistant_access::with_plan_authority(&app, &id, || {
+            state.execute_termination(request)
+        })
+    })
+    .await
+    .map_err(|error| format!("앱 종료 요청을 완료하지 못했습니다: {error}"))?
 }
 
 fn require_main_window(label: &str) -> Result<(), String> {

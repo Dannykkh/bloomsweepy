@@ -13,5 +13,7 @@
 - [009 — 선택적 권한 유지](009-opt-in-permission-lifetime.md): 기본 session, 명시적 remember, 정확한 폴더·기준 재검증과 영속 철회. 계획·최종 승인은 제외.
 - [010 — 선택 폴더 검사](010-selected-folder-inspection.md): 검사 스위치 없이 앱 폴더 선택으로 범위 연결. 외부 임의 경로·자동 삭제는 불가.
 - [011 — 채팅 삭제 결정](011-conversational-trash-consent.md): 한 번 예/아니오, 단순 직접 명령만 native 확인 생략 opt-in, 무시간 일회용 계획과 실행 재검증.
-- [012 — CLI 모델·추론 선택](012-cli-model-selection.md): 컴팩트 입력/설정 공유, 실제 model/effort·미지원 fallback 차단; 빈 목록 원인·읽기 전용 예시와 실제 선택 분리.
+- [012 — CLI 모델·추론 선택](012-cli-model-selection.md): 입력창 CLI/모델·강도 두 진입점·설정 공유·공급자별 복원, 실제 model/effort·미지원 fallback 차단; 빈 목록·읽기 전용 예시 분리.
 - [013 — 공통 파일·MCP 결과](013-common-file-mcp-results.md): 작은 기능 index/상세, 같은 파일 dispatcher, 외부 범위 epoch, 상태 분석 전용 응답.
+- [014 — 선택적 변경 파일 검토](014-optional-file-change-review.md): 기본 OFF·단일 폴더 metadata 주기 비교, 넘김≠안전, 비영속 상한·세대 취소·동일 범위 읽기 전용 AI/MCP.
+- [015 — 내장 채팅 권한](015-native-chat-access.md): 기본 confirm·명시적 readonly/full, Rust epoch·유한 로컬 볼륨 검색.009/011 계승·외부/OS/본문 별도. 이 Mac 설치형 현재값 복원·native popup stacking 확인.

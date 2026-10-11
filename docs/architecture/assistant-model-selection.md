@@ -4,12 +4,22 @@
 
 ## 사용자 흐름과 저장
 
-채팅 입력창의 compact 모델/추론 controls와 설정의 기존 Picker는 같은 선호 hook을 사용한다.
+채팅 입력창의 compact CLI/모델·추론 controls와 설정의 기존 Picker는 같은 선호 hook을 사용한다.
 공급자마다 마지막 모델을, 모델마다 추론 강도를 별도로 기억하며 공급자를 바꿔도 다른 공급자의 ID를 보내지
 않는다. 질문이 실행 중이면 입력창에서 모델을 바꿀 수 없다. 설정은 현재 native busy
 상태로 선택을 제한하되 상태 다시 확인 버튼은 사용할 수 있다.
 
-채팅은 전체폭 textarea 아래 작은 모델/추론 trigger와44px 원형 전송/취소 버튼을 둔다.
+채팅은 전체폭 textarea 아래 `[CLI 선택] [모델 · 추론 강도]` 두 trigger와44px 원형 전송/취소 버튼을 둔다.
+이 두 버튼은 모델 선택 묶음이며, 옆에 별도 `[권한]` trigger를 둔다. 권한은 모델 선호 저장소가
+아닌 Rust의 permissionLifetime/ControlStatus를 사용한다. 좁은 폭에서는 권한/전송을 다음 행으로
+옮긴다. [권한 모드 계약](app-capability-contract.md#내장-채팅-권한)을 따른다.
+첫 trigger에서 실제 공급자 목록의 Codex·Claude Code·AGY·Grok·Ollama를 선택한다.
+둘째 trigger의 통합 팝업에서 모델 이름을 눌러 해당 CLI의 모델 목록을 열고 지원 강도를 선택한다.
+중복되는 헤더 공급자 select는 제거하고 연결 상태·재확인만 유지한다. 미설치 CLI도 상태와 함께
+선택할 수 있지만 기존 준비 조건을 만족하기 전에는 질문을 보내지 않는다.
+CLI 전환은 초안을 보존하며 해당 공급자의 모델과 모델별 강도를 복원한다. 조회·응답·세션 작업 중에는
+두 선택을 잠그고, 공급자/모델 변경 시 이전 팝업을 닫는다. 늦은 상태 조회는 최신 공용 선호를 읽으며
+조회 세대와 unmount를 검사해 오래된 응답이 새 선택을 덮지 않게 한다.
 추론 팝업은 현재 강도·모델 이름·실제 지원 단계의 native range를 중심으로 위쪽에 열린다.
 사용자 요청대로 입력창 아래 및 정상 팝업의 반복 설명은 제거한다. stale·미지원·저장 실패 등
 복구 안내는 숨기지 않는다. 기본 강도를 확인하지 못하면 현재 단계를 만들어 표시하지 않고
@@ -191,6 +201,8 @@ Grok/Agy CLI는 이 Mac에 없어 실제 목록/응답/계정 접근권을 검�
 
 - 코드: `assistant_provider.rs`, `assistant_model_catalog.rs`, `external_program.rs`, `assistantModelPreference.ts`, `useAssistantModelPreference.ts`, `AssistantComposerControls.tsx`, `AssistantModelPicker.tsx`, `AssistantModelSettingsPanel.tsx`, `AssistantView.tsx`.
 - [Compact composer 계약](../design-refs/2026-10-07-experience-compact-composer.md)
+- [입력창 CLI 선택 delta](../design-refs/2026-10-08-experience-composer-provider.md)
+- [입력창 CLI 선택 검증](../qa/2026-10-08-composer-provider.md)
 - [다중 공급자 검증 기록](../qa/2026-10-07-multi-provider-model-selection.md)
 - [검증 기록](../qa/2026-10-06-cli-model-selection.md)
 - [CLI 업데이트·추론 검증 기록](../qa/2026-10-06-cli-reasoning-selection.md)

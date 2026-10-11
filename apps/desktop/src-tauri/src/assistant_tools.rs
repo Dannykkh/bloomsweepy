@@ -10,6 +10,7 @@ use bloomsweepy_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, atomic::Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -52,6 +53,7 @@ pub(crate) struct EmptyWorkspaceView {
 }
 
 struct Workspace {
+    native_binding: Option<crate::control_server::NativeChatBinding>,
     view: EmptyWorkspaceView,
     page_offset: usize,
 }
@@ -126,6 +128,19 @@ impl AssistantToolsState {
     pub(crate) fn forget(&self, session_id: &str) -> Result<(), String> {
         self.lock()?.remove(session_id);
         Ok(())
+    }
+    pub(crate) fn invalidate_native(&self) -> Result<(), String> {
+        self.lock()?.clear();
+        Ok(())
+    }
+    fn native_authority(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::control_server::NativeChatBinding, String> {
+        self.lock()?
+            .get(session_id)
+            .and_then(|workspace| workspace.native_binding)
+            .ok_or_else(|| "빈 폴더 조회 권한이 변경됐습니다. 다시 검사하세요".into())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, HashMap<String, Workspace>>, String> {
@@ -209,6 +224,7 @@ impl AssistantToolsState {
         workspaces.insert(
             session_id,
             Workspace {
+                native_binding: None,
                 view: view.clone(),
                 page_offset: 0,
             },
@@ -306,6 +322,10 @@ pub(crate) async fn dispatch(
     action: AssistantAction,
     request_cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<EmptyWorkspaceView, String> {
+    let binding = crate::control_server::native_chat_binding(&app)?;
+    if matches!(action, AssistantAction::UpdateEmptySelection { .. }) {
+        crate::control_server::require_native_chat_review(&app)?;
+    }
     let session =
         assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
     if session.session.scope_kind != AssistantScopeKind::Folder {
@@ -314,24 +334,60 @@ pub(crate) async fn dispatch(
     app.state::<crate::assistant_files::AssistantFilesState>()
         .forget(&session_id)?;
     let state = app.state::<AssistantToolsState>();
-    match action {
+    crate::control_server::with_native_chat_authority(&app, binding, false, || {
+        let mut workspaces = state.lock()?;
+        if workspaces
+            .get(&session_id)
+            .is_some_and(|workspace| workspace.native_binding != Some(binding))
+        {
+            workspaces.remove(&session_id);
+            return Err("채팅 권한이 변경됐습니다. 다시 검사하세요".into());
+        }
+        Ok(())
+    })?;
+    let result = match action {
         AssistantAction::App { .. } | AssistantAction::Files { .. } => {
             Err("일반 파일 작업은 파일 대화 도구에서 처리합니다".to_owned())
         }
         AssistantAction::ScanEmptyDirectories {} => {
             let runtime = app.state::<ScanRuntime>();
             let cancellation = runtime.begin()?;
+            crate::assistant_access::register_cancellation(&app, &cancellation)?;
             let _completion = ScanCompletionGuard::new(app.clone());
             state.lock()?.remove(&session_id);
-            let root = session.session.scope_root;
+            let anchor = PathBuf::from(&session.session.scope_root);
+            let (root, _) = crate::assistant_access::effective_root(&app, &session_id, &anchor)?;
+            let full =
+                binding.mode == crate::permission_settings::AssistantPermissionMode::FullAccess;
+            let excluded = if full {
+                crate::assistant_access::excluded_mounts(&root)
+            } else {
+                Vec::new()
+            };
             let cancelled = request_cancellation.clone();
             let report = tauri::async_runtime::spawn_blocking(move || {
-                scan_directory_level(
-                    root,
-                    DirectoryScanConfig::default(),
-                    |_| {},
-                    || cancellation.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire),
-                )
+                if full {
+                    bloomsweepy_core::scan_local_volume_directory_level(
+                        &root,
+                        DirectoryScanConfig::default(),
+                        &excluded,
+                        |_| {},
+                        || {
+                            cancellation.load(Ordering::Acquire)
+                                || cancelled.load(Ordering::Acquire)
+                        },
+                    )
+                } else {
+                    scan_directory_level(
+                        root,
+                        DirectoryScanConfig::default(),
+                        |_| {},
+                        || {
+                            cancellation.load(Ordering::Acquire)
+                                || cancelled.load(Ordering::Acquire)
+                        },
+                    )
+                }
             })
             .await
             .map_err(|error| error.to_string())?
@@ -339,16 +395,19 @@ pub(crate) async fn dispatch(
             if request_cancellation.load(Ordering::Acquire) {
                 return Err("대화 검사를 취소했습니다".to_owned());
             }
-            assistant_sessions::update_folder_summary(
-                app.clone(),
-                session_id.clone(),
-                folder_summary(&report),
-            )
-            .await?;
+            if Path::new(&report.root) == anchor {
+                assistant_sessions::update_folder_summary(
+                    app.clone(),
+                    session_id.clone(),
+                    folder_summary(&report),
+                )
+                .await?;
+            }
             let worker_app = app.clone();
+            let worker_session = session_id.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 worker_app.state::<AssistantToolsState>().insert_report(
-                    session_id,
+                    worker_session,
                     &report,
                     &request_cancellation,
                 )
@@ -357,7 +416,19 @@ pub(crate) async fn dispatch(
             .map_err(|error| error.to_string())?
         }
         action => apply_review_action(&state, &session_id, action),
+    }?;
+    let published = crate::control_server::with_native_chat_authority(&app, binding, false, || {
+        let mut workspaces = state.lock()?;
+        let workspace = workspaces
+            .get_mut(&session_id)
+            .ok_or("빈 폴더 목록이 변경됐습니다")?;
+        workspace.native_binding = Some(binding);
+        Ok(result)
+    });
+    if published.is_err() {
+        state.forget(&session_id)?;
     }
+    published
 }
 
 fn apply_review_action(
@@ -425,29 +496,47 @@ fn apply_review_action(
 
 #[tauri::command]
 pub(crate) fn get_assistant_empty_workspace(
+    app: AppHandle,
     state: State<'_, AssistantToolsState>,
     session_id: String,
 ) -> Result<Option<EmptyWorkspaceView>, String> {
+    if let Ok(binding) = state.native_authority(&session_id) {
+        if !crate::control_server::native_chat_binding_current(&app, binding) {
+            state.forget(&session_id)?;
+            return Ok(None);
+        }
+    } else if state.view(&session_id)?.is_some() {
+        state.forget(&session_id)?;
+        return Ok(None);
+    }
     state.view(&session_id)
 }
 
 #[tauri::command]
 pub(crate) fn select_assistant_empty_candidates(
+    app: AppHandle,
     state: State<'_, AssistantToolsState>,
     session_id: String,
     revision: String,
     candidate_ids: Vec<String>,
 ) -> Result<EmptyWorkspaceView, String> {
-    state.update_selection(&session_id, &revision, &candidate_ids)
+    let binding = state.native_authority(&session_id)?;
+    crate::control_server::with_native_chat_authority(&app, binding, true, || {
+        state.update_selection(&session_id, &revision, &candidate_ids)
+    })
 }
 
 #[tauri::command]
 pub(crate) fn prepare_assistant_empty_plan(
+    app: AppHandle,
     state: State<'_, AssistantToolsState>,
     session_id: String,
     revision: String,
 ) -> Result<EmptyWorkspaceView, String> {
-    state.create_plan(&session_id, &revision)
+    let binding = state.native_authority(&session_id)?;
+    crate::control_server::with_native_chat_authority(&app, binding, true, || {
+        state.create_plan(&session_id, &revision)
+    })
 }
 
 #[tauri::command]
@@ -469,10 +558,15 @@ pub(crate) async fn confirm_assistant_empty_plan(
         return Err("폴더 대화가 아닙니다".to_owned());
     }
     let cancellation = app.state::<ScanRuntime>().begin()?;
+    crate::assistant_access::register_cancellation(&app, &cancellation)?;
     let _completion = ScanCompletionGuard::new(app.clone());
-    let items = app
+    let binding = app
         .state::<AssistantToolsState>()
-        .claim_plan(&session_id, &revision, &plan_id)?;
+        .native_authority(&session_id)?;
+    let items = crate::control_server::with_native_chat_authority(&app, binding, true, || {
+        app.state::<AssistantToolsState>()
+            .claim_plan(&session_id, &revision, &plan_id)
+    })?;
     let result =
         trash_actions::trash_verified_empty_directories(app.clone(), items, cancellation).await;
     app.state::<StoredReports>().clear_all()?;

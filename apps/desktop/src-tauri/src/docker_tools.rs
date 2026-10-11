@@ -386,6 +386,7 @@ pub(crate) async fn execute_docker_cleanup(
     request: ExecuteDockerCleanupRequest,
 ) -> Result<DockerCleanupResult, String> {
     validate_execute_request(&request)?;
+    crate::assistant_access::require_plan_current(&app, &request.preview_id)?;
     if state.closed.load(Ordering::Acquire) {
         return Err("앱이 종료 중이어서 Docker 정리를 시작하지 않았습니다".to_owned());
     }
@@ -396,7 +397,14 @@ pub(crate) async fn execute_docker_cleanup(
     let _lease = DockerOperationLease { state: &state };
     state.cancellation.store(false, Ordering::Release);
 
-    take_matching_preview(&state, &request)?;
+    crate::assistant_access::with_plan_authority(&app, &request.preview_id, || {
+        take_matching_preview(&state, &request)
+    })?;
+    crate::assistant_access::register_plan_cancellation(
+        &app,
+        &request.preview_id,
+        &state.cancellation,
+    )?;
     let database_path = database_path(&app)?;
     let workspace = app
         .path()
@@ -420,7 +428,9 @@ pub(crate) async fn execute_docker_cleanup(
     let closed = Arc::clone(&state.closed);
     let active_cleanup_child = Arc::clone(&state.active_cleanup_child);
     let task_app = app.clone();
+    let preview_id = request.preview_id;
     tauri::async_runtime::spawn_blocking(move || {
+        crate::assistant_access::require_plan_current(&task_app, &preview_id)?;
         run_cleanup_operation(DockerCleanupRun {
             app: &task_app,
             database_path: &database_path,

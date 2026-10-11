@@ -10,12 +10,16 @@ import { StorageTreemapPanel } from "./components/StorageTreemapPanel";
 import { AssistantAppToolReview } from "./components/AssistantAppToolCard";
 import { LanguageProvider } from "./i18n";
 import { LANGUAGE_STORAGE_KEY } from "./i18n/preference";
-import { confirmAssistantEmptyPlan, confirmAssistantFilePlan } from "./lib/bridge";
+import { configureAssistantPermissionMode, confirmAssistantEmptyPlan, confirmAssistantFilePlan } from "./lib/bridge";
+import { isAssistantPermissionMode } from "./lib/assistantPermissionMode";
 import { DEFAULT_SCAN_CONFIG } from "./types";
-import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantProviderModel, AssistantProviderStatus, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
+import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantFileAccessAction, AssistantPermissionMode, AssistantProviderModel, AssistantProviderStatus, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
 import "./App.css";
 
 const params = new URLSearchParams(window.location.search);
+const initialAccessMode = params.get("chat-access");
+let accessMode: AssistantPermissionMode | undefined = isAssistantPermissionMode(initialAccessMode) ? initialAccessMode : undefined;
+let accessQueries = 0;
 const multiProviderModels = params.has("multi-provider");
 const modelsMode = params.has("models") || multiProviderModels;
 window.localStorage.setItem(LANGUAGE_STORAGE_KEY, params.get("language") ?? "ko");
@@ -99,12 +103,12 @@ function syntheticCliProvider(provider: AssistantProviderStatus["provider"], lab
   const providerState = params.get("provider-state");
   if ((provider === "grok" || provider === "antigravity")
     && ["notInstalled", "broken", "incompatible", "loginRequired", "serviceUnavailable", "checkFailed", "noModels"].includes(providerState ?? "")) {
-    return { provider, label: `${label} · QA mock`, installed: providerState !== "notInstalled",
+    return { provider, label, installed: providerState !== "notInstalled",
       authentication: providerState === "loginRequired" ? "required" : "unknown", available: false, busy,
       detail: "Synthetic missing catalog — no CLI operations", state: providerState as AssistantProviderStatus["state"],
       executablePath: null, version: "fixture", modelSelection: "optional", modelCatalogSource: "unavailable", models: [] };
   }
-  return { provider, label: `${label} · QA mock`, installed: true, authentication: "authenticated",
+  return { provider, label, installed: true, authentication: "authenticated",
     available: true, busy, detail: "Synthetic CLI metadata — no AI requests", state: "ready", executablePath: null,
     version: "fixture", modelSelection: params.has("old-host") ? undefined : "optional",
     modelCatalogSource: params.has("no-catalog") ? "unavailable" : "cli",
@@ -114,12 +118,35 @@ function syntheticCliProvider(provider: AssistantProviderStatus["provider"], lab
 
 function invokeFixture(command: string, raw: unknown) {
   const args = raw as Record<string, unknown>;
+  if (command === "configure_assistant_permission_mode") {
+    if (params.has("permission-save-error")) throw new Error("Synthetic permission save failure");
+    if (!isAssistantPermissionMode(args.mode)) throw new Error("Invalid synthetic permission mode");
+    const apply = () => { accessMode = args.mode as AssistantPermissionMode; fileWorkspace = null; workspace = null;
+      return clone({ ...control, assistantPermissionMode: accessMode, permissionLifetime: "session" }); };
+    return params.has("permission-delayed") ? new Promise(resolve => setTimeout(() => resolve(apply()), 900)) : apply();
+  }
+  if (command === "assistant_file_access_action") {
+    if (accessMode !== "full_access") throw new Error("Full access required");
+    accessQueries++;
+    const operation = args.operation as AssistantFileAccessAction;
+    if (operation.kind === "open_volume" || operation.kind === "open_search_result") {
+      fileWorkspace = { ...clone(fileSeed), automaticTrashEligible: false };
+      return { source: "broomsweepy", capability: "files.workspace", status: "completed", capturedAtUnixMs: now,
+        truncated: false, data: { workspace: { revision: fileWorkspace.revision, freshScan: true } },
+        presentation: { view: "overview", reviewKind: "files", workspaceKey: session.session.id, workspace: clone(fileWorkspace) } } satisfies AppToolResult;
+    }
+    return { source: "broomsweepy", capability: "files.workspace", status: "completed", capturedAtUnixMs: now,
+      truncated: params.has("access-partial"), data: operation.kind === "volumes"
+        ? { nativeOnly: true, accessKind: "volumes", revision: "fixture-access", volumes: [{ id: "fixture-volume", name: "Synthetic local disk", fileSystem: "APFS", totalBytes: 256_000_000_000, availableBytes: 5_000_000_000, readOnly: false }] }
+        : { nativeOnly: true, accessKind: "search", revision: "fixture-access", query: operation.query, volumes: [{ id: "fixture-volume", name: "Synthetic local disk" }], scannedVolumes: 1, totalVolumes: 1, partial: params.has("access-partial"), entries: [{ id: "fixture-search-1", name: "Synthetic folder", volumeId: "fixture-volume", volumeName: "Synthetic local disk", isDirectory: true, logicalBytes: null }] },
+      presentation: { view: "overview", reviewKind: "fileAccess", workspaceKey: session.session.id } } satisfies AppToolResult;
+  }
   if (command === "set_application_language") return null;
   if (command === "get_mcp_registration_statuses") return [];
   if (command === "get_assistant_provider_status" && modelsMode) {
     const modelBusy = params.has("models-busy") && modelStatusChecks++ === 0;
     return [
-    { provider: "codex", label: "Codex · QA mock", installed: true, authentication: "authenticated",
+    { provider: "codex", label: "Codex", installed: true, authentication: "authenticated",
       available: true, busy: modelBusy, detail: "Synthetic catalog — no AI requests", state: "ready", executablePath: null,
       version: "fixture", modelSelection: params.has("old-host") ? undefined : "optional", modelCatalogSource: params.has("bundled") ? "bundled" : params.has("no-catalog") ? "unavailable" : "cli",
       models: params.has("no-catalog") ? [] : [{ id: "fixture-fast", label: "Fast · synthetic",
@@ -142,11 +169,11 @@ function invokeFixture(command: string, raw: unknown) {
         supportedReasoningEfforts: ["low", "medium", "high"], defaultReasoningEffort: null })),
       ...["high", "low"].map(effort => ({ id: `gemini-3.1-pro-${effort}`, label: `Gemini 3.1 Pro ${effort} · QA mock`,
         supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: null })),
-    ], modelBusy)] : [{ provider: "claudeCode", label: "Claude Code · QA mock", installed: true, authentication: "authenticated",
+    ], modelBusy)] : [{ provider: "claudeCode", label: "Claude Code", installed: true, authentication: "authenticated",
       available: true, busy: modelBusy, detail: "Synthetic aliases — no AI requests", state: "ready", executablePath: null,
       version: "fixture", modelSelection: "optional", modelCatalogSource: "aliases",
       models: [{ id: "sonnet", label: "Sonnet" }, { id: "opus", label: "Opus" }, { id: "haiku", label: "Haiku" }] }]),
-    { provider: "ollama", label: "Ollama · QA mock", installed: true, authentication: "notRequired",
+    { provider: "ollama", label: "Ollama", installed: true, authentication: "notRequired",
       available: true, busy: modelBusy, detail: "Synthetic installed models — no AI requests", state: "ready", executablePath: null,
       version: "fixture", modelSelection: "required", modelCatalogSource: "installed",
       models: [{ id: "fixture-local:small", label: "Local · synthetic" }] },
@@ -347,9 +374,10 @@ function prepareFiles() {
 }
 const noop = () => undefined;
 function Fixture() {
-  useSyncExternalStore(listener => { counterListeners.add(listener); return () => { counterListeners.delete(listener); }; }, () => `${preparations}-${executions}-${queries}-${externalCancels}`);
-  const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, chatTrashWithoutConfirmation: automaticAllowed, permissionLifetime: params.has("remember") ? "remember" : "session" });
+  useSyncExternalStore(listener => { counterListeners.add(listener); return () => { counterListeners.delete(listener); }; }, () => `${preparations}-${executions}-${queries}-${externalCancels}-${accessQueries}`);
+  const [permissionStatus, setPermissionStatus] = useState<ControlStatus>({ ...control, assistantPermissionMode: accessMode, chatTrashWithoutConfirmation: automaticAllowed, permissionLifetime: params.has("remember") ? "remember" : "session" });
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [permissionUpdating, setPermissionUpdating] = useState(false);
   const [view, setView] = useState<ViewId>(params.get("view") === "settings" ? "settings" : "assistant");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [appReview, setAppReview] = useState<AppToolResult | null>(externalFileMode ? externalFileResult : null);
@@ -358,6 +386,14 @@ function Fixture() {
   const [showMap, setShowMap] = useState(false);
   const acceptMap = useCallback((report: DirectoryScanReport, open: boolean) => { setMap(report); if (open) setShowMap(true); }, []);
   const controlSettings = { status: permissionStatus, canEnableSearch: false, updatingSearchAccess: false, searchAccessError: null,
+    permissionControlsLocked: permissionUpdating, updatingPermissionLifetime: permissionUpdating,
+    onAssistantPermissionModeChange: async (mode: AssistantPermissionMode) => {
+      if (permissionUpdating) return;
+      setPermissionUpdating(true); setPermissionError(null);
+      try { setPermissionStatus(await configureAssistantPermissionMode(mode)); }
+      catch (reason) { setPermissionError(String(reason)); }
+      finally { setPermissionUpdating(false); }
+    },
     permissionLifetimeError: permissionError, onPermissionLifetimeChange: (lifetime: PermissionLifetime) => {
       if (params.has("permission-save-error")) { setPermissionError("합성 저장 실패 · 기존 유지 방식은 바꾸지 않았습니다."); return; }
       setPermissionError(null); setPermissionStatus(current => ({ ...current, permissionLifetime: lifetime }));
@@ -370,6 +406,7 @@ function Fixture() {
       selectionBlocked={false} dockerEnabled={false} onMobileNavigationChange={setMobileOpen} onNavigate={setView} onPickFolder={noop}>
     <p role="note" style={{ margin: "4px 0", fontSize: 14 }}>합성 QA · 실제 파일 작업/AI 전송 없음</p>
     <output id="fixture-executions">Mock executions: 0</output>
+    {initialAccessMode ? <output data-testid="permission-fixture-status">Mock permission: {permissionStatus.assistantPermissionMode} · Mock access queries: {accessQueries}</output> : null}
     <output>Shared map: {map?.root ?? "none"} · {map?.totalLogicalBytes ?? 0} B</output>
     {showMap ? <><button type="button" className="secondary-button" onClick={() => setShowMap(false)}>대화로 돌아가기</button>
       <StorageTreemapPanel root={map?.root ?? null} report={map} progress={null} state="success" error={null}
@@ -386,4 +423,6 @@ function Fixture() {
     {modelsMode ? <output data-testid="model-fixture-request">Mock provider: {lastModelProvider} · Mock model: {lastModel ?? "CLI default"} · Mock reasoning effort: {lastReasoningEffort ?? "CLI default"}</output> : null}
   </>;
 }
-createRoot(document.getElementById("root")!).render(<LanguageProvider><Fixture /></LanguageProvider>);
+const fixtureRoot = createRoot(document.getElementById("root")!);
+fixtureRoot.render(<LanguageProvider><Fixture /></LanguageProvider>);
+import.meta.hot?.dispose(() => fixtureRoot.unmount());

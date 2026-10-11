@@ -4,8 +4,9 @@ import { useLanguage, type MessageKey } from "../i18n";
 import { cancelExternalFilePlan, cleanAppMemory, confirmExternalFilePlan, executeGracefulProcessTermination } from "../lib/bridge";
 import { externalFileReviewDecision, preparedExternalFileWorkspace } from "../lib/externalFileReview";
 import { formatBytes, formatCount, formatDate } from "../lib/format";
+import { fileChangeReviewDisposition, fileChangeReviewKind, fileChangeReviewPhase, fileChangeReviewReason, type FileChangeReviewEntry, type FileChangeReviewPhase } from "../lib/fileChangeReview";
 import type { ApplicationInventory, ApplicationTrashPlan } from "../lib/applicationTypes";
-import type { AppToolResult, AssistantFileWorkspace, DockerCleanupPreview, DockerManagementStatus, TerminationPreview, TrashOperationResult, ViewId } from "../types";
+import type { AppToolResult, AssistantFileAccessAction, AssistantFileWorkspace, DockerCleanupPreview, DockerManagementStatus, TerminationPreview, TrashOperationResult, ViewId } from "../types";
 import { ApplicationReview, type ReviewTarget } from "../views/ApplicationsView";
 import { DockerCleanupDialog } from "./DockerCleanupDialog";
 import { ProcessTerminationDialog } from "./ProcessTerminationDialog";
@@ -15,6 +16,7 @@ import "./AssistantAppToolCard.css";
 
 export const appToolTitles: Record<string, MessageKey> = {
   "files.workspace": "파일 검사", "empty.workspace": "빈 폴더",
+  "files.changes": "변경 파일 검토",
   "storage.overview": "드라이브 사용량", "performance.inspect": "시스템 성능",
   "applications.list": "설치된 앱", "applications.inspect": "관련 데이터 검토",
   "applications.review": "앱 본체 정리 검토", "processes.review": "정상 종료 요청",
@@ -46,26 +48,35 @@ export function appToolView(result: AppToolResult): ViewId | null {
   if (result.capability === "documents.search" || result.capability === "index.status" && result.data.source === "documents") return "documents";
   if (result.capability.startsWith("cleanup.")) return "cleanup";
   if (result.capability === "storage.scan") return "large-files";
+  if (result.capability === "files.changes") return "settings";
   return null;
 }
 
-export function AssistantAppToolCard({ result, busy = false, onView, onReview }: {
+export function AssistantAppToolCard({ result, busy = false, onView, onReview, onFileAccessAction }: {
   result: AppToolResult; busy?: boolean;
   onView?: (result: AppToolResult) => void;
   onReview?: (result: AppToolResult) => void;
+  onFileAccessAction?: (action: AssistantFileAccessAction) => void;
 }) {
   const { t } = useLanguage();
   const data = object(result.data);
   const memory = object(data.memory);
-  const items = rows(data.items ?? data.results ?? data.relatedData ?? data.categories ?? data.volumes);
+  const accessSearch = data.accessKind === "search";
+  const items = rows(accessSearch ? data.entries : data.items ?? data.results ?? data.relatedData ?? data.categories ?? data.volumes ?? data.entries);
+  const [accessQuery, setAccessQuery] = useState("");
+  const fileAccess = result.capability === "files.workspace" && data.nativeOnly === true && result.presentation?.reviewKind === "fileAccess";
   const application = object(data.application);
   const index = object(data.index);
-  const incomplete = result.truncated || data.truncated === true || data.sourceMayBeIncomplete === true;
-  const view = appToolView(result);
+  const incomplete = result.truncated || data.truncated === true || data.sourceMayBeIncomplete === true || data.partial === true;
+  const view = fileAccess ? null : appToolView(result);
   const measuredAt = number(data.capturedAtUnixMs) ?? result.capturedAtUnixMs;
   return <section className="assistant-app-tool-card" aria-label={t("앱에서 확인한 결과")}>
     <header><div><p className="eyebrow">BroomSweepy</p><h3>{t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}</h3></div><span className="assistant-app-tool-state">{t(appToolStatusKeys[result.status])}</span></header>
     <p className="assistant-app-tool-meta">{t("실제 앱 조회 · {{date}}", { date: formatDate(measuredAt) })}</p>
+    {result.capability === "files.changes" ? <>
+      {text(data.phase) ? <p>{t(fileChangeReviewPhase(text(data.phase) as FileChangeReviewPhase) as MessageKey)}</p> : null}
+      <p>{t("넘김은 안전 판정이 아닙니다. 같은 파일이 다시 바뀌면 새 기록으로 검토합니다.")}</p>
+    </> : null}
     {result.capability === "performance.inspect" ? <dl className="assistant-app-tool-metrics">
       <div><dt>CPU</dt><dd>{number(data.cpuUsagePercent)?.toFixed(1) ?? "—"}%</dd></div>
       <div><dt>{t("메모리")}</dt><dd>{number(memory.usedBytes) === null ? "—" : formatBytes(number(memory.usedBytes)!)} / {number(memory.totalBytes) === null ? "—" : formatBytes(number(memory.totalBytes)!)}</dd></div>
@@ -84,20 +95,40 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview }:
           {text(item.displayVersion) ? <span>{t("버전 {{version}}", { version: text(item.displayVersion) })}</span> : null}
           {text(item.snippet) ? <p>{text(item.snippet)}</p> : null}
           {text(item.protectionReason) ? <span>{text(item.protectionReason)}</span> : null}
+          {text(item.volumeName) ? <span>{text(item.volumeName)}</span> : null}
+          {result.capability === "files.changes" ? <>
+            <span>{t(fileChangeReviewKind(text(item.kind) as FileChangeReviewEntry["kind"]) as MessageKey)} · {t(fileChangeReviewDisposition({ reviewState: item.reviewState === "review_needed" ? "review_needed" : "skipped", decisionSource: item.decisionSource === "manual" ? "manual" : "rule" }) as MessageKey)}</span>
+            {Array.isArray(item.reasons) ? <p>{item.reasons.filter((reason): reason is string => typeof reason === "string").map((reason) => t(fileChangeReviewReason(reason) as MessageKey)).join(" · ")}</p> : null}
+          </> : null}
         </div><div className="assistant-app-tool-values">
           {cpu !== null ? <span>CPU {cpu.toFixed(1)}%</span> : null}
           <span>{size === null ? t("용량 미측정") : formatBytes(size)}</span>
           {number(item.modifiedAtUnixMs) !== null ? <span>{formatDate(number(item.modifiedAtUnixMs)!)}</span> : null}
+          {fileAccess && onFileAccessAction && text(data.revision) && text(item.id) ? <button type="button" className="text-button" disabled={busy}
+            onClick={() => onFileAccessAction(accessSearch
+              ? { kind: "open_search_result", revision: text(data.revision), entryId: text(item.id) }
+              : { kind: "open_volume", revision: text(data.revision), volumeId: text(item.id) })}>
+            {t("이 대상 열기")}
+          </button> : null}
         </div>
       </li>;
     })}</ol> : null}
     {number(data.returnedCount ?? data.matchedCount) !== null ? <p>{t("{{count}}개", { count: formatCount(number(data.returnedCount ?? data.matchedCount)!) })}</p> : null}
+    {fileAccess && number(data.scannedVolumes) !== null ? <p>{t("{{count}}개 볼륨 확인", { count: formatCount(number(data.scannedVolumes)!) })}</p> : null}
     {typeof data.message === "string" ? <p>{data.message}</p> : null}
     {typeof data.reason === "string" ? <p>{data.reason}</p> : null}
     {typeof data.state === "string" ? <p>{data.state}</p> : null}
     {incomplete ? <p className="assistant-app-tool-warning">{t("부분 결과입니다. 생략된 항목이나 읽지 못한 자료가 있을 수 있습니다.")}</p> : null}
     {data.contentExcerptsShared === true ? <p>{t("허용된 문서 이름과 일치 본문 일부를 AI에 전달했습니다.")}</p> : null}
     {result.status === "review_required" ? <p><ShieldCheck size={16} aria-hidden="true" /> {t("검토만 준비됐습니다. 실제 실행은 앱에서 최종 확인해야 합니다.")}</p> : null}
+    {fileAccess && onFileAccessAction ? <form className="assistant-file-review__search" onSubmit={event => {
+      event.preventDefault();
+      if (!busy && accessQuery.trim()) onFileAccessAction({ kind: "search_all", query: accessQuery.trim() });
+    }}><input type="search" name="assistant-local-drive-search" autoComplete="off" maxLength={240}
+      aria-label={t("전체 로컬 드라이브 검색")} placeholder={t("파일·폴더 이름 검색")}
+      value={accessQuery} disabled={busy} onChange={event => setAccessQuery(event.currentTarget.value)} />
+      <button type="submit" className="secondary-button" disabled={busy || !accessQuery.trim()}>{t("검색")}</button>
+    </form> : null}
     <footer>
       {result.status === "review_required" && result.presentation && onReview ? <button type="button" className="secondary-button" disabled={busy} onClick={() => onReview(result)}>{t("검토 열기")}</button> : null}
       {view && onView ? <button type="button" className="text-button" disabled={busy} onClick={() => onView(result)}><ExternalLink size={16} aria-hidden="true" />{t("이 결과 화면 보기")}</button> : null}
@@ -170,7 +201,7 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
     if (running || busy || consumed.current) return;
     consumed.current = true; setRunning(true); onBusyChange?.(true);
     try {
-      const actual = await cleanAppMemory();
+      const actual = await cleanAppMemory(number(presentation.assistantPermissionEpoch) ?? undefined);
       const message = actual.outcome !== "completed" ? t("메모리 정리를 완료하지 못했습니다. {{detail}}", { detail: actual.outcome })
         : actual.allocatorReleasedBytes > 0 ? t("BroomSweepy가 {{amount}}의 자체 메모리를 macOS에 반환했습니다.", { amount: formatBytes(actual.allocatorReleasedBytes) })
         : t("메모리 정리를 완료했습니다. 현재 반환 가능한 자체 메모리는 없습니다.");

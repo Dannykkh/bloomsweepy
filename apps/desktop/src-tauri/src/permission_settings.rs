@@ -21,6 +21,29 @@ pub(crate) enum PermissionLifetime {
     Remember,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AssistantPermissionMode {
+    ReadOnly,
+    #[default]
+    Confirm,
+    FullAccess,
+}
+
+impl AssistantPermissionMode {
+    pub(crate) fn allows_review(self) -> bool {
+        self != Self::ReadOnly
+    }
+
+    fn level(self) -> u8 {
+        match self {
+            Self::ReadOnly => 0,
+            Self::Confirm => 1,
+            Self::FullAccess => 2,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct ApprovedRoot {
@@ -67,6 +90,8 @@ pub(crate) struct PermissionPreferences {
     pub inspection_allowed: bool,
     #[serde(default)]
     pub chat_trash_without_confirmation: bool,
+    #[serde(default)]
+    pub assistant_permission_mode: AssistantPermissionMode,
     pub file_root: Option<ApprovedRoot>,
     pub document_root: Option<ApprovedRoot>,
     pub scan: Option<ScanGrant>,
@@ -80,6 +105,7 @@ impl Default for PermissionPreferences {
             lifetime: PermissionLifetime::Session,
             inspection_allowed: false,
             chat_trash_without_confirmation: false,
+            assistant_permission_mode: AssistantPermissionMode::Confirm,
             file_root: None,
             document_root: None,
             scan: None,
@@ -123,6 +149,7 @@ impl PermissionPreferences {
             })
         };
         (!self.inspection_allowed || previous.inspection_allowed)
+            && self.assistant_permission_mode.level() <= previous.assistant_permission_mode.level()
             && (!self.chat_trash_without_confirmation || previous.chat_trash_without_confirmation)
             && root_subset(&self.file_root, &previous.file_root)
             && root_subset(&self.document_root, &previous.document_root)
@@ -187,6 +214,7 @@ pub(crate) fn load(path: &Path) -> Result<PermissionPreferences, String> {
         || (settings.lifetime == PermissionLifetime::Session
             && (settings.inspection_allowed
                 || settings.chat_trash_without_confirmation
+                || settings.assistant_permission_mode != AssistantPermissionMode::Confirm
                 || settings.file_root.is_some()
                 || settings.document_root.is_some()
                 || settings.scan.is_some()
@@ -278,6 +306,44 @@ mod tests {
         assert_eq!(restored.scan.as_ref().unwrap().approved_at_unix_ms, 123);
         assert_eq!(restored.cleanup_approved_at_unix_ms, Some(456));
         assert!(!restored.revalidate());
+    }
+
+    #[test]
+    fn native_chat_mode_is_explicit_lifetime_bound_and_never_inferred_from_legacy_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("native-mode.sqlite3");
+        let default = PermissionPreferences::default();
+        assert_eq!(
+            default.assistant_permission_mode,
+            AssistantPermissionMode::Confirm
+        );
+        let mut settings = remembered(dir.path());
+        settings.chat_trash_without_confirmation = true;
+        let mut old = serde_json::to_value(&settings).unwrap();
+        old.as_object_mut()
+            .unwrap()
+            .remove("assistantPermissionMode");
+        let restored: PermissionPreferences = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            restored.assistant_permission_mode,
+            AssistantPermissionMode::Confirm
+        );
+        settings.assistant_permission_mode = AssistantPermissionMode::FullAccess;
+        assert!(!settings.only_restricts(&restored));
+        save(&path, &settings).unwrap();
+        assert_eq!(
+            load(&path).unwrap().assistant_permission_mode,
+            AssistantPermissionMode::FullAccess
+        );
+        let mut restricted = settings.clone();
+        restricted.assistant_permission_mode = AssistantPermissionMode::ReadOnly;
+        assert!(restricted.only_restricts(&settings));
+        settings.lifetime = PermissionLifetime::Session;
+        save(&path, &settings).unwrap();
+        assert_eq!(
+            load(&path).unwrap().assistant_permission_mode,
+            AssistantPermissionMode::Confirm
+        );
     }
 
     #[test]
@@ -434,6 +500,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "assistantPermissionMode",
                 "chatTrashWithoutConfirmation",
                 "cleanupApprovedAtUnixMs",
                 "documentRoot",

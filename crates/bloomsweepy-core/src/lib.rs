@@ -14,6 +14,7 @@ mod document_search;
 mod document_worker;
 mod drive;
 mod file_catalog;
+mod file_change_review;
 mod index_budget;
 mod local_search;
 mod resource_guard;
@@ -49,7 +50,7 @@ pub use cleanup::{
 
 pub use directory::{
     DirectoryNode, DirectoryScanConfig, DirectoryScanProgress, DirectoryScanReport, EmptyDirectory,
-    scan_directory_level,
+    scan_directory_level, scan_local_volume_directory_level,
 };
 pub use document_search::{
     DocumentFormat, DocumentIndexConfig, DocumentIndexIssue, DocumentIndexPhase,
@@ -70,7 +71,14 @@ pub use file_catalog::{
     FileCatalogStatus, build_file_catalog, clear_file_catalog, file_catalog_status,
     recent_file_catalog_entries, search_file_catalog, search_file_catalog_with_cancellation,
 };
-pub use local_search::{LocalSearchReport, search_local_entries, validate_local_directory_path};
+pub use file_change_review::{
+    FileChangeEntry, FileChangeKind, FileChangeReport, FileChangeSnapshot, FileReviewState,
+    capture_file_change_snapshot, compare_file_change_snapshots,
+};
+pub use local_search::{
+    LocalSearchReport, search_local_entries, search_local_volume_entries,
+    validate_local_directory_path, validate_local_volume_directory,
+};
 
 const HASH_CHUNK_BYTES: usize = 64 * 1024;
 const COMPARE_CHUNK_BYTES: usize = 256 * 1024;

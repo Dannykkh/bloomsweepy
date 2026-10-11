@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+use std::{fs, io};
 
 use super::{ScanError, ScanIssue, push_issue, system_time_ms};
 
@@ -11,6 +12,8 @@ const MAX_EMPTY_DIRECTORY_RESULTS: usize = 10_000;
 const MAX_DIRECTORY_ISSUES: usize = 1_000;
 const MAX_TRACKED_CHILD_PATH_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EMPTY_DIRECTORY_PATH_BYTES: usize = 4 * 1024 * 1024;
+const MAX_LOCAL_VOLUME_VISITED: usize = 250_000;
+const MAX_LOCAL_VOLUME_DURATION: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -123,8 +126,55 @@ struct NodeAccumulator {
 pub fn scan_directory_level<F, C>(
     root: impl AsRef<Path>,
     config: DirectoryScanConfig,
+    on_progress: F,
+    should_cancel: C,
+) -> Result<DirectoryScanReport, ScanError>
+where
+    F: FnMut(DirectoryScanProgress),
+    C: Fn() -> bool,
+{
+    scan_directory_level_inner(root.as_ref(), config, on_progress, should_cancel, None)
+}
+
+/// A bounded current-folder map confined to one local mounted volume.
+/// Any omitted boundary or unfinished traversal makes the report read-only.
+pub fn scan_local_volume_directory_level<F, C>(
+    root: impl AsRef<Path>,
+    config: DirectoryScanConfig,
+    excluded_roots: &[PathBuf],
+    on_progress: F,
+    should_cancel: C,
+) -> Result<DirectoryScanReport, ScanError>
+where
+    F: FnMut(DirectoryScanProgress),
+    C: Fn() -> bool,
+{
+    scan_directory_level_inner(
+        root.as_ref(),
+        config,
+        on_progress,
+        should_cancel,
+        Some(LocalVolumeScope {
+            excluded_roots,
+            max_visited: MAX_LOCAL_VOLUME_VISITED,
+            max_duration: MAX_LOCAL_VOLUME_DURATION,
+        }),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct LocalVolumeScope<'a> {
+    excluded_roots: &'a [PathBuf],
+    max_visited: usize,
+    max_duration: Duration,
+}
+
+fn scan_directory_level_inner<F, C>(
+    requested_root: &Path,
+    config: DirectoryScanConfig,
     mut on_progress: F,
     should_cancel: C,
+    local_volume: Option<LocalVolumeScope<'_>>,
 ) -> Result<DirectoryScanReport, ScanError>
 where
     F: FnMut(DirectoryScanProgress),
@@ -140,7 +190,14 @@ where
         .max_empty_directories
         .min(MAX_EMPTY_DIRECTORY_RESULTS);
     let max_issues = config.max_issues.min(MAX_DIRECTORY_ISSUES);
-    let requested_root = root.as_ref();
+    let validated_root = if local_volume.is_some() {
+        if should_cancel() {
+            return Err(ScanError::Cancelled);
+        }
+        Some(crate::validate_local_volume_directory(requested_root)?)
+    } else {
+        None
+    };
     crate::scan_policy::ensure_local_path(requested_root).map_err(ScanError::Access)?;
 
     if !requested_root.exists() {
@@ -154,10 +211,23 @@ where
         ));
     }
 
-    let root = requested_root
-        .canonicalize()
-        .map_err(|error| ScanError::Access(error.to_string()))?;
+    let root = if let Some(root) = validated_root {
+        root
+    } else {
+        requested_root
+            .canonicalize()
+            .map_err(|error| ScanError::Access(error.to_string()))?
+    };
     crate::scan_policy::ensure_local_path(&root).map_err(ScanError::Access)?;
+    let root_identity = if local_volume.is_some() {
+        let metadata =
+            fs::symlink_metadata(&root).map_err(|error| ScanError::Access(error.to_string()))?;
+        Some(crate::local_search::required_directory_identity(
+            &root, &metadata,
+        )?)
+    } else {
+        None
+    };
 
     on_progress(DirectoryScanProgress {
         message: "현재 폴더의 용량 지도를 만들고 있습니다".to_owned(),
@@ -180,18 +250,81 @@ where
     let mut total_logical_bytes = 0_u64;
     let mut unreadable_entries = 0_u64;
     let mut tracking_limit_reached = false;
-
-    for item in crate::streaming_walk::StreamingWalk::new(&root, &should_cancel) {
+    let mut scope_incomplete = false;
+    let root_changed = std::cell::Cell::new(false);
+    let stop_walk = || {
+        should_cancel() || local_volume.is_some_and(|scope| started.elapsed() >= scope.max_duration)
+    };
+    let guard = |path: &Path, metadata: &fs::Metadata| {
+        if let Some(identity) = root_identity
+            && path == root.as_path()
+            && crate::local_search::required_directory_identity(path, metadata)
+                .map_or(true, |current| current != identity)
+        {
+            root_changed.set(true);
+            return Err(io::Error::other("검사 대상 폴더의 신원이 변경되었습니다"));
+        }
+        Ok(())
+    };
+    let prune = |path: &Path, metadata: &fs::Metadata| {
+        let (Some(scope), Some(root_identity)) = (local_volume, root_identity) else {
+            return false;
+        };
+        scope
+            .excluded_roots
+            .iter()
+            .any(|excluded| path.starts_with(excluded))
+            || crate::file_object_identity(path, metadata)
+                .is_none_or(|identity| identity.identity.device != root_identity.device)
+            || crate::scan_policy::ensure_local_volume(path).is_err()
+    };
+    let mut walk = if let Some(scope) = local_volume {
+        crate::streaming_walk::StreamingWalk::with_directory_guard(
+            &root,
+            &stop_walk,
+            &guard,
+            scope.max_visited.saturating_add(1),
+        )
+        .with_directory_prune(&prune)
+    } else {
+        crate::streaming_walk::StreamingWalk::new(&root, &stop_walk)
+    };
+    loop {
+        if local_volume.is_some_and(|scope| {
+            started.elapsed() >= scope.max_duration
+                || walk.visited_entries().saturating_sub(1) >= scope.max_visited
+        }) {
+            scope_incomplete = true;
+            break;
+        }
+        let Some(item) = walk.next() else {
+            break;
+        };
         if should_cancel() {
             return Err(ScanError::Cancelled);
+        }
+        if root_changed.get() {
+            return Err(ScanError::Access(
+                "검사 대상 폴더의 신원이 변경되었습니다".into(),
+            ));
+        }
+        if local_volume.is_some() && walk.visit_limit_reached() {
+            scope_incomplete = true;
+            break;
+        }
+        if let Err(error) = &item
+            && error.is_resource_limit()
+        {
+            return Err(ScanError::Access(error.to_string()));
+        }
+        if local_volume.is_some_and(|scope| started.elapsed() >= scope.max_duration) {
+            scope_incomplete = true;
+            break;
         }
 
         let entry = match item {
             Ok(entry) => entry,
             Err(error) => {
-                if error.is_resource_limit() {
-                    return Err(ScanError::Access(error.to_string()));
-                }
                 unreadable_entries = unreadable_entries.saturating_add(1);
                 push_issue(
                     &mut issues,
@@ -208,6 +341,21 @@ where
         }
 
         let path = entry.path();
+        if let (Some(scope), Some(root_identity)) = (local_volume, root_identity)
+            && (scope
+                .excluded_roots
+                .iter()
+                .any(|excluded| path.starts_with(excluded))
+                || entry
+                    .metadata()
+                    .ok()
+                    .and_then(|metadata| super::file_object_identity(&path, &metadata))
+                    .is_none_or(|identity| identity.identity.device != root_identity.device))
+        {
+            scope_incomplete = true;
+            unreadable_entries = unreadable_entries.saturating_add(1);
+            continue;
+        }
         processed_entries = processed_entries.saturating_add(1);
 
         if entry.is_empty_directory() {
@@ -341,6 +489,52 @@ where
         }
     }
 
+    if local_volume.is_some() {
+        if should_cancel() {
+            return Err(ScanError::Cancelled);
+        }
+        let excluded_entries = walk.excluded_entries();
+        if excluded_entries != 0 {
+            scope_incomplete = true;
+            unreadable_entries = unreadable_entries.saturating_add(excluded_entries);
+            push_issue(
+                &mut issues,
+                max_issues,
+                Some(root.to_string_lossy().into_owned()),
+                "마운트 경계, 클라우드 또는 온라인 전용 항목을 제외한 부분 지도입니다. 삭제 검토에 사용할 수 없습니다".into(),
+            );
+        }
+        scope_incomplete |= unreadable_entries != 0;
+        drop(walk);
+        let revalidated = crate::validate_local_volume_directory(requested_root)?;
+        let metadata =
+            fs::symlink_metadata(&root).map_err(|error| ScanError::Access(error.to_string()))?;
+        if revalidated != root
+            || Some(crate::local_search::required_directory_identity(
+                &root, &metadata,
+            )?) != root_identity
+        {
+            return Err(ScanError::Access(
+                "검사 대상 폴더의 신원이 변경되었습니다".into(),
+            ));
+        }
+        if should_cancel() {
+            return Err(ScanError::Cancelled);
+        }
+        scope_incomplete |=
+            local_volume.is_some_and(|scope| started.elapsed() >= scope.max_duration);
+        if scope_incomplete {
+            tracking_limit_reached = true;
+            unreadable_entries = unreadable_entries.max(1);
+            push_issue(
+                &mut issues,
+                max_issues,
+                Some(root.to_string_lossy().into_owned()),
+                "로컬 저장장치 검사를 일부만 완료했습니다. 용량과 항목 수는 확인한 범위의 합계이며 삭제 검토에 사용할 수 없습니다".into(),
+            );
+        }
+    }
+
     on_progress(DirectoryScanProgress {
         message: "비례사각형과 빈 폴더 목록을 정리하고 있습니다".to_owned(),
         processed_entries,
@@ -350,7 +544,8 @@ where
     });
 
     empty_directories.sort_unstable_by(|left, right| left.path.cmp(&right.path));
-    let empty_directories_truncated = empty_directory_count > empty_directories.len() as u64;
+    let empty_directories_truncated =
+        scope_incomplete || empty_directory_count > empty_directories.len() as u64;
 
     let mut children: Vec<DirectoryNode> = children
         .into_values()
@@ -378,11 +573,23 @@ where
     let returned_child_bytes = children.iter().fold(0_u64, |total, child| {
         total.saturating_add(child.logical_bytes)
     });
-    let children_truncated = direct_child_count > children.len() as u64;
+    let children_truncated = scope_incomplete || direct_child_count > children.len() as u64;
     let omitted_child_count = direct_child_count.saturating_sub(children.len() as u64);
     let omitted_logical_bytes = total_logical_bytes.saturating_sub(returned_child_bytes);
 
-    if tracking_limit_reached {
+    if local_volume.is_some() && tracking_limit_reached {
+        // A partial map is display-only. Strip in-process action authority too;
+        // callers must reject its flags before starting subtree revalidation.
+        for child in &mut children {
+            child.scan_identity = None;
+            child.scan_modified_at = None;
+        }
+        for directory in &mut empty_directories {
+            directory.scan_identity = None;
+            directory.scan_modified_at = None;
+        }
+    }
+    if tracking_limit_reached && !scope_incomplete {
         push_issue(
             &mut issues,
             max_issues,
@@ -460,6 +667,143 @@ fn display_name(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn local_volume_map_keeps_complete_local_children_actionable() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("folder")).unwrap();
+        fs::write(root.join("folder/file"), b"local").unwrap();
+        let report = scan_local_volume_directory_level(
+            &root,
+            DirectoryScanConfig::default(),
+            &[],
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.total_files, 1);
+        assert_eq!(report.total_logical_bytes, 5);
+        assert!(!report.tracking_limit_reached);
+        assert_eq!(report.unreadable_entries, 0);
+        assert!(report.children[0].scan_identity.is_some());
+    }
+
+    #[test]
+    fn local_volume_map_prunes_boundaries_and_returns_a_read_only_partial_map() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let excluded = root.join("other-volume");
+        fs::create_dir(&excluded).unwrap();
+        fs::write(excluded.join("private"), b"excluded").unwrap();
+        fs::create_dir_all(root.join("Library/CloudStorage/provider")).unwrap();
+        fs::write(root.join("Library/CloudStorage/provider/private"), b"cloud").unwrap();
+        fs::create_dir(root.join("empty")).unwrap();
+        fs::write(root.join("visible"), b"local").unwrap();
+        let report = scan_local_volume_directory_level(
+            &root,
+            DirectoryScanConfig::default(),
+            &[excluded],
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.total_files, 1);
+        assert_eq!(report.total_logical_bytes, 5);
+        assert!(report.tracking_limit_reached);
+        assert!(report.children_truncated);
+        assert!(report.empty_directories_truncated);
+        assert_eq!(report.unreadable_entries, 2);
+        assert!(
+            report
+                .children
+                .iter()
+                .all(|child| child.scan_identity.is_none())
+        );
+        assert!(
+            report
+                .empty_directories
+                .iter()
+                .all(|directory| directory.scan_identity.is_none())
+        );
+        assert!(
+            report
+                .children
+                .iter()
+                .all(|child| child.name != "other-volume")
+        );
+
+        let previous =
+            scan_directory_level(&root, DirectoryScanConfig::default(), |_| {}, || false).unwrap();
+        assert_eq!(
+            previous.total_files, 2,
+            "existing engine scope must remain unchanged"
+        );
+        assert!(!previous.tracking_limit_reached);
+    }
+
+    #[test]
+    fn local_volume_map_visit_and_time_budgets_return_partial_reports() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        fs::write(root.join("one"), []).unwrap();
+        fs::write(root.join("two"), []).unwrap();
+        for scope in [
+            LocalVolumeScope {
+                excluded_roots: &[],
+                max_visited: 1,
+                max_duration: MAX_LOCAL_VOLUME_DURATION,
+            },
+            LocalVolumeScope {
+                excluded_roots: &[],
+                max_visited: MAX_LOCAL_VOLUME_VISITED,
+                max_duration: Duration::ZERO,
+            },
+        ] {
+            let report = scan_directory_level_inner(
+                &root,
+                DirectoryScanConfig::default(),
+                |_| {},
+                || false,
+                Some(scope),
+            )
+            .unwrap();
+            assert!(report.total_files <= 1);
+            assert!(report.tracking_limit_reached);
+            assert!(report.children_truncated);
+            assert!(report.unreadable_entries > 0);
+        }
+        assert!(matches!(
+            scan_local_volume_directory_level(
+                &root,
+                DirectoryScanConfig::default(),
+                &[],
+                |_| {},
+                || true
+            ),
+            Err(ScanError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn local_volume_map_rejects_root_replacement_before_enumeration() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path().canonicalize().unwrap();
+        let root = base.join("root");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file"), []).unwrap();
+        let result = scan_local_volume_directory_level(
+            &root,
+            DirectoryScanConfig::default(),
+            &[],
+            |_| {
+                fs::rename(&root, base.join("previous-root")).unwrap();
+                fs::create_dir(&root).unwrap();
+            },
+            || false,
+        );
+        assert!(matches!(result, Err(ScanError::Access(_))));
+    }
 
     #[test]
     fn aggregates_direct_children_and_finds_strictly_empty_directories() {

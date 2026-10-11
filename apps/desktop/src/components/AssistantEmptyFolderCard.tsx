@@ -6,12 +6,13 @@ import { formatCount } from "../lib/format";
 interface Props {
   workspace: AssistantEmptyWorkspace;
   busy: boolean;
+  readOnly?: boolean;
   onSelect: (ids: string[]) => void;
   onPrepare: () => void;
   onConfirm: () => void;
 }
 
-export function AssistantEmptyFolderCard({ workspace, busy, onSelect, onPrepare, onConfirm }: Props) {
+export function AssistantEmptyFolderCard({ workspace, busy, readOnly = false, onSelect, onPrepare, onConfirm }: Props) {
   const { t } = useLanguage();
   const plan = workspace.plan;
   const selected = new Set(workspace.selectedIds);
@@ -32,13 +33,13 @@ export function AssistantEmptyFolderCard({ workspace, busy, onSelect, onPrepare,
       {workspace.omittedCount > 0 ? <p role="status">{t("보호·변경·검사 상한으로 {{count}}개는 검토 목록에서 제외됐습니다. 전체를 삭제하는 작업이 아닙니다.", { count: formatCount(workspace.omittedCount) })}</p> : null}
       {workspace.summary.unreadableEntries > 0 ? <p role="status">{t("읽지 못한 항목이 있어 검사 결과가 완전하지 않을 수 있습니다.")}</p> : null}
       {!plan && rows.length > 0 ? <div className="assistant-empty-review__selection">
-        <button type="button" className="text-button" disabled={busy} onClick={() => onSelect(workspace.candidates.map((candidate) => candidate.id))}>{t("모두 선택")}</button>
-        <button type="button" className="text-button" disabled={busy} onClick={() => onSelect([])}>{t("선택 해제")}</button>
+        <button type="button" className="text-button" disabled={busy || readOnly} onClick={() => onSelect(workspace.candidates.map((candidate) => candidate.id))}>{t("모두 선택")}</button>
+        <button type="button" className="text-button" disabled={busy || readOnly} onClick={() => onSelect([])}>{t("선택 해제")}</button>
       </div> : null}
       <ul className="assistant-empty-review__list">
         {rows.map((candidate) => <li key={candidate.id}>
           <label>
-            {!plan ? <input type="checkbox" checked={selected.has(candidate.id)} disabled={busy}
+            {!plan ? <input type="checkbox" checked={selected.has(candidate.id)} disabled={busy || readOnly}
               onChange={(event) => onSelect(event.currentTarget.checked
                 ? [...workspace.selectedIds, candidate.id] : workspace.selectedIds.filter((id) => id !== candidate.id))} /> : <FolderOpen size={16} aria-hidden="true" />}
             <span><strong>{candidate.number}. {candidate.name}</strong><small dir="auto">{candidate.path}</small></span>
@@ -49,7 +50,7 @@ export function AssistantEmptyFolderCard({ workspace, busy, onSelect, onPrepare,
       {plan ? <p>{t("휴지통으로 이동할까요?")} {t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
       <footer className="assistant-trash-question-actions">
         <small>{t("파일 내용은 읽지 않습니다. 빈 폴더 정리는 큰 용량 확보를 보장하지 않습니다.")}</small>
-        {plan ? <>
+        {readOnly ? <small>{t("조회만 모드에서는 검토나 실행을 준비하지 않습니다.")}</small> : plan ? <>
           <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect([])}>{t("아니오")}</button>
           <button type="button" className="trash-confirm-button" disabled={busy} onClick={onConfirm}>
             <Trash2 size={16} aria-hidden="true" />{t("예, {{count}}개 휴지통으로 이동", { count: formatCount(plan.candidateIds.length) })}

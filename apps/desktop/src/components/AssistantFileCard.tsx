@@ -6,8 +6,8 @@ import type { AssistantFileAction, AssistantFileWorkspace } from "../types";
 import { FileInspectionStatus, FileOpenActions, useFileInspectionActions } from "./FileOpenActions";
 import "./AssistantFileCard.css";
 
-export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepare, onConfirm, onShowMap, onOpenCleanupTree }: {
-  workspace: AssistantFileWorkspace; busy: boolean;
+export function AssistantFileCard({ workspace, busy, readOnly = false, onAction, onSelect, onPrepare, onConfirm, onShowMap, onOpenCleanupTree }: {
+  workspace: AssistantFileWorkspace; busy: boolean; readOnly?: boolean;
   onAction: (action: AssistantFileAction) => void;
   onSelect: (ids: string[]) => void; onPrepare: () => void; onConfirm: (nestedAck: boolean) => void;
   onShowMap: () => void;
@@ -41,8 +41,8 @@ export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepa
         {workspace.mapGeneration !== null ? <button type="button" className="text-button" disabled={busy} onClick={onShowMap}><Map size={16} aria-hidden="true" />{t("같은 결과 용량지도 보기")}</button> : null}
         {workspace.canGoUp ? <button type="button" className="text-button" disabled={busy} onClick={() => onAction({ kind: "parent", revision: workspace.revision })}><ArrowLeft size={16} aria-hidden="true" />{t("상위 폴더")}</button> : null}
         <button type="button" className="text-button" disabled={busy} onClick={() => onAction({ kind: "scan" })}><RefreshCw size={16} aria-hidden="true" />{workspace.query ? t("현재 폴더 목록 보기") : t("다시 검사")}</button>
-        <button type="button" className="text-button" disabled={busy || !rows.length} onClick={() => onSelect([...new Set([...workspace.selectedIds, ...rows.map((entry) => entry.id)])])}>{t("현재 페이지 선택")}</button>
-        <button type="button" className="text-button" disabled={busy || !selected.size} onClick={() => onSelect([])}>{t("선택 해제")}</button>
+        <button type="button" className="text-button" disabled={busy || readOnly || !rows.length} onClick={() => onSelect([...new Set([...workspace.selectedIds, ...rows.map((entry) => entry.id)])])}>{t("현재 페이지 선택")}</button>
+        <button type="button" className="text-button" disabled={busy || readOnly || !selected.size} onClick={() => onSelect([])}>{t("선택 해제")}</button>
       </div>
     </> : null}
     {!plan && workspace.sizeRanked ? <p>{t("현재 폴더의 직계 항목을 용량순으로 검사했습니다. 폴더 용량은 하위 항목의 합계입니다.")} {t("용량만으로 삭제 안전성을 판단할 수 없습니다. 하위 항목·필요 여부·백업을 먼저 확인하세요.")}</p> : null}
@@ -51,7 +51,7 @@ export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepa
     <ul className="assistant-empty-review__list assistant-file-review__list">
       {rows.map((entry) => <li key={entry.id}>
         <div className="assistant-file-review__identity"><label>
-          {!plan ? <input type="checkbox" checked={selected.has(entry.id)} disabled={busy} onChange={(event) => onSelect(event.currentTarget.checked ? [...workspace.selectedIds, entry.id] : workspace.selectedIds.filter((id) => id !== entry.id))} /> : null}
+          {!plan ? <input type="checkbox" aria-label={entry.name} checked={selected.has(entry.id)} disabled={busy || readOnly} onChange={(event) => onSelect(event.currentTarget.checked ? [...workspace.selectedIds, entry.id] : workspace.selectedIds.filter((id) => id !== entry.id))} /> : null}
           {entry.isDirectory ? <FolderOpen size={17} aria-hidden="true" /> : <File size={17} aria-hidden="true" />}
           <span><strong>{entry.number}. {entry.name}</strong><small dir="auto">{entry.path}</small></span>
         </label>
@@ -76,7 +76,7 @@ export function AssistantFileCard({ workspace, busy, onAction, onSelect, onPrepa
     {plan?.requiresNestedAck ? <p>{t("선택한 폴더의 하위 항목도 함께 이동합니다.")}</p> : null}
     {plan ? <p>{t("휴지통으로 이동할까요?")} {t("이 목록만 휴지통으로 이동합니다. 실행 직전 다시 검사하며, 변경된 항목이 있으면 중단합니다.")}</p> : null}
     <footer className="assistant-trash-question-actions"><small>{t("휴지통 이동 후 운영체제에서 복원을 시도할 수 있습니다. 즉시 여유 공간이 늘어나는 것은 아닙니다.")}</small>
-      {plan ? <>
+      {readOnly ? <small>{t("조회만 모드에서는 검토나 실행을 준비하지 않습니다.")}</small> : plan ? <>
         <button type="button" className="secondary-button" disabled={busy} onClick={() => onSelect([])}>{t("아니오")}</button>
         <button type="button" className="trash-confirm-button" disabled={busy} onClick={() => onConfirm(true)}><Trash2 size={16} aria-hidden="true" />{t(plan.requiresNestedAck ? "예, 하위 항목 포함 {{count}}개 휴지통으로 이동" : "예, {{count}}개 휴지통으로 이동", { count: formatCount(plan.entries.length) })}</button>
       </> : <button type="button" className="secondary-button" disabled={busy || !selected.size} onClick={onPrepare}>{t("선택한 항목 최종 검토")}</button>}

@@ -26,9 +26,12 @@
 }
 .assistant-composer-controls__trigger:hover:not(:disabled),
 .assistant-composer-controls__trigger[aria-expanded="true"] { background: var(--surface-strong); }
-.assistant-composer-controls__model-trigger { flex: 0 1 auto; max-width: 58%; }
-.assistant-composer-controls__effort-trigger { flex: 0 1 auto; max-width: 48%; }
-.assistant-composer-controls__trigger > span,
+.assistant-composer-controls__provider-trigger { flex: 0 0 auto; }
+.assistant-composer-controls__provider-trigger > span { white-space: nowrap; }
+.assistant-composer-controls__selection-trigger { flex: 0 1 auto; }
+.assistant-composer-controls__selection-trigger > .assistant-composer-controls__model-label { flex: 0 1 auto; }
+.assistant-composer-controls__selection-trigger > .assistant-composer-controls__effort-label { flex: 0 0 auto; white-space: nowrap; }
+.assistant-composer-controls__model-label,
 .assistant-composer-controls__model-subtitle > span,
 .assistant-composer-controls__model-options button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .assistant-composer-controls__trigger > svg,
@@ -112,7 +115,6 @@
 @container (max-width: 280px) {
   .assistant-composer-controls__trigger { padding-inline: 6px; gap: 4px; }
   .assistant-composer-controls__popup { padding-inline: 12px; }
-  .assistant-composer-controls__model-trigger { max-width: 52%; }
 }
 @keyframes assistant-composer-popup-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) {

@@ -85,3 +85,16 @@ reference_last_verified: 2026-10-07 (공식 예시Grok2/Agy7·CLI 미설치 확�
 
 install_followup: 2026-10-07 (사용자 교체 요청 후 Mac잠금 해제, 기존f029c0d7… backup-8Q7RnR 보존, 현재/Applications 새5fca6b1a… 설치·실제UI 확인으로 위 NOT RUN 해소. 실제CLI 설치/계정로그인/생성 검증으로 확대하지 않는다)
 evidence(설치): conversations/2026-10-07-compact-multi-provider-composer.md#새-설치본-교체; docs/qa/2026-10-07-multi-provider-model-selection.md#후속-사용자-요청에-따른-설치-교체--2026-10-07-kst
+
+## 2026-10-08 입력창 CLI 선택 분리
+
+하단 두 trigger는 CLI / 모델·강도 통합으로 구분한다. 첫 버튼에서 실제 provider 상태 목록을
+선택하고, 둘째 popup의 모델 부제로 해당 CLI 모델 목록에 진입한다. 헤더 select는 상태·재확인으로
+대체한다. 공급자별 모델/모델별 강도 저장 계약은 그대로이며 전환으로 초안을 지우거나 요청하지 않는다.
+미설치/미지원/저장 오류·stale·busy 및 전송·권한 경계도 유지한다. 늦은 상태 조회는 live shared
+snapshot과 revision/unmount 검사로 사용자가 바꾼 선호를 덮지 않는다.
+
+evidence(입력창): conversations/2026-10-08-composer-provider.md#현재-요청 (원본 턴 시각/session UUID 미제공).
+alternatives(입력창): 세 번째 모델 버튼 추가 — 중복과 좁은 폭 악화로 제외; 별도 선호 저장 — Settings 동기화·공급자 ID 혼용 위험으로 제외. 기존 hook/metadata 계약이 변경되면 재검토.
+sources(입력창): docs/design-refs/2026-10-08-experience-composer-provider.md; docs/qa/2026-10-08-composer-provider.md.
+composer_ui_last_verified: 2026-10-08 (타입·119frontend·build·contract·독립 read-only review PASS. 합성5CLI 전환/강도·초안·Settings/재로드 복원·Grok model/effort JSON·busy/취소·미설치·1280/390px/키보드 PASS. 실제 CLI 생성/설치본 교체/Windows/장시간 메모리 NOT RUN. 기존2026-10-07 설치·metadata 확인을 새 검증으로 소급하지 않음.)

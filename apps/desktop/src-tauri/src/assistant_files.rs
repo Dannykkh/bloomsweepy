@@ -69,6 +69,7 @@ pub(crate) struct FileReviewPlan {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct FileWorkspaceView {
+    automatic_trash_eligible: bool,
     revision: String,
     current_path: String,
     current_name: String,
@@ -88,6 +89,9 @@ pub(crate) struct FileWorkspaceView {
 }
 
 struct Workspace {
+    native_binding: Option<crate::control_server::NativeChatBinding>,
+    automatic_eligible: bool,
+    volume_confined: bool,
     revision: String,
     scope: PathBuf,
     current: PathBuf,
@@ -133,6 +137,7 @@ impl Workspace {
     }
     fn view(&self) -> FileWorkspaceView {
         FileWorkspaceView {
+            automatic_trash_eligible: self.automatic_eligible,
             revision: self.revision.clone(),
             current_path: self.current.display().to_string(),
             current_name: self
@@ -186,6 +191,19 @@ impl AssistantFilesState {
     pub(crate) fn forget(&self, session_id: &str) -> Result<(), String> {
         self.lock()?.remove(session_id);
         Ok(())
+    }
+    pub(crate) fn invalidate_native(&self) -> Result<(), String> {
+        self.lock()?.retain(|key, _| key == EXTERNAL_WORKSPACE_KEY);
+        Ok(())
+    }
+    fn native_authority(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::control_server::NativeChatBinding, String> {
+        self.lock()?
+            .get(session_id)
+            .and_then(|workspace| workspace.native_binding)
+            .ok_or_else(|| "파일 조회 권한이 변경됐습니다. 다시 검사해 주세요".into())
     }
     fn view(&self, session_id: &str) -> Result<Option<FileWorkspaceView>, String> {
         Ok(self.lock()?.get(session_id).map(Workspace::view))
@@ -259,6 +277,7 @@ fn model_workspace_context(view: &FileWorkspaceView) -> serde_json::Value {
         "modifiedAtUnixMs":entry.modified_at_unix_ms,
         "selected":view.selected_ids.contains(&entry.id)})).collect();
     json!({"freshScan":true,"revision":view.revision,"currentFolder":view.current_name,"canGoUp":view.can_go_up,
+        "automaticTrashEligible":view.automatic_trash_eligible,
         "query":view.query,"sizeRanked":view.size_ranked,"scanCompletedAtUnixMs":view.summary.completed_at_unix_ms,
         "rankingScope":"direct children; folder sizes include descendants; logical bytes, not reclaimable space",
         "deletionSafety":"unknown; names, sizes and modification times cannot establish backup, necessity or reproducibility",
@@ -303,19 +322,45 @@ fn scan_workspace(
     reports: &StoredReports,
     cancellation: &impl Fn() -> bool,
 ) -> Result<Workspace, String> {
+    scan_workspace_with_policy(scope, current, reports, cancellation, false)
+}
+
+fn scan_workspace_with_policy(
+    scope: PathBuf,
+    current: PathBuf,
+    reports: &StoredReports,
+    cancellation: &impl Fn() -> bool,
+    volume_confined: bool,
+) -> Result<Workspace, String> {
     let current = confined(&scope, &current)?;
-    let report = scan_directory_level(
-        &current,
-        DirectoryScanConfig::default(),
-        |_| {},
-        cancellation,
-    )
+    if volume_confined {
+        crate::assistant_access::confine_volume(&scope, &current)?;
+    }
+    let report = if volume_confined {
+        bloomsweepy_core::scan_local_volume_directory_level(
+            &current,
+            DirectoryScanConfig::default(),
+            &crate::assistant_access::excluded_mounts(&current),
+            |_| {},
+            cancellation,
+        )
+    } else {
+        scan_directory_level(
+            &current,
+            DirectoryScanConfig::default(),
+            |_| {},
+            cancellation,
+        )
+    }
     .map_err(|error| error.to_string())?;
     let summary = assistant_tools::folder_summary(&report);
     // One bounded snapshot is shared with the treemap; workspaces retain only its generation.
     let result = reports.replace_directory(report)?;
     let report = result.report;
     Ok(Workspace {
+        native_binding: None,
+        automatic_eligible: true,
+        volume_confined,
         revision: assistant_tools::new_id()?,
         scope,
         current,
@@ -340,7 +385,7 @@ fn prepare(
 ) -> Result<FileWorkspaceView, String> {
     let started = Instant::now();
     let cancelled = || cancelled() || started.elapsed() > Duration::from_secs(60);
-    let (scope, selected) = {
+    let (scope, selected, volume_confined) = {
         let mut workspaces = state.lock()?;
         let workspace = workspace_mut(&mut workspaces, session_id, revision)?;
         // Re-preparation invalidates the previous plan even if validation fails.
@@ -357,7 +402,7 @@ fn prepare(
                     .map(|index| (workspace.entry(index), workspace.nodes[index].clone()))
             })
             .collect();
-        (workspace.scope.clone(), nodes?)
+        (workspace.scope.clone(), nodes?, workspace.volume_confined)
     };
     for (_, node) in &selected {
         if selected.iter().any(|(_, parent)| {
@@ -380,16 +425,32 @@ fn prepare(
             .parent()
             .ok_or("부모 폴더가 없습니다")?;
         confined(&scope, parent)?;
+        if volume_confined {
+            crate::assistant_access::confine_volume(&scope, parent)?;
+        }
         if parent_report
             .as_ref()
             .is_none_or(|report| Path::new(&report.root) != parent)
         {
             parent_report = Some(
-                scan_directory_level(parent, DirectoryScanConfig::default(), |_| {}, cancelled)
-                    .map_err(|error| error.to_string())?,
+                (if volume_confined {
+                    bloomsweepy_core::scan_local_volume_directory_level(
+                        parent,
+                        DirectoryScanConfig::default(),
+                        &crate::assistant_access::excluded_mounts(parent),
+                        |_| {},
+                        cancelled,
+                    )
+                } else {
+                    scan_directory_level(parent, DirectoryScanConfig::default(), |_| {}, cancelled)
+                })
+                .map_err(|error| error.to_string())?,
             );
         }
         let report = parent_report.as_ref().expect("parent report loaded");
+        if volume_confined && (report.tracking_limit_reached || report.unreadable_entries > 0) {
+            return Err("드라이브 검사에 제외·읽기 오류·상한이 있어 이 범위의 이동을 준비하지 않았습니다. 더 작은 로컬 폴더를 선택하세요".into());
+        }
         let live = report
             .children
             .iter()
@@ -451,15 +512,26 @@ pub(crate) async fn dispatch(
         return Err("폴더 대화에서만 사용할 수 있습니다".into());
     }
     let scope = PathBuf::from(session.session.scope_root);
+    let native_binding = crate::control_server::native_chat_binding(&app)?;
+    if needs_review_access(&operation) {
+        crate::control_server::require_native_chat_review(&app)?;
+    }
+    let (effective, automatic_eligible) =
+        crate::assistant_access::effective_root(&app, &session_id, &scope)?;
     app.state::<assistant_tools::AssistantToolsState>()
         .forget(&session_id)?;
     let view = dispatch_root(
         app.clone(),
         FileDispatchRoot {
             key: session_id.clone(),
-            scope: scope.clone(),
-            summary: session.folder_summary,
+            scope: effective.clone(),
+            summary: if effective == scope {
+                session.folder_summary
+            } else {
+                unknown_summary(&effective)
+            },
             binding: None,
+            native_binding: Some((native_binding, automatic_eligible)),
         },
         operation,
         request_cancel,
@@ -472,11 +544,74 @@ pub(crate) async fn dispatch(
     Ok(view)
 }
 
+pub(crate) async fn open_native_root(
+    app: AppHandle,
+    session_id: String,
+    scope: PathBuf,
+    current: PathBuf,
+    automatic_eligible: bool,
+    expected: Option<DirectoryNode>,
+    binding: crate::control_server::NativeChatBinding,
+    request_cancel: Arc<AtomicBool>,
+) -> Result<AppToolResult, String> {
+    let runtime_cancel = app.state::<ScanRuntime>().begin()?;
+    crate::assistant_access::register_cancellation(&app, &runtime_cancel)?;
+    let completion = ScanCompletionGuard::new(app.clone());
+    tauri::async_runtime::spawn_blocking(move || {
+        let _completion = completion;
+        let cancelled = || {
+            runtime_cancel.load(Ordering::Acquire)
+                || request_cancel.load(Ordering::Acquire)
+                || !crate::control_server::native_chat_binding_current(&app, binding)
+        };
+        if let Some(expected) = expected.as_ref() {
+            bloomsweepy_core::validate_cleanup_tree_node_identity(expected)
+                .map_err(|error| error.to_string())?;
+        }
+        let mut workspace = scan_workspace_with_policy(
+            scope,
+            current,
+            &app.state::<StoredReports>(),
+            &cancelled,
+            true,
+        )?;
+        if let Some(expected) = expected {
+            bloomsweepy_core::validate_cleanup_tree_node_identity(&expected)
+                .map_err(|error| error.to_string())?;
+            let index = workspace
+                .nodes
+                .iter()
+                .position(|node| {
+                    node.path == expected.path
+                        && node.name == expected.name
+                        && node.is_directory == expected.is_directory
+                        && (workspace.truncated
+                            || workspace.unreadable > 0
+                            || node.same_entry_as(&expected))
+                })
+                .ok_or("이름 검색 후 대상이 바뀌었거나 목록 상한 밖입니다. 다시 검색하세요")?;
+            workspace.offset = index / PAGE_SIZE * PAGE_SIZE;
+        }
+        workspace.native_binding = Some(binding);
+        workspace.automatic_eligible =
+            automatic_eligible && !workspace.truncated && workspace.unreadable == 0;
+        crate::control_server::with_native_chat_authority(&app, binding, false, || {
+            app.state::<AssistantFilesState>()
+                .insert(&session_id, workspace)?;
+            app.state::<AssistantFilesState>()
+                .tool_result(&session_id, None)
+        })
+    })
+    .await
+    .map_err(|error| format!("드라이브 탐색이 중단됐습니다: {error}"))?
+}
+
 struct FileDispatchRoot {
     key: String,
     scope: PathBuf,
     summary: AssistantFolderSummary,
     binding: Option<(crate::control_server::FileWorkspaceBinding, bool)>,
+    native_binding: Option<(crate::control_server::NativeChatBinding, bool)>,
 }
 
 async fn dispatch_root(
@@ -495,6 +630,9 @@ async fn dispatch_root(
             Some(ScanCompletionGuard::new(app.clone())),
         )
     };
+    if context.native_binding.is_some() {
+        crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    }
     let worker_app = app.clone();
     let worker_completion = completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -503,6 +641,9 @@ async fn dispatch_root(
         let cancelled = || {
             cancellation.load(Ordering::Acquire)
                 || request_cancel.load(Ordering::Acquire)
+                || context.native_binding.is_some_and(|(binding, _)| {
+                    !crate::control_server::native_chat_binding_current(&worker_app, binding)
+                })
                 || context.binding.as_ref().is_some_and(|(binding, review)| {
                     !crate::control_server::file_workspace_epochs_current(
                         &worker_app,
@@ -511,7 +652,20 @@ async fn dispatch_root(
                     )
                 })
         };
-        apply_workspace_action(
+        if let Some((binding, _)) = context.native_binding {
+            crate::control_server::with_native_chat_authority(&worker_app, binding, false, || {
+                let state = worker_app.state::<AssistantFilesState>();
+                let mut workspaces = state.lock()?;
+                if workspaces.get(&context.key).is_some_and(|workspace| {
+                    workspace.native_binding != Some(binding) || workspace.scope != context.scope
+                }) {
+                    workspaces.remove(&context.key);
+                    return Err("채팅 권한 또는 파일 범위가 변경됐습니다. 다시 검사하세요".into());
+                }
+                Ok(())
+            })?;
+        }
+        let result = apply_workspace_action_with_policy(
             &worker_app.state::<AssistantFilesState>(),
             &worker_app.state::<StoredReports>(),
             &context.key,
@@ -519,7 +673,35 @@ async fn dispatch_root(
             context.summary.clone(),
             operation,
             &cancelled,
-        )
+            context.native_binding.is_some_and(|(binding, _)| {
+                binding.mode == crate::permission_settings::AssistantPermissionMode::FullAccess
+            }),
+        )?;
+        if let Some((binding, automatic_eligible)) = context.native_binding {
+            let published = crate::control_server::with_native_chat_authority(
+                &worker_app,
+                binding,
+                false,
+                || {
+                    let state = worker_app.state::<AssistantFilesState>();
+                    let mut workspaces = state.lock()?;
+                    let workspace = workspaces
+                        .get_mut(&context.key)
+                        .ok_or("파일 목록이 변경됐습니다")?;
+                    workspace.native_binding = Some(binding);
+                    workspace.automatic_eligible =
+                        automatic_eligible && !workspace.truncated && workspace.unreadable == 0;
+                    Ok(workspace.view())
+                },
+            );
+            if published.is_err() {
+                worker_app
+                    .state::<AssistantFilesState>()
+                    .forget(&context.key)?;
+            }
+            return published;
+        }
+        Ok(result)
     })
     .await
     .map_err(|error| format!("파일 대화 작업이 중단됐습니다: {error}"))?
@@ -533,6 +715,28 @@ fn apply_workspace_action(
     initial_summary: AssistantFolderSummary,
     operation: FileAction,
     cancelled: &impl Fn() -> bool,
+) -> Result<FileWorkspaceView, String> {
+    apply_workspace_action_with_policy(
+        state,
+        reports,
+        worker_session,
+        scope,
+        initial_summary,
+        operation,
+        cancelled,
+        false,
+    )
+}
+
+fn apply_workspace_action_with_policy(
+    state: &AssistantFilesState,
+    reports: &StoredReports,
+    worker_session: &str,
+    scope: PathBuf,
+    initial_summary: AssistantFolderSummary,
+    operation: FileAction,
+    cancelled: &impl Fn() -> bool,
+    volume_confined: bool,
 ) -> Result<FileWorkspaceView, String> {
     operation.validate().map_err(|error| error.to_string())?;
     if cancelled() {
@@ -558,7 +762,8 @@ fn apply_workspace_action(
                 .map(|workspace| workspace.current.clone())
                 .unwrap_or(scope.clone());
             state.forget(worker_session)?;
-            let mut workspace = scan_workspace(scope, current, reports, cancelled)?;
+            let mut workspace =
+                scan_workspace_with_policy(scope, current, reports, cancelled, volume_confined)?;
             workspace.size_ranked = size_ranked;
             state.insert(worker_session, workspace)
         }
@@ -570,11 +775,30 @@ fn apply_workspace_action(
                 .unwrap_or(scope.clone());
             state.forget(worker_session)?;
             let current = confined(&scope, &current)?;
-            let report = search_local_entries(&current, &query, cancelled)
-                .map_err(|error| error.to_string())?;
+            if volume_confined {
+                crate::assistant_access::confine_volume(&scope, &current)?;
+            }
+            let report = (if volume_confined {
+                bloomsweepy_core::search_local_volume_entries(
+                    &current,
+                    &query,
+                    &crate::assistant_access::excluded_mounts(&current),
+                    250_000,
+                    200,
+                    2 * 1024 * 1024,
+                    Instant::now() + Duration::from_secs(30),
+                    cancelled,
+                )
+            } else {
+                search_local_entries(&current, &query, cancelled)
+            })
+            .map_err(|error| error.to_string())?;
             state.insert(
                 worker_session,
                 Workspace {
+                    native_binding: None,
+                    automatic_eligible: true,
+                    volume_confined,
                     revision: assistant_tools::new_id()?,
                     scope,
                     current,
@@ -608,7 +832,7 @@ fn apply_workspace_action(
             state.forget(worker_session)?;
             state.insert(
                 worker_session,
-                scan_workspace(scope, target, reports, cancelled)?,
+                scan_workspace_with_policy(scope, target, reports, cancelled, volume_confined)?,
             )
         }
         FileAction::Parent { revision } => {
@@ -630,7 +854,7 @@ fn apply_workspace_action(
             state.forget(worker_session)?;
             state.insert(
                 worker_session,
-                scan_workspace(scope, target, reports, cancelled)?,
+                scan_workspace_with_policy(scope, target, reports, cancelled, volume_confined)?,
             )
         }
         FileAction::Page { revision, offset } => {
@@ -683,6 +907,12 @@ fn apply_workspace_action(
             .view(worker_session)?
             .ok_or_else(|| "현재 파일 검사 결과가 없습니다".into()),
         FileAction::ReviewNamed { .. } => unreachable!("normalized to exact name search"),
+        FileAction::Volumes {}
+        | FileAction::OpenVolume { .. }
+        | FileAction::SearchAll { .. }
+        | FileAction::OpenSearchResult { .. } => {
+            return Err("드라이브 작업은 네이티브 대화 진입점을 사용하세요".into());
+        }
     }?;
     if let Some(name) = named {
         prepare_unique_name(state, worker_session, view, &name, cancelled)
@@ -884,6 +1114,18 @@ pub(crate) async fn execute_tool(
         return Err("파일 조회를 취소했습니다".into());
     }
     let files = app.state::<AssistantFilesState>();
+    if crate::assistant_access::is_access_action(operation) {
+        return match scope {
+            crate::app_tools::ToolScope::Native { session_id, .. } => {
+                crate::assistant_access::execute(app, session_id, operation, cancellation).await
+            }
+            crate::app_tools::ToolScope::External => Ok(AppToolResult::with_status(
+                "files.workspace",
+                AppToolStatus::Unsupported,
+                json!({"nativeOnly":true,"performed":false}),
+            )),
+        };
+    }
     if let crate::app_tools::ToolScope::Native { session_id, .. } = scope {
         let session =
             assistant_sessions::get_assistant_session(app.clone(), session_id.clone()).await?;
@@ -956,6 +1198,7 @@ pub(crate) async fn execute_tool(
                     scope: binding.root.clone(),
                     summary,
                     binding: Some((binding.clone(), review)),
+                    native_binding: None,
                 },
                 action,
                 cancellation,
@@ -1026,6 +1269,7 @@ pub(crate) async fn execute_tool(
             scope: binding.root.clone(),
             summary,
             binding: Some((binding.clone(), review)),
+            native_binding: None,
         },
         operation.clone(),
         cancellation,
@@ -1166,19 +1410,32 @@ fn cancel_external_plan(
 
 #[tauri::command]
 pub(crate) fn get_assistant_file_workspace(
+    app: AppHandle,
     state: State<'_, AssistantFilesState>,
     session_id: String,
 ) -> Result<Option<FileWorkspaceView>, String> {
+    if let Ok(binding) = state.native_authority(&session_id) {
+        if !crate::control_server::native_chat_binding_current(&app, binding) {
+            state.forget(&session_id)?;
+            return Ok(None);
+        }
+    } else if state.view(&session_id)?.is_some() {
+        state.forget(&session_id)?;
+        return Ok(None);
+    }
     state.view(&session_id)
 }
 
 #[tauri::command]
 pub(crate) fn get_assistant_directory_report(
+    app: AppHandle,
     state: State<'_, AssistantFilesState>,
     reports: State<'_, StoredReports>,
     session_id: String,
     revision: String,
 ) -> Result<crate::DirectoryScanResult, String> {
+    let binding = state.native_authority(&session_id)?;
+    crate::control_server::with_native_chat_authority(&app, binding, false, || Ok(()))?;
     directory_snapshot(&state, &reports, &session_id, &revision)
 }
 
@@ -1230,12 +1487,16 @@ pub(crate) async fn assistant_file_action(
 }
 #[tauri::command]
 pub(crate) fn select_assistant_files(
+    app: AppHandle,
     state: State<'_, AssistantFilesState>,
     session_id: String,
     revision: String,
     ids: Vec<String>,
 ) -> Result<FileWorkspaceView, String> {
-    state.select(&session_id, &revision, ids)
+    let binding = state.native_authority(&session_id)?;
+    crate::control_server::with_native_chat_authority(&app, binding, true, || {
+        state.select(&session_id, &revision, ids)
+    })
 }
 #[tauri::command]
 pub(crate) async fn prepare_assistant_file_plan(
@@ -1243,15 +1504,24 @@ pub(crate) async fn prepare_assistant_file_plan(
     session_id: String,
     revision: String,
 ) -> Result<FileWorkspaceView, String> {
+    let binding = app
+        .state::<AssistantFilesState>()
+        .native_authority(&session_id)?;
+    crate::control_server::with_native_chat_authority(&app, binding, true, || Ok(()))?;
     let cancellation = app.state::<ScanRuntime>().begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
+    crate::assistant_access::register_cancellation(&app, &cancellation)?;
     tauri::async_runtime::spawn_blocking(move || {
-        prepare(
+        let view = prepare(
             &app.state::<AssistantFilesState>(),
             &session_id,
             &revision,
-            &|| cancellation.load(Ordering::Acquire),
-        )
+            &|| {
+                cancellation.load(Ordering::Acquire)
+                    || !crate::control_server::native_chat_binding_current(&app, binding)
+            },
+        )?;
+        crate::control_server::with_native_chat_authority(&app, binding, true, || Ok(view))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1277,12 +1547,28 @@ pub(crate) async fn confirm_assistant_file_plan(
     }
     let cancellation = app.state::<ScanRuntime>().begin()?;
     let _completion = ScanCompletionGuard::new(app.clone());
-    let items = app.state::<AssistantFilesState>().claim(
-        &session_id,
-        &revision,
-        &plan_id,
-        nested_contents_acknowledged,
-    )?;
+    let binding = app
+        .state::<AssistantFilesState>()
+        .native_authority(&session_id)?;
+    crate::assistant_access::register_cancellation(&app, &cancellation)?;
+    let items = crate::control_server::with_native_chat_authority(&app, binding, true, || {
+        let files = app.state::<AssistantFilesState>();
+        if automatic.unwrap_or(false)
+            && files
+                .view(&session_id)?
+                .is_some_and(|view| !view.automatic_trash_eligible)
+        {
+            return Err(
+                "전체 검색 결과가 불완전하거나 같은 이름이 있어 직접 확인이 필요합니다".into(),
+            );
+        }
+        files.claim(
+            &session_id,
+            &revision,
+            &plan_id,
+            nested_contents_acknowledged,
+        )
+    })?;
     let result =
         trash_actions::trash_verified_assistant_files(app.clone(), items, cancellation).await;
     app.state::<AssistantFilesState>().forget(&session_id)?;

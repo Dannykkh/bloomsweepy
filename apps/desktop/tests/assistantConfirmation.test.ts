@@ -169,6 +169,7 @@ test("unrelated, duplicated, stale or incomplete reviews never enable file autom
   ]) assert.equal(canAutomaticallyTrashFiles(request, nativeFileWorkspace, results), false);
   assert.equal(canAutomaticallyTrashFiles(request, { ...nativeFileWorkspace, truncated: true }, [nativeFileReview]), false);
   assert.equal(canAutomaticallyTrashFiles(request, { ...nativeFileWorkspace, unreadableEntries: 1 }, [nativeFileReview]), false);
+  assert.equal(canAutomaticallyTrashFiles(request, { ...nativeFileWorkspace, automaticTrashEligible: false }, [nativeFileReview]), false);
   assert.equal(canAutomaticallyTrashFiles(request, { ...nativeFileWorkspace, plan: null }, [nativeFileReview]), false);
   assert.equal(canAutomaticallyTrashFiles("consent-auto.txt 삭제해도 돼?", nativeFileWorkspace, [nativeFileReview]), false);
 });

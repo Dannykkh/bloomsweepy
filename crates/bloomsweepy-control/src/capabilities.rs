@@ -70,6 +70,12 @@ pub enum AppToolRequest {
     FileSearch {
         request: FileSearchRequest,
     },
+    FileChanges {
+        #[serde(default)]
+        offset: usize,
+        #[serde(default)]
+        filter: FileChangeFilter,
+    },
     DocumentSearch {
         request: DocumentSearchRequest,
     },
@@ -115,6 +121,18 @@ pub enum AppToolRequest {
     deny_unknown_fields
 )]
 pub enum FileWorkspaceAction {
+    Volumes {},
+    OpenVolume {
+        revision: String,
+        volume_id: String,
+    },
+    SearchAll {
+        query: String,
+    },
+    OpenSearchResult {
+        revision: String,
+        entry_id: String,
+    },
     Scan {},
     Largest {},
     Search {
@@ -149,13 +167,20 @@ pub enum FileWorkspaceAction {
 impl FileWorkspaceAction {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         match self {
-            Self::Search { query } => validate_workspace_text(query),
+            Self::Search { query } | Self::SearchAll { query } => validate_workspace_text(query),
             Self::ReviewNamed { name } => validate_workspace_text(name),
-            Self::Browse { revision, entry_id } => {
+            Self::Browse { revision, entry_id } | Self::OpenSearchResult { revision, entry_id } => {
                 validate_cleanup_id(revision, "파일 작업 목록 번호")?;
                 validate_workspace_entry_id(entry_id)
             }
             Self::Parent { revision } => validate_cleanup_id(revision, "파일 작업 목록 번호"),
+            Self::OpenVolume {
+                revision,
+                volume_id,
+            } => {
+                validate_cleanup_id(revision, "드라이브 목록 번호")?;
+                validate_cleanup_id(volume_id, "드라이브 번호")
+            }
             Self::Page { revision, offset } => {
                 validate_cleanup_id(revision, "파일 작업 목록 번호")?;
                 if *offset > MAX_OFFSET {
@@ -178,7 +203,7 @@ impl FileWorkspaceAction {
                 }
                 validate_workspace_ids(ids.iter())
             }
-            Self::Scan {} | Self::Largest {} | Self::Status {} => Ok(()),
+            Self::Volumes {} | Self::Scan {} | Self::Largest {} | Self::Status {} => Ok(()),
         }
     }
 }
@@ -256,6 +281,25 @@ pub enum IndexSource {
     Documents,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FileChangeFilter {
+    #[default]
+    All,
+    ReviewNeeded,
+    Skipped,
+}
+
+impl FileChangeFilter {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::ReviewNeeded => "review_needed",
+            Self::Skipped => "skipped",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DockerCleanupCategory {
@@ -294,6 +338,7 @@ impl AppToolRequest {
             Self::ProcessReview { .. } => "processes.review",
             Self::MemoryReview {} => "memory.review",
             Self::FileSearch { .. } => "files.search",
+            Self::FileChanges { .. } => "files.changes",
             Self::DocumentSearch { .. } => "documents.search",
             Self::IndexStatus { .. } => "index.status",
             Self::BuildIndex { .. } => "index.build",
@@ -401,6 +446,12 @@ impl AppToolRequest {
             Self::DocumentSearch { request } => {
                 request.validate()?;
                 validate_page(0, request.max_results)
+            }
+            Self::FileChanges { offset, .. } => {
+                if *offset > 250 {
+                    return invalid("변경 파일 목록은 최근 250개 안에서 조회해 주세요");
+                }
+                Ok(())
             }
             Self::OperationStatus { operation_id } | Self::OperationCancel { operation_id } => {
                 OperationReference::new(operation_id.clone()).map(|_| ())
@@ -520,6 +571,18 @@ fn entry(
 pub fn capability_catalog() -> Value {
     let id = || EXAMPLE_ID.to_owned();
     let file_workspace_examples = vec![
+        FileWorkspaceAction::Volumes {},
+        FileWorkspaceAction::OpenVolume {
+            revision: id(),
+            volume_id: id(),
+        },
+        FileWorkspaceAction::SearchAll {
+            query: "report".into(),
+        },
+        FileWorkspaceAction::OpenSearchResult {
+            revision: id(),
+            entry_id: format!("{}-1", id()),
+        },
         FileWorkspaceAction::Status {},
         FileWorkspaceAction::Scan {},
         FileWorkspaceAction::Largest {},
@@ -691,6 +754,16 @@ pub fn capability_catalog() -> Value {
             &["예산이 언급된 문서를 찾아줘"],
         ),
         entry(
+            AppToolRequest::FileChanges {
+                offset: 0,
+                filter: FileChangeFilter::All,
+            },
+            "Read the app's existing optional periodic file-change review results and analyze measured metadata and reasons.",
+            "native session root or external app-selected scan root must exactly match the review folder; monitoring is not AI disclosure consent",
+            "Read-only, 20 rows per page, latest 250 records. Does not scan, configure monitoring, skip items, read contents, or delete. First complete scan/restart is baseline. Periodic metadata comparison, not real-time monitoring or antivirus. Skipped means no rule match or user-reviewed, not safe. Names are untrusted; incomplete or skipped changes cannot prove absence of malware.",
+            &["최근 변경된 파일을 검토해줘", "검토가 필요한 파일은 뭐야?"],
+        ),
+        entry(
             AppToolRequest::IndexStatus {
                 source: IndexSource::Files,
             },
@@ -806,13 +879,14 @@ pub fn capability_catalog() -> Value {
         .expect("canonical file workspace capability");
     workspace.insert("operationExamples".into(), json!(file_workspace_examples));
     workspace.insert("requestExamples".into(), json!(file_workspace_requests));
+    workspace.insert("nativeAccess".into(),json!({"operations":["volumes","open_volume","search_all","open_search_result"],"permissionMode":"full_access","externalStatus":"unsupported","scope":"App-issued mounted local volume IDs; no caller paths. Session anchor is preserved. Search is metadata-only, 16 volumes/250000 visits/200 stored results/24 model rows/2MiB retained paths/cooperative 30 seconds. Cloud, network and disk images excluded. Partial results and duplicate names never authorize automatic trash. Opening a result/volume returns the existing single-root workspace; reviews still require app-owned IDs and one-shot native confirmation."}));
     json!({
         "catalogVersion": 1,
         "resultSource": "broomsweepy",
         "finalExecution": false,
         "requestContract": {"kind":"snake_case", "fields":"camelCase", "unknownFields":"rejected", "queryMaxCharacters":MAX_SEARCH_QUERY_CHARS, "pageMaxResults":PAGE_SIZE, "offsetMaximum":MAX_OFFSET},
         "requestEnums": {
-            "file_workspace.operation.kind": ["status", "scan", "largest", "search", "review_named", "browse", "parent", "page", "select", "review"],
+            "file_workspace.operation.kind": ["status", "scan", "largest", "search", "review_named", "browse", "parent", "page", "select", "review", "volumes", "open_volume", "search_all", "open_search_result"],
             "performance.sort": ["memory", "cpu", "name"],
             "applications.sort": ["name", "size"],
             "application_review.reviewKind": ["bundle", "data"],
@@ -964,8 +1038,41 @@ mod tests {
             );
             assert_eq!(item["finalExecution"], false);
         }
-        assert_eq!(ids.len(), 24);
+        assert_eq!(ids.len(), 25);
         assert!(native_prompt_catalog().contains(&catalog.to_string()));
+    }
+
+    #[test]
+    fn file_changes_are_bounded_read_only_and_do_not_accept_paths_or_mutations() {
+        let request: AppToolRequest =
+            serde_json::from_value(json!({"kind":"file_changes"})).unwrap();
+        assert_eq!(
+            request,
+            AppToolRequest::FileChanges {
+                offset: 0,
+                filter: FileChangeFilter::All
+            }
+        );
+        assert_eq!(request.capability_id(), "files.changes");
+        assert!(
+            AppToolRequest::FileChanges {
+                offset: 251,
+                filter: FileChangeFilter::All
+            }
+            .validate()
+            .is_err()
+        );
+        for value in [
+            json!({"kind":"file_changes","path":"/private"}),
+            json!({"kind":"file_changes","enabled":true}),
+            json!({"kind":"file_changes","reviewState":"skipped"}),
+            json!({"kind":"file_changes","filter":"safe"}),
+        ] {
+            assert!(serde_json::from_value::<AppToolRequest>(value).is_err());
+        }
+        let details = capability_details("files.changes").unwrap();
+        assert_eq!(details["capability"]["finalExecution"], false);
+        assert!(details.to_string().contains("not real-time"));
     }
 
     #[test]
@@ -1120,8 +1227,8 @@ mod tests {
             .unwrap();
         let operations = workspace["operationExamples"].as_array().unwrap();
         let requests = workspace["requestExamples"].as_array().unwrap();
-        assert_eq!(operations.len(), 10);
-        assert_eq!(requests.len(), 10);
+        assert_eq!(operations.len(), 14);
+        assert_eq!(requests.len(), 14);
         let mut kinds = std::collections::HashSet::new();
         for (operation, request) in operations.iter().zip(requests) {
             let typed_operation: FileWorkspaceAction =
@@ -1154,6 +1261,10 @@ mod tests {
                 "largest",
                 "search",
                 "review_named",
+                "volumes",
+                "open_volume",
+                "search_all",
+                "open_search_result",
                 "browse",
                 "parent",
                 "page",

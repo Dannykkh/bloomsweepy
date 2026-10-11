@@ -38,7 +38,7 @@ export function workspaceReviewMatches(result: AppToolResult, capability: "files
 }
 
 export function canAutomaticallyTrashFiles(message: string, workspace: AssistantFileWorkspace | null, results: readonly AppToolResult[]): boolean {
-  if (!workspace?.plan || workspace.truncated || workspace.unreadableEntries
+  if (!workspace?.plan || workspace.automaticTrashEligible === false || workspace.truncated || workspace.unreadableEntries
     || !namedTrashRequest(message, workspace.plan.entries.map(entry => entry.name))) return false;
   const reviews = results.filter(result => result.status === "review_required");
   const ownReview = solePendingTrash(reviews);

@@ -419,6 +419,7 @@ pub(crate) async fn confirm_application_trash(
 ) -> Result<trash_actions::TrashOperationResult, String> {
     require_main(&window)?;
     crate::control_server::require_automatic_trash_access(&app, request.automatic)?;
+    crate::assistant_access::require_plan_current(&app, &request.plan_id)?;
     if !request.bundle_only_acknowledged || !request.no_uninstaller_acknowledged {
         return Err("앱 본체만 이동하며 전용 제거기가 없음을 확인해야 합니다".to_owned());
     }
@@ -434,6 +435,7 @@ pub(crate) async fn confirm_application_data_trash(
 ) -> Result<trash_actions::TrashOperationResult, String> {
     require_main(&window)?;
     crate::control_server::require_automatic_trash_access(&app, request.automatic)?;
+    crate::assistant_access::require_plan_current(&app, &request.plan_id)?;
     if !request.related_data_acknowledged {
         return Err("선택한 캐시·환경설정 이동을 별도로 확인해야 합니다".to_owned());
     }
@@ -452,6 +454,7 @@ async fn confirm(
     #[cfg(target_os = "macos")]
     mac::require_confirmed_previous_operation(&app)?;
     let cancellation = runtime.begin()?;
+    crate::assistant_access::register_plan_cancellation(&app, &plan_id, &cancellation)?;
     let _completion = ScanCompletionGuard::new(app.clone());
     let worker_completion = _completion.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -459,12 +462,14 @@ async fn confirm(
         #[cfg(target_os = "macos")]
         {
             mac::require_confirmed_previous_operation(&app)?;
-            let plan = app
-                .state::<ApplicationActionsState>()
-                .inner
-                .lock()
-                .map_err(|_| "앱 확인 상태를 잠그지 못했습니다")?
-                .claim(&plan_id, data_only)?;
+            crate::assistant_access::require_plan_current(&app, &plan_id)?;
+            let plan = crate::assistant_access::with_plan_authority(&app, &plan_id, || {
+                app.state::<ApplicationActionsState>()
+                    .inner
+                    .lock()
+                    .map_err(|_| "앱 확인 상태를 잠그지 못했습니다")?
+                    .claim(&plan_id, data_only)
+            })?;
             cancelled(&cancellation)?;
             if !app.state::<ScanRuntime>().begin_commit()? {
                 return Err("앱 정리가 취소되었습니다".to_owned());
