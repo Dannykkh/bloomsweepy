@@ -1395,6 +1395,10 @@ const englishMessages = {
   "폴더 요약": "folder summary",
   "AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}":
     "The AI response was received but could not be saved to chat history. {{detail}}",
+  "답변을 받지 못했습니다. {{detail}}": "No answer was received. {{detail}}",
+  "이 질문 다시 시도": "Retry this question",
+  "오류를 대화 기록에 저장하지 못했습니다. {{detail}}": "Could not save the error to chat history. {{detail}}",
+  "이전 요청의 결과입니다. 실행하려면 다시 조회하고 검토해 주세요.": "This result belongs to an earlier request. Query and review it again before execution.",
   "대화 기록 관리": "Manage chat history",
   "새 폴더 확인 중": "Checking new folder",
   "새 폴더 대화": "New folder chat",

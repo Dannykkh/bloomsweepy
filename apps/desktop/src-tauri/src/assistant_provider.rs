@@ -31,6 +31,41 @@ const OLLAMA_PROVIDER_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_INVESTIGATION_ACTIONS: usize = 4;
 const MAX_INVESTIGATION_RESULT_BYTES: usize = 48 * 1024;
 const MAX_PROVIDER_PROMPT_BYTES: usize = 192 * 1024;
+const ANALYSIS_RESPONSE_SCHEMA: &str = r#"{"type":"object","properties":{"message":{"type":"string"},"action":{"type":"null"}},"required":["message","action"],"additionalProperties":false}"#;
+
+pub(crate) fn ensure_chat_request_active(
+    cancellation: &AtomicBool,
+    permission_current: bool,
+) -> Result<(), String> {
+    if !permission_current {
+        return Err("채팅 권한이 변경됐습니다. 현재 모드에서 다시 요청해 주세요".into());
+    }
+    if cancellation.load(Ordering::Acquire) {
+        return Err("대화 작업이 취소되었습니다".into());
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct FormatRecovery {
+    used: bool,
+}
+
+impl FormatRecovery {
+    fn schedule(&mut self, round: usize, remaining: Duration) -> bool {
+        if self.used || round >= MAX_INVESTIGATION_ACTIONS || remaining.is_zero() {
+            return false;
+        }
+        self.used = true;
+        true
+    }
+
+    fn append_contract(&self, prompt: &mut String) {
+        if self.used {
+            prompt.push_str("\n[One format-recovery round — analysis only]\nThe previous provider response failed the app's JSON protocol. No app action was dispatched from that invalid response. Return exactly one JSON object with message and action:null; no fences or surrounding prose. Answer the ORIGINAL user question using only actual app evidence already present. If new app evidence would be required, explain that the lookup was not completed and ask the user to retry. Do not request, repeat, infer or execute any app action.\n");
+        }
+    }
+}
 
 #[derive(Default)]
 struct Investigation {
@@ -149,6 +184,8 @@ pub(crate) struct AssistantProviderStatus {
     cli_reasoning_efforts: Vec<String>,
     #[serde(skip)]
     claude_catalog_supported: bool,
+    #[serde(skip)]
+    codex_output_schema_supported: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -587,6 +624,7 @@ async fn ask_assistant_inner(
         None
     };
     let mut investigation = Investigation::default();
+    let mut format_recovery = FormatRecovery::default();
     let deadline = Instant::now() + Duration::from_secs(600);
     let mut empty_workspace = None;
     let mut file_workspace = None;
@@ -596,12 +634,10 @@ async fn ask_assistant_inner(
     let mut analysis_only = false;
     let mut message = "앱 조회가 아직 완료되지 않았습니다.".to_owned();
     for round in 0..=MAX_INVESTIGATION_ACTIONS {
-        if !super::control_server::native_chat_binding_current(&app, native_permission) {
-            return Err("채팅 권한이 변경됐습니다. 현재 모드에서 다시 요청해 주세요".into());
-        }
-        if state.cancellation.load(Ordering::Acquire) {
-            return Err("대화 작업이 취소되었습니다".to_owned());
-        }
+        ensure_chat_request_active(
+            &state.cancellation,
+            super::control_server::native_chat_binding_current(&app, native_permission),
+        )?;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             message =
@@ -629,13 +665,19 @@ async fn ask_assistant_inner(
             } else {
                 prompt.push_str("\nThis is a Docker session. Files/empty-folder actions are unavailable; use app actions only.\n");
             }
-            append_investigation_context(&mut prompt, &investigation, analysis_only);
+            append_investigation_context(
+                &mut prompt,
+                &investigation,
+                analysis_only && !format_recovery.used,
+            );
+            format_recovery.append_contract(&mut prompt);
         }
         let run_program = program.clone();
         let run_workspace = workspace.clone();
         let run_model = response_model.clone();
         let run_reasoning_effort = response_reasoning_effort.clone();
         let cancellation = std::sync::Arc::clone(&state.cancellation);
+        let use_analysis_schema = status.codex_output_schema_supported && analysis_only;
         emit_progress(&app, &request, "analyzing", round, None);
         let run = tauri::async_runtime::spawn_blocking(move || {
             run_provider_budget(
@@ -648,6 +690,7 @@ async fn ask_assistant_inner(
                 prompt,
                 cancellation,
                 remaining,
+                use_analysis_schema,
             )
         })
         .await
@@ -667,6 +710,12 @@ async fn ask_assistant_inner(
                 break;
             }
         };
+        // A provider can finish in the same poll that cancellation or a mode
+        // change arrives. Never publish or dispatch that now-stale response.
+        ensure_chat_request_active(
+            &state.cancellation,
+            super::control_server::native_chat_binding_current(&app, native_permission),
+        )?;
         if tool_scope.is_none() {
             message = raw;
             analysis_complete = true;
@@ -674,6 +723,20 @@ async fn ask_assistant_inner(
         }
         let envelope = match super::assistant_tools::parse_envelope(&raw) {
             Ok(envelope) => envelope,
+            Err(_)
+                if format_recovery
+                    .schedule(round, deadline.saturating_duration_since(Instant::now())) =>
+            {
+                // Consume the next existing model round, never another hidden
+                // provider call. The invalid raw output is not logged or resent.
+                analysis_only = true;
+                if app_tool_results.is_empty() {
+                    message="AI 응답 형식을 확인하지 못해 앱 작업을 실행하지 않았습니다. 질문을 다시 보내 주세요.".into();
+                } else {
+                    message="앱의 실제 조회 결과는 아래에 유지했습니다. AI 응답 형식을 복구하는 동안 추가 작업을 실행하지 않습니다.".into();
+                }
+                continue;
+            }
             Err(error) if app_tool_results.is_empty() => return Err(error),
             Err(_) => {
                 if !analysis_only {
@@ -701,9 +764,10 @@ async fn ask_assistant_inner(
             break;
         }
         let fingerprint = action_fingerprint(&action)?;
-        if !super::control_server::native_chat_binding_current(&app, native_permission) {
-            return Err("채팅 권한이 변경됐습니다. 현재 모드에서 다시 요청해 주세요".into());
-        }
+        ensure_chat_request_active(
+            &state.cancellation,
+            super::control_server::native_chat_binding_current(&app, native_permission),
+        )?;
         if let Err(reason) = investigation.admit(fingerprint) {
             message = reason;
             break;
@@ -844,6 +908,7 @@ async fn ask_assistant_inner(
         }
     }
     super::control_server::with_native_chat_authority(&app, native_permission, false, || {
+        ensure_chat_request_active(&state.cancellation, true)?;
         Ok(AssistantChatResponse {
             provider,
             label: provider.label(),
@@ -1033,7 +1098,7 @@ fn build_prompt(
          {scope_context}\n\
          You did not read the disk directly. Do not use a shell or any other CLI tool. Do not guess facts absent from app evidence; request an appropriate app query through the appended protocol when available.\n\
          Use the appended application tool protocol to request local operations. Do not confuse your own CLI sandbox with the application's capabilities. You cannot directly touch files, but the app can execute allowed inspection/search/review operations. Never claim deletion was approved or performed without an explicit app execution result in the conversation.\n\
-         The response is displayed as plain text. Do not use Markdown emphasis, headings, code fences, backticks, or metadata tags. Use short sentences and hyphen lists only.\n\n\
+         Follow the appended application protocol's JSON output format when it is present. Only the message string inside that JSON is displayed as plain text: in that string, do not use Markdown emphasis, headings, code fences, backticks, or metadata tags. Use short sentences and hyphen lists only.\n\n\
          {docker_context}\n\n\
          [Recent conversation]\n{history}\n\n\
          [User question]\n{}",
@@ -1062,6 +1127,7 @@ fn run_provider(
         prompt,
         cancellation,
         provider.response_timeout(),
+        false,
     )
 }
 
@@ -1076,6 +1142,7 @@ fn run_provider_budget(
     prompt: String,
     cancellation: std::sync::Arc<AtomicBool>,
     budget: Duration,
+    use_analysis_schema: bool,
 ) -> Result<String, String> {
     if prompt.len() > MAX_PROVIDER_PROMPT_BYTES {
         return Err("AI 입력이 전송 상한을 넘었습니다. 질문과 조회 범위를 좁혀 주세요".to_owned());
@@ -1084,6 +1151,19 @@ fn run_provider_budget(
     validate_reasoning_selection(provider, model.as_deref(), reasoning_effort.as_deref())?;
     fs::create_dir_all(&workspace)
         .map_err(|error| format!("대화 작업 폴더를 만들지 못했습니다: {error}"))?;
+    let analysis_schema = if provider == AssistantProviderKind::Codex && use_analysis_schema {
+        let mut schema = tempfile::Builder::new()
+            .prefix("response-schema-")
+            .suffix(".json")
+            .tempfile_in(&workspace)
+            .map_err(|_| "AI 응답 형식을 준비하지 못했습니다".to_owned())?;
+        schema
+            .write_all(ANALYSIS_RESPONSE_SCHEMA.as_bytes())
+            .map_err(|_| "AI 응답 형식을 준비하지 못했습니다".to_owned())?;
+        Some(schema)
+    } else {
+        None
+    };
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -1124,6 +1204,7 @@ fn run_provider_budget(
                 &response_path,
                 model.as_deref(),
                 reasoning_effort.as_deref(),
+                analysis_schema.as_ref().map(|schema| schema.path()),
             )?;
             command.stdout(Stdio::null());
         }
@@ -1505,6 +1586,7 @@ fn empty_provider_status(provider: AssistantProviderKind, busy: bool) -> Assista
         passed_launch_checks: false,
         cli_reasoning_efforts: Vec::new(),
         claude_catalog_supported: false,
+        codex_output_schema_supported: false,
     }
 }
 
@@ -1611,6 +1693,7 @@ fn configure_codex_chat(
     response_path: &Path,
     model: Option<&str>,
     reasoning_effort: Option<&str>,
+    analysis_schema: Option<&Path>,
 ) -> Result<(), String> {
     validate_reasoning_selection(AssistantProviderKind::Codex, model, reasoning_effort)?;
     command
@@ -1634,6 +1717,9 @@ fn configure_codex_chat(
         command
             .arg("--config")
             .arg(format!("model_reasoning_effort=\"{effort}\""));
+    }
+    if let Some(schema) = analysis_schema {
+        command.arg("--output-schema").arg(schema);
     }
     command.arg("-");
     Ok(())
@@ -1860,6 +1946,8 @@ fn inspect_candidate(
                     status.model_catalog_source = AssistantModelCatalogSource::Unsupported;
                 }
                 status.cli_reasoning_efforts = cli_reasoning_efforts(provider, &output.stdout);
+                status.codex_output_schema_supported = provider == AssistantProviderKind::Codex
+                    && help_has_option(&output.stdout, "--output-schema");
                 status.claude_catalog_supported = provider == AssistantProviderKind::ClaudeCode
                     && CLAUDE_CATALOG_EXTRA_ARGS
                         .iter()
@@ -2356,6 +2444,207 @@ mod tests {
     }
 
     #[test]
+    fn format_recovery_consumes_only_one_remaining_model_round() {
+        let mut recovery = FormatRecovery::default();
+        assert!(recovery.schedule(0, Duration::from_secs(1)));
+        assert!(!recovery.schedule(1, Duration::from_secs(1)));
+        assert!(
+            !FormatRecovery::default().schedule(MAX_INVESTIGATION_ACTIONS, Duration::from_secs(1))
+        );
+        assert!(!FormatRecovery::default().schedule(0, Duration::ZERO));
+        assert!(
+            FormatRecovery::default()
+                .schedule(MAX_INVESTIGATION_ACTIONS - 1, Duration::from_secs(1))
+        );
+        let mut trace = Investigation::default();
+        trace.admit("already-dispatched".into()).unwrap();
+        trace.record("actual-app-evidence".into()).unwrap();
+        let mut prompt = "original question".to_owned();
+        append_investigation_context(&mut prompt, &trace, false);
+        recovery.append_contract(&mut prompt);
+        assert!(prompt.contains("actual-app-evidence"));
+        assert!(prompt.contains("action:null"));
+        assert!(trace.admit("already-dispatched".into()).is_err());
+        assert_eq!(trace.requests.len(), 1);
+    }
+
+    #[test]
+    fn response_liveness_rejects_cancellation_and_stale_permission_epochs() {
+        let cancellation = AtomicBool::new(false);
+        assert!(ensure_chat_request_active(&cancellation, true).is_ok());
+        assert!(ensure_chat_request_active(&cancellation, false).is_err());
+        cancellation.store(true, Ordering::Release);
+        assert!(ensure_chat_request_active(&cancellation, true).is_err());
+        assert!(ensure_chat_request_active(&cancellation, false).is_err());
+    }
+
+    #[test]
+    fn analysis_schema_is_null_action_only_and_optional_for_older_codex() {
+        let schema: serde_json::Value = serde_json::from_str(ANALYSIS_RESPONSE_SCHEMA).unwrap();
+        assert_eq!(schema["properties"]["action"]["type"], "null");
+        assert_eq!(schema["required"], serde_json::json!(["message", "action"]));
+        assert_eq!(schema["additionalProperties"], false);
+        let old_help = "--ephemeral --ignore-user-config --ignore-rules --skip-git-repo-check --sandbox --config --color --cd --output-last-message";
+        assert!(missing_chat_options(AssistantProviderKind::Codex, old_help).is_empty());
+        assert!(!help_has_option(old_help, "--output-schema"));
+        assert!(!help_has_option(
+            "--output-schema-extra FILE",
+            "--output-schema"
+        ));
+        assert!(help_has_option("--output-schema <FILE>", "--output-schema"));
+        let mut command = std::process::Command::new("codex");
+        configure_codex_chat(
+            &mut command,
+            Path::new("workspace"),
+            Path::new("response.txt"),
+            None,
+            None,
+            Some(Path::new("schema.json")),
+        )
+        .unwrap();
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--output-schema", "schema.json"])
+        );
+        assert_eq!(args.last(), Some(&"-"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn codex_analysis_schema_is_temporary_and_stdout_never_becomes_an_action() {
+        use crate::assistant_tools::parse_envelope;
+        let dir = tempfile::tempdir().unwrap();
+        let inspect_schema = r#"
+response=
+schema=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output-last-message) shift; response="$1" ;;
+    --output-schema) shift; schema="$1" ;;
+  esac
+  shift
+done
+[ -n "$schema" ] && [ -f "$schema" ] || exit 17
+case "$(cat "$schema")" in *'"action":{"type":"null"}'*) ;; *) exit 18 ;; esac
+"#;
+        let program = fake_cli(
+            dir.path(),
+            "schema-provider",
+            &format!(
+                "{inspect_schema}\ncat >/dev/null\nprintf '%s' 'PRIVATE_STDOUT_NOT_AN_ENVELOPE'\nprintf '%s' '{{\"message\":\"Actual structured answer.\",\"action\":null}}' >\"$response\""
+            ),
+        );
+        let workspace = dir.path().join("workspace");
+        let raw = run_provider_budget(
+            AssistantProviderKind::Codex,
+            program,
+            None,
+            None,
+            workspace.clone(),
+            0,
+            "synthetic general question".into(),
+            std::sync::Arc::new(AtomicBool::new(false)),
+            Duration::from_secs(2),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            final_analysis_message(parse_envelope(&raw).unwrap()).as_deref(),
+            Some("Actual structured answer.")
+        );
+        assert!(!raw.contains("PRIVATE_STDOUT"));
+        assert!(fs::read_dir(&workspace).unwrap().next().is_none());
+
+        let stalled = fake_cli(
+            dir.path(),
+            "schema-stalled",
+            &format!("{inspect_schema}\nexec /bin/sleep 3"),
+        );
+        for (index, cancelled) in [false, true].into_iter().enumerate() {
+            let result = run_provider_budget(
+                AssistantProviderKind::Codex,
+                stalled.clone(),
+                None,
+                None,
+                workspace.clone(),
+                index as u64 + 1,
+                "synthetic recovery".into(),
+                std::sync::Arc::new(AtomicBool::new(cancelled)),
+                Duration::from_millis(100),
+                true,
+            );
+            assert!(result.is_err());
+            assert!(fs::read_dir(&workspace).unwrap().next().is_none());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scripted_format_recovery_never_resends_invalid_output_or_dispatches_an_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let program = fake_cli(
+            dir.path(),
+            "format-provider",
+            r#"
+input=$(cat)
+case "$input" in
+  *'One format-recovery round'*)
+    case "$input" in *PRIVATE_MALFORMED_SENTINEL*) exit 17 ;; esac
+    printf '%s' '{"message":"General answer in the requested protocol.","action":null}' ;;
+  *) printf '%s' 'PRIVATE_MALFORMED_SENTINEL plain text is not an executable envelope' ;;
+esac
+"#,
+        );
+        let cancellation = std::sync::Arc::new(AtomicBool::new(false));
+        let workspace = dir.path().join("workspace");
+        let first = run_provider(
+            AssistantProviderKind::ClaudeCode,
+            program.clone(),
+            None,
+            workspace.clone(),
+            1,
+            "original general question".into(),
+            cancellation.clone(),
+        )
+        .unwrap();
+        assert!(super::super::assistant_tools::parse_envelope(&first).is_err());
+        let mut recovery = FormatRecovery::default();
+        assert!(recovery.schedule(0, Duration::from_secs(5)));
+        let trace = Investigation::default();
+        let mut prompt = "original general question".to_owned();
+        append_investigation_context(&mut prompt, &trace, false);
+        recovery.append_contract(&mut prompt);
+        assert!(!prompt.contains("PRIVATE_MALFORMED_SENTINEL"));
+        let second = run_provider(
+            AssistantProviderKind::ClaudeCode,
+            program,
+            None,
+            workspace.clone(),
+            2,
+            prompt,
+            cancellation,
+        )
+        .unwrap();
+        let envelope = super::super::assistant_tools::parse_envelope(&second).unwrap();
+        assert!(
+            final_analysis_message(envelope)
+                .unwrap()
+                .contains("General answer")
+        );
+        assert!(trace.requests.is_empty());
+        assert!(fs::read_dir(&workspace).unwrap().next().is_none());
+        let action = super::super::assistant_tools::parse_envelope(
+            r#"{"message":"Retry query","action":{"kind":"files","operation":{"kind":"scan"}}}"#,
+        )
+        .unwrap();
+        assert!(final_analysis_message(action).is_none());
+    }
+
+    #[test]
     fn native_file_aliases_share_the_investigation_repeat_guard() {
         use crate::assistant_tools::parse_envelope;
         let legacy = parse_envelope(
@@ -2553,6 +2842,7 @@ esac
             "x".repeat(128 * 1024),
             std::sync::Arc::new(AtomicBool::new(false)),
             Duration::from_millis(100),
+            false,
         );
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
@@ -2572,6 +2862,7 @@ esac
             "x".repeat(128 * 1024),
             flag,
             Duration::from_secs(2),
+            false,
         );
         worker.join().unwrap();
         assert!(result.unwrap_err().contains("취소"));
@@ -2754,6 +3045,7 @@ esac
                 "synthetic prompt".into(),
                 std::sync::Arc::new(AtomicBool::new(false)),
                 Duration::from_secs(2),
+                false,
             )
             .unwrap();
             let args: Vec<_> = response.lines().collect();
@@ -3215,6 +3507,94 @@ esac
                 index + 1
             );
         }
+    }
+
+    #[test]
+    #[ignore = "Opt-in two real Codex general/recovery requests; temporary synthetic workspace, no app dispatcher"]
+    fn live_codex_general_answer_and_analysis_schema_contract() {
+        use crate::assistant_tools::{TOOL_CONTRACT, parse_envelope};
+        let provider = AssistantProviderKind::Codex;
+        let (status, program) = resolve_candidates_cancellable(
+            provider,
+            true,
+            find_external_programs(provider.executable_name()),
+            None,
+        );
+        assert!(
+            status.available,
+            "Installed Codex must be ready for this opt-in diagnostic"
+        );
+        let program = program.expect("available CLI");
+        let (models, _) = codex_models(&program);
+        let selected = models
+            .iter()
+            .find(|model| model.id == "gpt-6.1-sol")
+            .expect("Opt-in model must appear in the installed CLI catalog");
+        assert!(
+            selected
+                .supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort == "medium"),
+            "Opt-in effort must appear in the installed CLI catalog"
+        );
+        let mut request = valid_request();
+        request.summary.scope_name = "Synthetic QA".into();
+        request.summary.children.clear();
+        request.model = Some(selected.id.clone());
+        request.reasoning_effort = Some("medium".into());
+        request.message="What keyboard shortcuts take a screenshot on macOS? This is a general question, not a request to inspect or operate local files.".into();
+        let mut prompt = build_prompt(&request, None).unwrap();
+        prompt.push_str(TOOL_CONTRACT);
+        prompt.push_str(&bloomsweepy_control::native_prompt_catalog());
+        append_investigation_context(&mut prompt, &Investigation::default(), false);
+        let temp = tempfile::tempdir().unwrap();
+        let cancellation = std::sync::Arc::new(AtomicBool::new(false));
+        let raw = run_provider_budget(
+            provider,
+            program.clone(),
+            request.model.clone(),
+            request.reasoning_effort.clone(),
+            temp.path().to_owned(),
+            0,
+            prompt.clone(),
+            cancellation.clone(),
+            Duration::from_secs(60),
+            false,
+        )
+        .expect("General question must complete without raw output logging");
+        assert!(
+            final_analysis_message(
+                parse_envelope(&raw)
+                    .expect("General response must follow the JSON object contract")
+            )
+            .is_some(),
+            "General answer must not request an app action"
+        );
+        let mut recovery = FormatRecovery::default();
+        assert!(recovery.schedule(0, Duration::from_secs(60)));
+        recovery.append_contract(&mut prompt);
+        let raw = run_provider_budget(
+            provider,
+            program,
+            request.model,
+            request.reasoning_effort,
+            temp.path().to_owned(),
+            1,
+            prompt,
+            cancellation,
+            Duration::from_secs(60),
+            status.codex_output_schema_supported,
+        )
+        .expect("Recovery must complete without raw output logging");
+        assert!(
+            final_analysis_message(
+                parse_envelope(&raw)
+                    .expect("Recovery response must follow the JSON object contract")
+            )
+            .is_some(),
+            "Recovery must not request an app action"
+        );
+        assert!(fs::read_dir(temp.path()).unwrap().next().is_none());
     }
 
     fn valid_request() -> AssistantChatRequest {
@@ -3679,6 +4059,7 @@ fi
             Path::new("response.txt"),
             Some("gpt-6-astra"),
             Some("high"),
+            None,
         )
         .unwrap();
         let args = codex
@@ -3704,9 +4085,11 @@ fi
             Path::new("response.txt"),
             None,
             None,
+            None,
         )
         .unwrap();
         assert!(!default.get_args().any(|arg| arg == "--model"));
+        assert!(!default.get_args().any(|arg| arg == "--output-schema"));
         assert!(
             !default
                 .get_args()
@@ -3718,6 +4101,7 @@ fi
             Path::new("workspace"),
             Path::new("response.txt"),
             Some("gpt-visible"),
+            None,
             None,
         )
         .unwrap();
@@ -3733,7 +4117,8 @@ fi
                 Path::new("workspace"),
                 Path::new("response.txt"),
                 Some("gpt-visible"),
-                Some("high\";echo")
+                Some("high\";echo"),
+                None,
             )
             .is_err()
         );

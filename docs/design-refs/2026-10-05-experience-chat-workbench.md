@@ -113,6 +113,14 @@ requirement still applies. Other screens keep their existing scroll ownership.
 No new dependencies or blur layers. Collapsed evidence is lazy rendered. One timer
 only while a request is active. Event listeners disposed on completion/unmount.
 
+2026-10-11 timeline delta: evidence belongs immediately after its assistant turn,
+not after the entire message list. Keep bounded read-only history separate from
+current review authority. Completion/decline removes controls and leaves the actual
+operation summary. A new question neither approves nor declines an earlier plan.
+Saved questions receive inline persisted BroomSweepy failure messages; explicit
+retry is bound to the original question/session/permission/workspace revision without saving
+the user message twice. Cancellation, authority changes and manual workspace queries invalidate retry.
+
 ## Accessibility Contract
 
 One h1, semantic controls and labelled textarea, polite phase updates (timer not

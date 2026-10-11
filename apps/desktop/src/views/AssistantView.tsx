@@ -25,6 +25,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { AssistantEmptyFolderCard, AssistantTrashResultCard } from "../components/AssistantEmptyFolderCard";
@@ -67,6 +68,8 @@ import { formatAssistantPlainText } from "../lib/assistantText";
 import { elapsedLabel, matchesAssistantProgress } from "../lib/assistantProgress";
 import { assistantFailureMessage, assistantProviderStatusKey, isAssistantAuthenticationFailure } from "../lib/assistantProviderStatus";
 import { isDockerManagementQuestion } from "../lib/dockerIntent";
+import { appendAssistantEvidence, assistantTurnKey, boundedAssistantTurns, boundedAssistantFailureDetail, canRetryAssistantQuestion,
+  mergeAssistantToolResults, type AssistantTimelineTurn, type AssistantTurnEvidence, type AssistantQuestionRetry } from "../lib/assistantTimeline";
 import { formatBytes, formatCount, formatDate, formatDockerBytes } from "../lib/format";
 import { findVolumeForPath } from "../lib/volumePath";
 import type {
@@ -94,10 +97,7 @@ import type {
   VolumeInfo,
 } from "../types";
 
-interface AssistantDisplayTurn extends AssistantChatTurn {
-  providerLabel?: string;
-  sequence?: number;
-}
+type AssistantDisplayTurn = AssistantTimelineTurn;
 
 interface AssistantViewProps {
   controlSettings: ControlStatusPanelProps;
@@ -150,6 +150,13 @@ export function AssistantView({
   const selectedReasoningEffort = modelPreference.reasoningEffortFor(selectedProviderKind, selectedModel);
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
   const [appToolResults, setAppToolResults] = useState<AppToolResult[]>([]);
+  const [turnEvidence, setTurnEvidence] = useState<AssistantTurnEvidence[]>([]);
+  const [activeActionTurnKey, setActiveActionTurnKey] = useState<string | null>(null);
+  const activeActionTurnRef = useRef<string | null>(null);
+  activeActionTurnRef.current = activeActionTurnKey;
+  const reviewedEvidence = useRef<AppToolResult | null>(null);
+  const [questionRetry, setQuestionRetry] = useState<AssistantQuestionRetry | null>(null);
+  const permissionRevision = useRef(0);
   const handledCompletion = useRef<number | null>(null);
   const [checkingProviders, setCheckingProviders] = useState(true);
   const [providerError, setProviderError] = useState<string | null>(null);
@@ -158,7 +165,10 @@ export function AssistantView({
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
-  const [turns, setTurns] = useState<AssistantDisplayTurn[]>([]);
+  const [turns, setTurnState] = useState<AssistantDisplayTurn[]>([]);
+  const setTurns = (update: SetStateAction<AssistantDisplayTurn[]>) => setTurnState(current => boundedAssistantTurns(
+    typeof update === "function" ? update(current) : update, () => crypto.randomUUID(),
+  ));
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [requestProgress, setRequestProgress] = useState<AssistantProgress | null>(null);
@@ -170,8 +180,10 @@ export function AssistantView({
   const progressUnlisten = useRef<(() => void) | null>(null);
   const [emptyWorkspace, setEmptyWorkspace] = useState<AssistantEmptyWorkspace | null>(null);
   const [fileWorkspace, setFileWorkspace] = useState<AssistantFileWorkspace | null>(null);
+  const [workspaceTurnKey, setWorkspaceTurnKey] = useState<string | null>(null);
   const [emptyActionBusy, setEmptyActionBusy] = useState(false);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
+  const [trashResultTurnKey, setTrashResultTurnKey] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [dockerContext, setDockerContext] = useState<AssistantDockerContext | null>(null);
   const [dockerPreview, setDockerPreview] = useState<DockerCleanupPreview | null>(null);
@@ -182,6 +194,7 @@ export function AssistantView({
   const followLatest = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const requestInFlight = useRef(false);
+  const cancelledQuestion = useRef(false);
   const sessionLoadRevision = useRef(0);
   const emptyStateRevision = useRef(0);
   const activeScope = activeSession?.session.scopeRoot ?? null;
@@ -192,14 +205,50 @@ export function AssistantView({
   const canReview = canReviewInMode(permissionMode);
   const permissionsBusy = Boolean(controlSettings.permissionControlsLocked || controlSettings.updatingPermissionLifetime);
   const previousPermissionMode = useRef(permissionMode);
+  const activeSessionId = useRef(activeSession?.session.id);
+  activeSessionId.current = activeSession?.session.id;
 
   useEffect(() => {
     if (previousPermissionMode.current === permissionMode) return;
     previousPermissionMode.current = permissionMode;
+    ++permissionRevision.current;
     ++emptyStateRevision.current;
     setFileWorkspace(null); setEmptyWorkspace(null); setTrashResult(null);
+    setWorkspaceTurnKey(null);
     setAppToolResults([]); setDockerPreview(null); setDockerContext(null);
+    setActiveActionTurnKey(null); activeActionTurnRef.current = null;
+    setQuestionRetry(null);
   }, [permissionMode]);
+
+  useEffect(() => {
+    const keys = new Set(turns.map(assistantTurnKey));
+    setTurnEvidence(current => current.some(entry => !keys.has(entry.turnKey))
+      ? current.filter(entry => keys.has(entry.turnKey)) : current);
+    if (workspaceTurnKey && !keys.has(workspaceTurnKey)) {
+      setWorkspaceTurnKey(null); setFileWorkspace(null); setEmptyWorkspace(null);
+    }
+    if (trashResultTurnKey && !keys.has(trashResultTurnKey)) { setTrashResult(null); setTrashResultTurnKey(null); }
+  }, [turns, workspaceTurnKey, trashResultTurnKey]);
+
+  function attachToolResults(turnKey: string, results: AppToolResult[]) {
+    const incoming = results.slice(-4);
+    setAppToolResults(current => mergeAssistantToolResults(current, incoming));
+    setTurnEvidence(current => appendAssistantEvidence(current, incoming.map(result => ({ id: crypto.randomUUID(), turnKey, result }))));
+    setActiveActionTurnKey(turnKey); activeActionTurnRef.current = turnKey;
+  }
+
+  function removeToolReviews(matches: (result: AppToolResult) => boolean) {
+    setAppToolResults(current => current.filter(result => !matches(result)));
+    setTurnEvidence(current => current.filter(entry => !matches(entry.result)));
+  }
+
+  function appendWorkspaceTurn(content: string, withWorkspace = true) {
+    const turnKey = crypto.randomUUID();
+    setTurns(current => [...current, { id: turnKey, role: "assistant", content, providerLabel: "BroomSweepy" }]);
+    if (withWorkspace) setWorkspaceTurnKey(turnKey);
+    setActiveActionTurnKey(turnKey); activeActionTurnRef.current = turnKey;
+    return turnKey;
+  }
   const summary = activeSession?.folderSummary ?? null;
   const volume = useMemo(
     () => findVolumeForPath(volumes, activeScope),
@@ -225,17 +274,19 @@ export function AssistantView({
       && !permissionsBusy,
   );
 
+  const activeToolResults = appToolResults.filter(result => turnEvidence.some(entry => entry.result === result && entry.turnKey === activeActionTurnKey));
   const pendingTrash = [
-    ...appToolResults.filter(result => applicationTrashQuestion(result)).map(result => ({ kind: "application" as const, result })),
-    ...(fileWorkspace?.plan ? [{ kind: "file" as const }] : []),
-    ...(emptyWorkspace?.plan ? [{ kind: "empty" as const }] : []),
+    ...activeToolResults.filter(result => applicationTrashQuestion(result)).map(result => ({ kind: "application" as const, result })),
+    ...(activeActionTurnKey && workspaceTurnKey === activeActionTurnKey && fileWorkspace?.plan ? [{ kind: "file" as const }] : []),
+    ...(activeActionTurnKey && workspaceTurnKey === activeActionTurnKey && emptyWorkspace?.plan ? [{ kind: "empty" as const }] : []),
   ];
   const canAnswerTrash = Boolean(canReview && activeSession && pendingTrash.length && !sending && !sessionBusy && !cleanupAccessLocked && !permissionsBusy);
 
   async function reportTrashCompletion(completion: AppToolReviewCompletion, sessionId: string) {
     if (onAppToolCompleted) { onAppToolCompleted(completion, sessionId); return; }
-    setTurns(current => [...current, { role: "assistant", content: completion.message, providerLabel: "BroomSweepy" }]);
-    if (completion.trashResult) { setTrashResult(completion.trashResult); setFileWorkspace(null); setEmptyWorkspace(null); }
+    const turnKey = crypto.randomUUID();
+    setTurns(current => [...current, { id: turnKey, role: "assistant", content: completion.message, providerLabel: "BroomSweepy" }]);
+    if (completion.trashResult) { setTrashResult(completion.trashResult); setTrashResultTurnKey(turnKey); setFileWorkspace(null); setEmptyWorkspace(null); }
     await appendAssistantMessage({ sessionId, role: "assistant", content: completion.message, provider: null, model: null })
       .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantError(reason, t)));
   }
@@ -244,6 +295,7 @@ export function AssistantView({
     const sessionId = activeSession?.session.id;
     const pending = applicationResult ? { kind: "application" as const, result: applicationResult } : solePendingTrash(pendingTrash);
     if (!sessionId || !pending || requestInFlight.current || sending || sessionBusy || cleanupAccessLocked || permissionsBusy || (confirmed && !canReview)) return;
+    if (pending.kind === "application" && !activeToolResults.includes(pending.result)) return;
     const content = message ?? t(confirmed ? "예, 휴지통으로 이동" : "아니오");
     setDraft("");
     followLatest.current = true;
@@ -259,7 +311,7 @@ export function AssistantView({
     setExecutingTrash(confirmed);
     onAppTrashBusyChange?.(true);
     // Remove the decision immediately; errors are not permission to replay a consumed plan.
-    setAppToolResults(current => current.filter(result => result !== pending.result));
+    removeToolReviews(result => result === pending.result);
     void (async () => {
       let completion: AppToolReviewCompletion;
       try {
@@ -277,13 +329,16 @@ export function AssistantView({
     })().finally(() => { requestInFlight.current = false; setSessionBusy(false); setExecutingTrash(false); onAppTrashBusyChange?.(false); });
   }
 
-  useEffect(() => { setAppToolResults([]); }, [activeSession?.session.id]);
+  useEffect(() => { setAppToolResults([]); setTurnEvidence([]); setQuestionRetry(null); setActiveActionTurnKey(null); activeActionTurnRef.current = null; setWorkspaceTurnKey(null); reviewedEvidence.current = null; }, [activeSession?.session.id]);
   useEffect(() => {
     if (!appToolCompletion || appToolCompletion.sequence === handledCompletion.current || appToolCompletion.sessionId !== activeSession?.session.id) return;
     handledCompletion.current = appToolCompletion.sequence;
-    setTurns((current) => [...current, { role: "assistant", content: appToolCompletion.message, providerLabel: "BroomSweepy" }]);
-    setAppToolResults((current) => current.filter((result) => result.status !== "review_required"));
-    if (appToolCompletion.trashResult) { setTrashResult(appToolCompletion.trashResult); setFileWorkspace(null); setEmptyWorkspace(null); }
+    const turnKey = crypto.randomUUID();
+    setTurns((current) => [...current, { id: turnKey, role: "assistant", content: appToolCompletion.message, providerLabel: "BroomSweepy" }]);
+    const reviewed = reviewedEvidence.current;
+    removeToolReviews(result => result.status === "review_required" && (reviewed ? result === reviewed : activeToolResults.includes(result)));
+    reviewedEvidence.current = null;
+    if (appToolCompletion.trashResult) { setTrashResult(appToolCompletion.trashResult); setTrashResultTurnKey(turnKey); setFileWorkspace(null); setEmptyWorkspace(null); }
     void appendAssistantMessage({ sessionId: appToolCompletion.sessionId!, role: "assistant", content: appToolCompletion.message, provider: null, model: null })
       .then((mutation) => updateSessionSummary(mutation.session))
       .catch((reason) => setSessionError(t("AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(reason, t) })));
@@ -339,6 +394,7 @@ export function AssistantView({
     const sessionId = activeSession?.session.id;
     if (!sessionId || permissionMode !== "full_access" || requestInFlight.current || sending || sessionBusy || cleanupAccessLocked || permissionsBusy) return;
     requestInFlight.current = true;
+    setQuestionRetry(null);
     const revision = ++emptyStateRevision.current;
     setSessionBusy(true); setEmptyActionBusy(true); setSessionError(null);
     try {
@@ -347,12 +403,12 @@ export function AssistantView({
       const workspace = result.presentation?.workspace as AssistantFileWorkspace | undefined;
       if (workspace?.revision && typeof workspace.currentPath === "string") {
         setFileWorkspace(workspace); setEmptyWorkspace(null); setTrashResult(null);
-        setAppToolResults([]);
-      } else setAppToolResults([result]);
+      }
       const content = workspace ? fileWorkspaceMessage(workspace, t, !canReviewInMode(permissionModeRef.current))
         : `${t(operation.kind === "search_all" ? "전체 로컬 드라이브 검색" : "로컬 드라이브 목록")} · ${t(appToolStatusKeys[result.status])}`
           + (result.truncated || result.data.partial === true ? ` · ${t("일부 결과만 표시합니다.")}` : "");
-      setTurns(current => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+      const turnKey = appendWorkspaceTurn(content, Boolean(workspace));
+      attachToolResults(turnKey, workspace ? [] : [result]);
       const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
       updateSessionSummary(mutation.session);
     } catch (reason) { if (revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); }
@@ -363,21 +419,25 @@ export function AssistantView({
     const sessionId = activeSession?.session.id;
     if (!sessionId || requestInFlight.current || sessionBusy || sending || cleanupAccessLocked || permissionsBusy) return;
     if (!canReview && (typeof action === "string" || action.kind === "review" || action.kind === "select")) return;
+    if (typeof action === "string" && (!activeActionTurnRef.current || workspaceTurnKey !== activeActionTurnRef.current)) return;
     if (typeof action === "string" && !fileWorkspace) return;
     requestInFlight.current = true;
+    setQuestionRetry(null);
     const revision = ++emptyStateRevision.current;
     setSessionBusy(true);
     setEmptyActionBusy(true);
     setSessionError(null);
     try {
       if (action === "confirm" && fileWorkspace?.plan) {
-        setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision)));
+        removeToolReviews(result => workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision));
         const result = await onConfirmFilePlan(sessionId, fileWorkspace.revision, fileWorkspace.plan.id, nestedAck);
         if (revision !== emptyStateRevision.current) return;
         setFileWorkspace(null); setEmptyWorkspace(null); setTrashResult(result);
         const content = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })
           + " " + t("추가 정리 전 파일·폴더를 다시 검사하세요.");
-        setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+        const turnKey = crypto.randomUUID();
+        setTrashResultTurnKey(turnKey);
+        setTurns((current) => [...current, { id: turnKey, role: "assistant", content, providerLabel: "BroomSweepy" }]);
         const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
         updateSessionSummary(mutation.session);
       } else {
@@ -389,7 +449,7 @@ export function AssistantView({
         if (workspace && revision === emptyStateRevision.current) {
           const cancelled = action === "select" && ids?.length === 0 && Boolean(fileWorkspace?.plan) && !workspace.plan;
           if (fileWorkspace?.plan && fileWorkspace.plan.id !== workspace.plan?.id) {
-            setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision)));
+            removeToolReviews(result => workspaceReviewMatches(result, "files.workspace", fileWorkspace.revision));
           }
           setFileWorkspace(workspace); setEmptyWorkspace(null); setTrashResult(null);
           if (workspace.query === null && workspace.currentPath === activeScope) setActiveSession((current) => current?.session.id === sessionId
@@ -397,7 +457,8 @@ export function AssistantView({
           // Local navigation/review is evidence for the next AI turn, but paths remain local.
           if (action !== "select" || cancelled) {
             const content = cancelled ? t("취소했습니다. 휴지통으로 이동한 항목은 없습니다.") : fileWorkspaceMessage(workspace, t, !canReviewInMode(permissionModeRef.current));
-            setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+            if (cancelled) setFileWorkspace(null);
+            appendWorkspaceTurn(content, !cancelled);
             const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
             updateSessionSummary(mutation.session);
           }
@@ -415,7 +476,9 @@ export function AssistantView({
   async function manageEmptyFolders(action: "select" | "prepare" | "confirm", ids?: string[]) {
     const sessionId = activeSession?.session.id;
     if (!sessionId || !emptyWorkspace || requestInFlight.current || sessionBusy || sending || cleanupAccessLocked || permissionsBusy || !canReview) return;
+    if (!activeActionTurnRef.current || workspaceTurnKey !== activeActionTurnRef.current) return;
     requestInFlight.current = true;
+    setQuestionRetry(null);
     const revision = ++emptyStateRevision.current;
     setSessionBusy(true);
     setEmptyActionBusy(true);
@@ -425,10 +488,11 @@ export function AssistantView({
         const workspace = await selectAssistantEmptyCandidates(sessionId, emptyWorkspace.revision, ids ?? []);
         if (revision !== emptyStateRevision.current) return;
         if (emptyWorkspace.plan && emptyWorkspace.plan.id !== workspace.plan?.id) {
-          setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision)));
+          removeToolReviews(result => workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision));
         }
         setEmptyWorkspace(workspace);
         if (emptyWorkspace.plan && ids?.length === 0 && !workspace.plan) {
+          setEmptyWorkspace(null);
           const content = t("취소했습니다. 휴지통으로 이동한 항목은 없습니다.");
           setTurns(current => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
           const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
@@ -438,14 +502,16 @@ export function AssistantView({
         const workspace = await prepareAssistantEmptyPlan(sessionId, emptyWorkspace.revision);
         if (revision === emptyStateRevision.current) setEmptyWorkspace(workspace);
       } else if (emptyWorkspace.plan) {
-        setAppToolResults(current => current.filter(result => !workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision)));
+        removeToolReviews(result => workspaceReviewMatches(result, "empty.workspace", emptyWorkspace.revision));
         const result = await onConfirmEmptyPlan(sessionId, emptyWorkspace.revision, emptyWorkspace.plan.id);
         if (revision !== emptyStateRevision.current) return;
         setEmptyWorkspace(null);
         setTrashResult(result);
         const content = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })
           + " " + t("추가 정리 전 빈 폴더를 다시 검사하세요.");
-        setTurns((current) => [...current, { role: "assistant", content, providerLabel: "BroomSweepy" }]);
+        const turnKey = crypto.randomUUID();
+        setTrashResultTurnKey(turnKey);
+        setTurns((current) => [...current, { id: turnKey, role: "assistant", content, providerLabel: "BroomSweepy" }]);
         // Count-only execution evidence is retained for the next AI turn; local paths stay in the result card/journal.
         const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
         updateSessionSummary(mutation.session);
@@ -567,6 +633,8 @@ export function AssistantView({
           : message.providerLabel
         : undefined,
       sequence: message.sequence,
+      failed: message.role === "assistant" && message.provider === null
+        && message.content.startsWith(t("답변을 받지 못했습니다. {{detail}}", { detail: "" }).trim()),
     })));
     setDraft("");
     setProviderError(null);
@@ -574,6 +642,8 @@ export function AssistantView({
     setDockerPreview(null);
     setDockerReviewError(null);
     setAppToolResults([]);
+    setTurnEvidence([]); setQuestionRetry(null); setActiveActionTurnKey(null); activeActionTurnRef.current = null;
+    setWorkspaceTurnKey(null);
   }
 
   function updateSessionSummary(nextSession: AssistantSessionSummary) {
@@ -733,12 +803,13 @@ export function AssistantView({
     progressUnlisten.current = null;
   }, []);
 
-  async function submitQuestion(event?: FormEvent) {
+  async function submitQuestion(event?: FormEvent, retry?: AssistantQuestionRetry) {
     event?.preventDefault();
-    const message = draft.trim();
+    const message = retry?.message ?? draft.trim();
     const sessionId = activeSession?.session.id;
+    if (retry && !canRetryAssistantQuestion(retry, sessionId, permissionRevision.current, emptyStateRevision.current, turns)) return;
     const decision = humanTrashDecision(message);
-    if (decision !== null && pendingTrash.length) {
+    if (!retry && decision !== null && pendingTrash.length) {
       if (!solePendingTrash(pendingTrash)) { setSessionError(t("확인할 대상이 여러 개입니다. 원하는 카드의 예 또는 아니오를 눌러 주세요.")); return; }
       answerTrash(decision, message);
       return;
@@ -747,12 +818,19 @@ export function AssistantView({
     const includeDockerStatus = activeScopeKind === "docker" || isDockerManagementQuestion(message);
 
     requestInFlight.current = true;
+    cancelledQuestion.current = false;
     followLatest.current = true;
     setShowLatest(false);
     const workspaceRevision = ++emptyStateRevision.current;
-    const previousTurns = boundedConversationHistory(turns);
-    setTurns((current) => [...current, { role: "user", content: message }]);
-    setDraft("");
+    const requestPermissionRevision = permissionRevision.current;
+    const userTurnKey = retry?.userTurnKey ?? crypto.randomUUID();
+    const previousTurns = retry?.history ?? boundedConversationHistory(turns);
+    if (!retry) {
+      setTurns((current) => [...current, { id: userTurnKey, role: "user", content: message }]);
+      setDraft("");
+    }
+    setQuestionRetry(null);
+    setActiveActionTurnKey(null); activeActionTurnRef.current = null;
     setSending(true);
     const progressId = crypto.randomUUID();
     activeProgressId.current = progressId;
@@ -760,12 +838,11 @@ export function AssistantView({
     setSavingResponse(false);
     setRequestStarted(Date.now());
     setClockNow(Date.now());
-    setProviderError(null);
     setSessionError(null);
     setDockerContext(null);
     setDockerPreview(null);
     setDockerReviewError(null);
-    let userMessageSaved = false;
+    let userMessageSaved = Boolean(retry);
 
     try {
       // Observability is best-effort; a missing event channel must not block chat.
@@ -776,15 +853,17 @@ export function AssistantView({
         if (activeProgressId.current === progressId) progressUnlisten.current = unlisten;
         else unlisten();
       } catch { /* Older hosts still provide elapsed time and cancellation. */ }
-      const userMutation = await appendAssistantMessage({
-        sessionId,
-        role: "user",
-        content: message,
-        provider: null,
-        model: null,
-      });
-      userMessageSaved = true;
-      updateSessionSummary(userMutation.session);
+      if (!retry) {
+        const userMutation = await appendAssistantMessage({
+          sessionId,
+          role: "user",
+          content: message,
+          provider: null,
+          model: null,
+        });
+        userMessageSaved = true;
+        updateSessionSummary(userMutation.session);
+      }
       const response = await askAssistant({
         progressId,
         sessionId,
@@ -798,7 +877,7 @@ export function AssistantView({
         includeDockerStatus,
         responseLanguage: language,
       });
-      if (workspaceRevision !== emptyStateRevision.current || permissionModeRef.current !== permissionMode) return;
+      if (workspaceRevision !== emptyStateRevision.current || permissionModeRef.current !== permissionMode || activeSessionId.current !== sessionId) return;
       const reviews = (response.appToolResults ?? []).filter(result => result.status === "review_required");
       const applicationReview = reviews.length === 1 ? reviews[0] : null;
       const applicationQuestion = applicationReview ? applicationTrashQuestion(applicationReview) : null;
@@ -821,7 +900,9 @@ export function AssistantView({
               : t("후보 페이지를 갱신했습니다. 아래 카드에서 전체 검토 가능 목록을 확인하세요."))
           + " " + t("아직 휴지통으로 이동한 항목은 없습니다.")
         : formatAssistantPlainText(response.message);
+      const responseTurnKey = crypto.randomUUID();
       if (response.emptyWorkspace) {
+        setWorkspaceTurnKey(responseTurnKey);
         setEmptyWorkspace(response.emptyWorkspace);
         setFileWorkspace(null);
         setTrashResult(null);
@@ -829,14 +910,16 @@ export function AssistantView({
           ? { ...current, folderSummary: response.emptyWorkspace!.summary } : current);
       }
       if (response.fileWorkspace) {
+        setWorkspaceTurnKey(responseTurnKey);
         setFileWorkspace(response.fileWorkspace); setEmptyWorkspace(null); setTrashResult(null);
         if (response.fileWorkspace.query === null && response.fileWorkspace.currentPath === activeScope) setActiveSession((current) => current?.session.id === sessionId
           ? { ...current, folderSummary: response.fileWorkspace!.summary } : current);
       }
-      setAppToolResults((response.appToolResults ?? []).slice(-4));
+      attachToolResults(responseTurnKey, response.appToolResults ?? []);
       setTurns((current) => [
         ...current,
         {
+          id: responseTurnKey,
           role: "assistant",
           content: assistantMessage,
           providerLabel: automaticTrash || response.toolAction && !response.analysisComplete ? "BroomSweepy" : response.model ? `${response.label} · ${response.model}` : response.label,
@@ -864,12 +947,14 @@ export function AssistantView({
       // The original human request, never the model's reply, determines authority.
       // Ambiguous/multi-plan answers stay at the inline question even when opted in.
       if (automaticTrash) {
+        if (workspaceRevision !== emptyStateRevision.current || requestPermissionRevision !== permissionRevision.current
+          || activeSessionId.current !== sessionId || cancelledQuestion.current) return;
         if (explicitApp) onAppTrashBusyChange?.(true);
         setSavingResponse(false);
         setSessionBusy(true);
         setExecutingTrash(true);
-        setAppToolResults(current => current.filter(result => result !== applicationReview
-          && !(explicitFiles && files && workspaceReviewMatches(result, "files.workspace", files.revision))));
+        removeToolReviews(result => result === applicationReview
+          || Boolean(explicitFiles && files && workspaceReviewMatches(result, "files.workspace", files.revision)));
         if (explicitFiles) setFileWorkspace(null);
         try {
           const actual = explicitApp
@@ -881,17 +966,37 @@ export function AssistantView({
         } finally { setSessionBusy(false); setExecutingTrash(false); if (explicitApp) onAppTrashBusyChange?.(false); }
       }
     } catch (reason) {
-      if (workspaceRevision !== emptyStateRevision.current || permissionModeRef.current !== permissionMode) return;
       if (!userMessageSaved) {
-        setTurns((current) => current.slice(0, -1));
+        if (activeSessionId.current !== sessionId) return;
+        setTurns((current) => current.filter(turn => assistantTurnKey(turn) !== userTurnKey));
         setDraft((current) => current.trim() ? current : message);
         setSessionError(normalizeAssistantError(reason, t));
       } else {
-        const detail = normalizeAssistantError(reason, t);
-        try { setEmptyWorkspace(await getAssistantEmptyWorkspace(sessionId)); } catch { setEmptyWorkspace(null); }
-        try { setFileWorkspace(await getAssistantFileWorkspace(sessionId)); } catch { setFileWorkspace(null); }
-        setProviderError(detail);
-        if (isAssistantAuthenticationFailure(reason)) {
+        const detail = boundedAssistantFailureDetail(normalizeAssistantError(reason, t));
+        const errorTurnKey = crypto.randomUUID();
+        const content = t("답변을 받지 못했습니다. {{detail}}", { detail });
+        const sameAuthority = workspaceRevision === emptyStateRevision.current && requestPermissionRevision === permissionRevision.current;
+        if (activeSessionId.current === sessionId) {
+          setTurns(current => [...current, { id: errorTurnKey, role: "assistant", content, providerLabel: "BroomSweepy", failed: true }]);
+          setQuestionRetry({ errorTurnKey, userTurnKey, sessionId, message, history: previousTurns,
+            permissionRevision: requestPermissionRevision, workspaceRevision, cancelled: cancelledQuestion.current || !sameAuthority });
+          if (sameAuthority) {
+            const mayRestoreWorkspace = () => activeSessionId.current === sessionId
+              && workspaceRevision === emptyStateRevision.current && requestPermissionRevision === permissionRevision.current;
+            try { const workspace = await getAssistantEmptyWorkspace(sessionId); if (mayRestoreWorkspace()) setEmptyWorkspace(workspace); }
+            catch { if (mayRestoreWorkspace()) setEmptyWorkspace(null); }
+            try { const workspace = await getAssistantFileWorkspace(sessionId); if (mayRestoreWorkspace()) setFileWorkspace(workspace); }
+            catch { if (mayRestoreWorkspace()) setFileWorkspace(null); }
+          }
+        }
+        try {
+          const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
+          updateSessionSummary(mutation.session);
+        } catch (saveReason) {
+          if (activeSessionId.current === sessionId) setSessionError(t("오류를 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(saveReason, t) }));
+        }
+        if (workspaceRevision === emptyStateRevision.current && requestPermissionRevision === permissionRevision.current
+          && activeSessionId.current === sessionId && isAssistantAuthenticationFailure(reason)) {
           setProviders((current) => current.map((candidate) => candidate.provider === selectedProviderKind
             ? { ...candidate, state: "loginRequired", authentication: "required", available: false, busy: false, detail }
             : candidate));
@@ -910,6 +1015,7 @@ export function AssistantView({
   async function stopAssistant() {
     if (!sending || cancelling) return;
     setCancelling(true);
+    cancelledQuestion.current = true;
     try {
       const requested = await cancelAssistant();
       if (!requested) setCancelling(false);
@@ -949,6 +1055,57 @@ export function AssistantView({
       volumesExcluded: true,
       categories: statusAfter.categories,
     });
+  }
+
+  function renderToolEvidence(entry: AssistantTurnEvidence) {
+    const { result } = entry;
+    const live = !entry.archived && entry.turnKey === activeActionTurnKey && appToolResults.includes(result);
+    const review = applicationTrashQuestion(result);
+    return <AssistantEvidence key={entry.id} title={t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}
+      status={t(appToolStatusKeys[result.status]) + (typeof (result.data.returnedCount ?? result.data.matchedCount) === "number"
+        ? ` · ${t("{{count}}개", { count: Number(result.data.returnedCount ?? result.data.matchedCount) })}` : "")}
+      forceOpen={result.status !== "completed" || live && result.data.nativeOnly === true}
+      warning={result.truncated || result.data.truncated === true || result.data.sourceMayBeIncomplete === true ? t("일부 결과만 표시합니다.") : undefined}>
+      {review && live ? <AssistantApplicationConfirmation result={result}
+        busy={sending || sessionBusy || cleanupAccessLocked || permissionsBusy || !canReview}
+        onDecision={confirmed => { if (activeActionTurnRef.current === entry.turnKey) answerTrash(confirmed, undefined, result); }} />
+        : <AssistantAppToolCard result={result} busy={!live || sending || sessionBusy || cleanupAccessLocked}
+          onView={live ? onAppToolView : undefined}
+          onReview={live && canReview && !permissionsBusy && onAppToolReview && activeSession ? prepared => {
+            if (activeActionTurnRef.current !== entry.turnKey) return;
+            reviewedEvidence.current = result;
+            onAppToolReview(prepared, activeSession.session.id);
+          } : undefined}
+          onFileAccessAction={live && permissionMode === "full_access" ? action => {
+            if (activeActionTurnRef.current === entry.turnKey) void manageFileAccess(action);
+          } : undefined} />}
+      {!live && result.status === "review_required" ? <p className="assistant-evidence__historical">
+        {t("이전 요청의 결과입니다. 실행하려면 다시 조회하고 검토해 주세요.")}
+      </p> : null}
+    </AssistantEvidence>;
+  }
+
+  function renderWorkspaceEvidence() {
+    const historical = !activeActionTurnKey || workspaceTurnKey !== activeActionTurnKey;
+    const busy = historical || sending || sessionBusy || cleanupAccessLocked || permissionsBusy;
+    return <>
+      {emptyWorkspace ? <AssistantEvidence title={t("빈 폴더")} status={t("{{count}}개", { count: emptyWorkspace.candidates.length })}
+        warning={emptyWorkspace.omittedCount > 0 ? t("일부 결과만 표시합니다.") : undefined}
+        forceOpen={Boolean(emptyWorkspace.plan || emptyWorkspace.selectedIds.length)}>
+        <AssistantEmptyFolderCard workspace={emptyWorkspace} busy={busy} readOnly={historical || !canReview}
+          onSelect={ids => void manageEmptyFolders("select", ids)} onPrepare={() => void manageEmptyFolders("prepare")}
+          onConfirm={() => void manageEmptyFolders("confirm")} />
+      </AssistantEvidence> : null}
+      {fileWorkspace ? <AssistantEvidence title={t("앱에서 확인한 결과")} status={t("{{count}}개", { count: fileWorkspace.totalEntries })}
+        warning={fileWorkspace.truncated || fileWorkspace.unreadableEntries > 0 ? t("일부 결과만 표시합니다.") : undefined}
+        forceOpen={Boolean(fileWorkspace.plan || fileWorkspace.selectedIds.length)}>
+        <AssistantFileCard workspace={fileWorkspace} busy={busy} readOnly={historical || !canReview}
+          onOpenCleanupTree={!historical && canReview && onOpenCleanupTree && activeSession ? () => onOpenCleanupTree(activeSession.session.id, fileWorkspace.revision) : undefined}
+          onShowMap={() => void showFileMap()} onAction={action => void manageFiles(action)}
+          onSelect={ids => void manageFiles("select", ids)} onPrepare={() => void manageFiles("prepare")}
+          onConfirm={nestedAck => void manageFiles("confirm", undefined, nestedAck)} />
+      </AssistantEvidence> : null}
+    </>;
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1082,19 +1239,29 @@ export function AssistantView({
           }}>
           <div className="assistant-transcript__content">
           {turns.length > 0 ? (
-            turns.map((turn, index) => (
+            turns.map((turn) => (
+              <div className="assistant-turn" key={assistantTurnKey(turn)}>
               <article
-                className={`assistant-message is-${turn.role}`}
-                key={turn.sequence !== undefined ? `${turn.role}-saved-${turn.sequence}` : `${turn.role}-pending-${index}`}
+                className={`assistant-message is-${turn.role}${turn.failed ? " is-error" : ""}`}
               >
                 <span aria-hidden="true">
                   {turn.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
                 </span>
                 <div>
                   <strong>{turn.role === "user" ? t("나") : turn.providerLabel ?? t("AI 도우미")}</strong>
-                  <p>{turn.content}</p>
+                  <p role={turn.failed ? "alert" : undefined}>{turn.content}</p>
+                  {turn.failed ? <button type="button" className="assistant-question-retry text-button"
+                    disabled={!ready || questionRetry?.errorTurnKey !== assistantTurnKey(turn)
+                      || !canRetryAssistantQuestion(questionRetry, activeSession?.session.id, permissionRevision.current, emptyStateRevision.current, turns)}
+                    onClick={() => { if (questionRetry?.errorTurnKey === assistantTurnKey(turn)) void submitQuestion(undefined, questionRetry); }}>
+                    <RefreshCw size={16} aria-hidden="true" />{t("이 질문 다시 시도")}
+                  </button> : null}
                 </div>
               </article>
+              {turnEvidence.filter(entry => entry.turnKey === assistantTurnKey(turn)).map(renderToolEvidence)}
+              {workspaceTurnKey === assistantTurnKey(turn) ? renderWorkspaceEvidence() : null}
+              {trashResult && trashResultTurnKey === assistantTurnKey(turn) ? <AssistantTrashResultCard result={trashResult} /> : null}
+              </div>
             ))
           ) : (
             <AssistantEmptyState
@@ -1110,38 +1277,8 @@ export function AssistantView({
               t={t}
             />
           )}
-          {appToolResults.map((result, index) => <AssistantEvidence key={`${result.capability}-${result.capturedAtUnixMs}-${index}`}
-            title={t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}
-            status={t(appToolStatusKeys[result.status]) + (typeof (result.data.returnedCount ?? result.data.matchedCount) === "number"
-              ? ` · ${t("{{count}}개", { count: Number(result.data.returnedCount ?? result.data.matchedCount) })}` : "")}
-            forceOpen={result.status !== "completed" || result.data.nativeOnly === true}
-            warning={result.truncated || result.data.truncated === true || result.data.sourceMayBeIncomplete === true ? t("일부 결과만 표시합니다.") : undefined}>
-            {applicationTrashQuestion(result) ? <AssistantApplicationConfirmation result={result} busy={sending || sessionBusy || cleanupAccessLocked || permissionsBusy || !canReview}
-              onDecision={confirmed => answerTrash(confirmed, undefined, result)} /> : <AssistantAppToolCard result={result} busy={sending || sessionBusy || cleanupAccessLocked}
-              onView={onAppToolView} onReview={canReview && !permissionsBusy && onAppToolReview && activeSession ? (prepared) => onAppToolReview(prepared, activeSession.session.id) : undefined}
-              onFileAccessAction={permissionMode === "full_access" ? action => void manageFileAccess(action) : undefined} />
-            }
-          </AssistantEvidence>)}
-          {emptyWorkspace ? <AssistantEvidence title={t("빈 폴더")} status={t("{{count}}개", { count: emptyWorkspace.candidates.length })}
-            warning={emptyWorkspace.omittedCount > 0 ? t("일부 결과만 표시합니다.") : undefined}
-            forceOpen={Boolean(emptyWorkspace.plan || emptyWorkspace.selectedIds.length)}>
-            <AssistantEmptyFolderCard
-            workspace={emptyWorkspace} busy={sending || sessionBusy || cleanupAccessLocked || permissionsBusy} readOnly={!canReview}
-            onSelect={(ids) => void manageEmptyFolders("select", ids)}
-            onPrepare={() => void manageEmptyFolders("prepare")}
-            onConfirm={() => void manageEmptyFolders("confirm")}
-          /></AssistantEvidence> : null}
-          {fileWorkspace ? <AssistantEvidence title={t("앱에서 확인한 결과")} status={t("{{count}}개", { count: fileWorkspace.totalEntries })}
-            warning={fileWorkspace.truncated || fileWorkspace.unreadableEntries > 0 ? t("일부 결과만 표시합니다.") : undefined}
-            forceOpen={Boolean(fileWorkspace.plan || fileWorkspace.selectedIds.length)}>
-            <AssistantFileCard workspace={fileWorkspace} busy={sending || sessionBusy || cleanupAccessLocked || permissionsBusy} readOnly={!canReview}
-            onOpenCleanupTree={canReview && onOpenCleanupTree && activeSession ? () => onOpenCleanupTree(activeSession.session.id, fileWorkspace.revision) : undefined}
-            onShowMap={() => void showFileMap()}
-            onAction={(action) => void manageFiles(action)}
-            onSelect={(ids) => void manageFiles("select", ids)}
-            onPrepare={() => void manageFiles("prepare")}
-            onConfirm={(nestedAck) => void manageFiles("confirm", undefined, nestedAck)}
-          /></AssistantEvidence> : activeSession && activeScopeKind === "folder" && !emptyWorkspace ? <button type="button" className="assistant-query-action text-button"
+          {workspaceTurnKey === null ? renderWorkspaceEvidence() : null}
+          {activeSession && activeScopeKind === "folder" && !emptyWorkspace ? <button type="button" className="assistant-query-action text-button"
             disabled={sending || sessionBusy || cleanupAccessLocked} onClick={() => void manageFiles({ kind: "scan" })}>
             <FolderOpen size={16} aria-hidden="true" />{t("대화 폴더 파일·폴더 검사")}
           </button> : null}
@@ -1149,7 +1286,6 @@ export function AssistantView({
             disabled={sending || sessionBusy || cleanupAccessLocked || permissionsBusy} onClick={() => void manageFileAccess({ kind: "volumes" })}>
             <FolderOpen size={16} aria-hidden="true" />{t("로컬 드라이브 목록")}
           </button> : null}
-          {trashResult ? <AssistantTrashResultCard result={trashResult} /> : null}
           {dockerContext?.enabled ? (
             <aside
               className={`assistant-docker-action ${dockerContext.available ? "is-ready" : "is-unavailable"}`}
@@ -1571,6 +1707,7 @@ function boundedConversationHistory(turns: AssistantDisplayTurn[]): AssistantCha
   let selectedCharacters = 0;
   for (let index = turns.length - 1; index >= 0 && selected.length < 20; index -= 1) {
     const turn = turns[index];
+    if (turn.failed) continue;
     const content = turn.content.slice(0, 2_000);
     if (selectedCharacters + content.length > 24_000) break;
     selected.unshift({ role: turn.role, content });

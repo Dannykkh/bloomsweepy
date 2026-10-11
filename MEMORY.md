@@ -20,7 +20,7 @@
 | oauth-expiry, stdout-errors, standalone-cli | [memory/gotchas.md](memory/gotchas.md) |
 | codex-install, arm64 | [gotchas](memory/gotchas.md) |
 | response-quality, conversation-restore, chat-header-overlap | [memory/gotchas.md](memory/gotchas.md) |
-| mcp | [004](memory/architecture/004-app-tool-investigation.md), [013](memory/architecture/013-common-file-mcp-results.md) |
+| mcp, format-recovery | [004](memory/architecture/004-app-tool-investigation.md), [013](memory/architecture/013-common-file-mcp-results.md) |
 | cleanup-tree, child-exclusion, inherited-selection | [005](memory/architecture/005-cleanup-candidate-tree.md) |
 | claude-arm64, rosetta, startup-latency, macos-soak | [memory/gotchas.md](memory/gotchas.md) |
 | cloud-exclusion, jwalk, codex-common-flow, scan-safety | [memory/gotchas.md](memory/gotchas.md) |
@@ -28,7 +28,7 @@
 | release-1.6.1, tauri-config, windows-ci, private-api | [memory/gotchas.md](memory/gotchas.md) |
 | release-1.7.0, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
 | native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
-| chat-workbench, actual-progress, bottom-input | [008](memory/architecture/008-conversation-workbench.md) |
+| chat-workbench, timeline, retry | [008](memory/architecture/008-conversation-workbench.md) |
 | permissions, chat-access, webkit-popup | [009·010·015](memory/architecture/index.md) |
 | multi-drive, drive-deck, flip-animation, scan-root | [memory/architecture.md](memory/architecture.md) |
 | macos, disk-image, hdiutil, volume-filter | [memory/architecture.md](memory/architecture.md) |

@@ -98,6 +98,11 @@
 .assistant-workspace .assistant-message p { font-size: 16px; line-height: 1.8; }
 .assistant-workspace .assistant-message strong { font-weight: 600; color: var(--text-muted); }
 .assistant-workspace .assistant-message.is-assistant > span { color: var(--text-muted); }
+.assistant-turn { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.assistant-workspace .assistant-message.is-error p { color: var(--danger); overflow-wrap: anywhere; }
+.assistant-question-retry { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; margin-top: 8px; }
+.assistant-question-retry:disabled { color: var(--text-faint); cursor: not-allowed; }
+.assistant-evidence__historical { margin: 12px 4px 4px; color: var(--text-muted); overflow-wrap: anywhere; }
 /* Keep composer popups above WKWebView's composited transcript scroll layer. */
 .assistant-dock { position: relative; z-index: 1; width: min(100%, 800px); margin: 0 auto; padding: 10px 0 max(10px, env(safe-area-inset-bottom)); }
 .assistant-workspace .assistant-composer {

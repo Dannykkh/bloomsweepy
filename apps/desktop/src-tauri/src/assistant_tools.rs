@@ -85,18 +85,45 @@ pub(crate) enum AssistantAction {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AssistantEnvelope {
     pub(crate) message: String,
+    #[serde(deserialize_with = "deserialize_action")]
     pub(crate) action: Option<AssistantAction>,
 }
 
+fn deserialize_action<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<AssistantAction>, D::Error> {
+    // The explicit deserializer keeps null valid but makes the action key
+    // required, matching the protocol and optional provider response schema.
+    Option::<AssistantAction>::deserialize(deserializer)
+}
+
 pub(crate) fn parse_envelope(raw: &str) -> Result<AssistantEnvelope, String> {
-    let envelope: AssistantEnvelope = serde_json::from_str(raw.trim()).map_err(|_| {
-        "AI 작업 응답 형식이 올바르지 않아 아무 작업도 실행하지 않았습니다. 다시 질문해 주세요"
-            .to_owned()
-    })?;
+    let envelope: AssistantEnvelope =
+        serde_json::from_str(normalize_envelope(raw)).map_err(|_| {
+            "AI 작업 응답 형식이 올바르지 않아 아무 작업도 실행하지 않았습니다. 다시 질문해 주세요"
+                .to_owned()
+        })?;
     if envelope.message.trim().is_empty() || envelope.message.chars().count() > 8_000 {
         return Err("AI 응답 길이가 올바르지 않아 작업을 실행하지 않았습니다".to_owned());
     }
     Ok(envelope)
+}
+
+fn normalize_envelope(raw: &str) -> &str {
+    let raw = raw.trim();
+    // Only unwrap one complete Markdown JSON fence. Never search prose for JSON
+    // or recover a message/action from a partially valid document.
+    for opening in ["```json\r\n", "```json\n", "```\r\n", "```\n"] {
+        if let Some(body) = raw.strip_prefix(opening) {
+            if let Some(body) = body
+                .strip_suffix("\r\n```")
+                .or_else(|| body.strip_suffix("\n```"))
+            {
+                return body.trim();
+            }
+        }
+    }
+    raw
 }
 
 pub(crate) const TOOL_CONTRACT: &str = r#"
@@ -322,6 +349,7 @@ pub(crate) async fn dispatch(
     action: AssistantAction,
     request_cancellation: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<EmptyWorkspaceView, String> {
+    crate::assistant_provider::ensure_chat_request_active(&request_cancellation, true)?;
     let binding = crate::control_server::native_chat_binding(&app)?;
     if matches!(action, AssistantAction::UpdateEmptySelection { .. }) {
         crate::control_server::require_native_chat_review(&app)?;
@@ -405,19 +433,24 @@ pub(crate) async fn dispatch(
             }
             let worker_app = app.clone();
             let worker_session = session_id.clone();
+            let insert_cancellation = request_cancellation.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 worker_app.state::<AssistantToolsState>().insert_report(
                     worker_session,
                     &report,
-                    &request_cancellation,
+                    &insert_cancellation,
                 )
             })
             .await
             .map_err(|error| error.to_string())?
         }
-        action => apply_review_action(&state, &session_id, action),
+        action => crate::control_server::with_native_chat_authority(&app, binding, false, || {
+            crate::assistant_provider::ensure_chat_request_active(&request_cancellation, true)?;
+            apply_review_action(&state, &session_id, action)
+        }),
     }?;
     let published = crate::control_server::with_native_chat_authority(&app, binding, false, || {
+        crate::assistant_provider::ensure_chat_request_active(&request_cancellation, true)?;
         let mut workspaces = state.lock()?;
         let workspace = workspaces
             .get_mut(&session_id)
@@ -637,6 +670,32 @@ mod tests {
         )
         .unwrap();
         (temp, report)
+    }
+
+    #[test]
+    fn envelope_only_normalizes_one_complete_json_fence() {
+        for raw in [
+            "```json\n{\"message\":\"설명\",\"action\":null}\n```",
+            "\n```\r\n{\"message\":\"설명\",\"action\":null}\r\n```\n",
+            "```json\n{\"message\":\"검사\",\"action\":{\"kind\":\"scan_empty_directories\"}}\n```",
+        ] {
+            assert!(parse_envelope(raw).is_ok(), "{raw}");
+        }
+        for raw in [
+            "Here is JSON: {\"message\":\"설명\",\"action\":null}",
+            "```json\n{\"message\":\"설명\",\"action\":null}\n```\nextra",
+            "```json\n{\"message\":\"설명\",\"action\":null}\n```\n```json\n{}\n```",
+            "```javascript\n{\"message\":\"설명\",\"action\":null}\n```",
+            "```json\n{\"message\":\"설명\",\"action\":null}```",
+            "```json\n{\"message\":\"설명\",\"action\":{\"kind\":\"shell\",\"command\":\"rm -rf /\"}}\n```",
+            "{\"message\":\"설명\",\"message\":\"중복\",\"action\":null}",
+            "{\"message\":\"설명\",\"action\":false}",
+            "{\"message\":\"설명\"}",
+            "{\"action\":null}",
+            "{\"message\":\"검사\",\"action\":{\"kind\":\"scan_empty_directories\",\"kind\":\"scan_empty_directories\"}}",
+        ] {
+            assert!(parse_envelope(raw).is_err(), "{raw}");
+        }
     }
 
     #[test]

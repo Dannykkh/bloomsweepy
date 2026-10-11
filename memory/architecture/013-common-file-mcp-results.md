@@ -39,3 +39,18 @@ operationId만 간격을 두고 최대4회 관찰하는 모델 계약이며 완�
 완료 이벤트는 실제 operation.kind를 보존한다. 파일 workspace·앱/문서 작업의 종료가
 storageScan 완료/실패로 해석되지 않아야 한다. 실측에서 발견된 오분류와 회귀·설치 범위는
 docs/qa/2026-10-06-common-mcp-results.md에 기록한다.
+
+2026-10-11 보완: plain-text 표시 규칙은 JSON의 message 내부에만 적용한다. 완전한 단일
+JSON fence만 제거한 뒤 같은 strict parser를 적용하고 action 키 누락·중복/미지원 필드는
+거부한다. 형식 실패는 기존5모델호출·600초 예산의 다음 라운드를 소비하는 분석 전용1회
+복구만 허용한다. raw 출력은 저장/재전송하지 않고 원래 질문과 실제 evidence만 사용한다.
+복구 action은 null만 허용하며 dispatcher를 재실행하지 않는다. 로컬 Codex help로 지원이
+확인된 때만 terminal/recovery에 임시 null-action schema를 붙인다. old CLI/다른 공급자는
+기존 flag와 strict parser를 유지한다. action JSON-string wire 전환은 typed 계약 중복을
+만들어 제외했고, plain text 임의 성공 처리/부분 JSON 복구도 안전 검증을 우회하므로 제외했다.
+근거: conversations/2026-10-11-codex.md의 응답 불가 요청(원본 시각·UUID 미확인),
+docs/qa/2026-10-11-chat-response-timeline.md. 형식 실패가 계속 실측되거나 전체 action schema를
+기계 파생할 필요가 생기면 재검토한다. 인증·timeout·cancel·빈 출력은 자동 복구 대상이 아니다.
+
+보완 검증: 2026-10-11 desktop lib ARM64 release291 PASS/5 ignored. 별도 opt-in 실제 Codex
+일반 질문 및 null-action analysis schema 왕복1 PASS(합성 빈 workspace, 앱 dispatcher/파일 작업 없음).

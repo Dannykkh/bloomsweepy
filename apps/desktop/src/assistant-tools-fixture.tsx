@@ -13,7 +13,7 @@ import { LANGUAGE_STORAGE_KEY } from "./i18n/preference";
 import { configureAssistantPermissionMode, confirmAssistantEmptyPlan, confirmAssistantFilePlan } from "./lib/bridge";
 import { isAssistantPermissionMode } from "./lib/assistantPermissionMode";
 import { DEFAULT_SCAN_CONFIG } from "./types";
-import type { AppToolResult, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantFileAccessAction, AssistantPermissionMode, AssistantProviderModel, AssistantProviderStatus, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
+import type { AppToolResult, AppToolLocalCompletion, AssistantEmptyWorkspace, AssistantFileWorkspace, AssistantFileAction, AssistantFileAccessAction, AssistantPermissionMode, AssistantProviderModel, AssistantProviderStatus, AssistantSessionDetail, ControlStatus, DirectoryScanReport, PermissionLifetime, TrashOperationResult, ViewId } from "./types";
 import "./App.css";
 
 const params = new URLSearchParams(window.location.search);
@@ -21,6 +21,8 @@ const initialAccessMode = params.get("chat-access");
 let accessMode: AssistantPermissionMode | undefined = isAssistantPermissionMode(initialAccessMode) ? initialAccessMode : undefined;
 let accessQueries = 0;
 const multiProviderModels = params.has("multi-provider");
+const timelineMode = params.get("timeline");
+const timelineAttempts = new Map<string, number>();
 const modelsMode = params.has("models") || multiProviderModels;
 window.localStorage.setItem(LANGUAGE_STORAGE_KEY, params.get("language") ?? "ko");
 window.localStorage.setItem("bloomsweepy.assistant-provider", "codex");
@@ -91,7 +93,7 @@ let automaticAllowed = params.has("auto-trash");
 const consumedApplicationPlans = new Set<string>();
 const counterListeners = new Set<() => void>();
 let cancelPending: (() => void) | null = null;
-const appToolsMode = params.has("app-tools");
+const appToolsMode = params.has("app-tools") || params.has("appTools") || Boolean(timelineMode);
 const clone = <T,>(value: T): T => structuredClone(value);
 const control: ControlStatus = { revision: 1, bridgeAvailable: true, connectedClients: 0,
   lastConnectedAtUnixMs: null, activeOperation: null, lastOperation: null, pendingReview: null, lastError: null,
@@ -213,6 +215,26 @@ function invokeFixture(command: string, raw: unknown) {
     lastModel = request.model ?? null;
     lastReasoningEffort = request.reasoningEffort ?? null;
     lastModelProvider = request.provider ?? "codex";
+    if (timelineMode) {
+      const attempt = (timelineAttempts.get(request.message) ?? 0) + 1;
+      timelineAttempts.set(request.message, attempt);
+      if (timelineMode === "always-error" || timelineMode === "retry" && /실패|error/i.test(request.message) && attempt === 1) {
+        throw new Error("합성 QA 응답 형식 오류입니다. 실제 CLI나 파일 작업은 없습니다.");
+      }
+      const response = { provider: "codex", label: "Codex · QA mock", model: null,
+        message: `합성 조회 응답 ${queries}입니다. 실제 CLI·파일 작업·외부 전송은 없습니다.`, analysisComplete: true,
+        dockerContext: null, emptyWorkspace: null, fileWorkspace: null, toolAction: "app",
+        appToolResults: [{ source: "broomsweepy", capability: "applications.list", capturedAtUnixMs: Date.now(), truncated: false,
+          status: /권한/.test(request.message) ? "permission_required" : "completed",
+          data: /권한/.test(request.message) ? { reason: "합성 조회 권한이 필요합니다." }
+            : { returnedCount: 1, items: [{ displayName: `Synthetic query ${queries}`, estimatedBytes: 150_000_000 }] } }],
+      };
+      if (timelineMode === "delay") return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { cancelPending = null; resolve(response); }, 10_000);
+        cancelPending = () => { clearTimeout(timer); cancelPending = null; reject(new Error("합성 QA 응답을 취소했습니다.")); };
+      });
+      if (!/앱 삭제|메모리 정리|종료/.test(request.message)) return response;
+    }
     if (modelsMode) {
       const response = { provider: lastModelProvider, label: `${lastModelProvider} · QA mock`, model: lastModel, reasoningEffort: lastReasoningEffort,
         message: "선택한 모델 값을 받은 합성 응답입니다. 실제 CLI·파일 작업·외부 전송은 없습니다.",
@@ -381,6 +403,7 @@ function Fixture() {
   const [view, setView] = useState<ViewId>(params.get("view") === "settings" ? "settings" : "assistant");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [appReview, setAppReview] = useState<AppToolResult | null>(externalFileMode ? externalFileResult : null);
+  const [appToolCompletion, setAppToolCompletion] = useState<AppToolLocalCompletion | null>(null);
   const [localNotice, setLocalNotice] = useState("");
   const [map, setMap] = useState<DirectoryScanReport | null>(null);
   const [showMap, setShowMap] = useState(false);
@@ -416,9 +439,14 @@ function Fixture() {
       dockerStatus={null} dockerLoading={false} dockerChanging={false} dockerError={null} onDockerEnabledChange={async () => undefined} onOpenDocker={noop} />
     : <AssistantView controlSettings={controlSettings} directoryProgress={null} directoryState="success" volumes={[]} dockerStatus={null}
       launchRequest={null} onLaunchRequestHandled={noop} onPickFolder={async () => null} onConfirmEmptyPlan={confirmAssistantEmptyPlan} onConfirmFilePlan={confirmAssistantFilePlan} onDirectoryReport={acceptMap}
+      appToolCompletion={appToolCompletion}
       onAppToolReview={(prepared) => setAppReview(prepared)} onAppToolView={(result) => setLocalNotice(`Explicit navigation: ${result.capability}`)} />}
     </AppShell></div>
-    {appReview ? <AssistantAppToolReview result={appReview} onClose={() => setAppReview(null)} onCompleted={(result) => setLocalNotice(result.message)} /> : null}
+    {appReview ? <AssistantAppToolReview result={appReview} onClose={() => setAppReview(null)} onCompleted={(result) => {
+      setLocalNotice(result.message); setAppReview(null);
+      setAppToolCompletion(current => ({ sequence: (current?.sequence ?? 0) + 1, sessionId: session.session.id,
+        message: result.message, trashResult: result.trashResult }));
+    }} /> : null}
     <output data-testid="app-tool-fixture-result">{localNotice} · Mock preparations: {preparations} · Mock executions: {executions} · Mock queries: {queries} · Mock external cancellations: {externalCancels}</output>
     {modelsMode ? <output data-testid="model-fixture-request">Mock provider: {lastModelProvider} · Mock model: {lastModel ?? "CLI default"} · Mock reasoning effort: {lastReasoningEffort ?? "CLI default"}</output> : null}
   </>;
