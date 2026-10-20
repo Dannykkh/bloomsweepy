@@ -8,19 +8,26 @@ const HEAP_BUDGET: usize = 128 * 1024 * 1024;
 static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 struct BudgetAllocator;
 
-fn reserve(bytes: usize) -> bool {
-    LIVE_BYTES
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
-            live.checked_add(bytes).filter(|next| *next <= HEAP_BUDGET)
-        })
-        .is_ok()
+fn reserve(counter: &AtomicUsize, bytes: usize) -> bool {
+    let mut live = counter.load(Ordering::Relaxed);
+    loop {
+        let Some(next) = live.checked_add(bytes).filter(|next| *next <= HEAP_BUDGET) else {
+            return false;
+        };
+        match counter.compare_exchange_weak(live, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return true,
+            // Retry against the current count so concurrent allocations cannot
+            // reserve beyond the budget or lose another thread's reservation.
+            Err(current) => live = current,
+        }
+    }
 }
 
 // SAFETY: successful operations delegate to System using the original layout;
 // accounting is atomic, includes realloc deltas, and is rolled back on failure.
 unsafe impl GlobalAlloc for BudgetAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if !reserve(layout.size()) {
+        if !reserve(&LIVE_BYTES, layout.size()) {
             return std::ptr::null_mut();
         }
         let pointer = unsafe { System.alloc(layout) };
@@ -31,7 +38,7 @@ unsafe impl GlobalAlloc for BudgetAllocator {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        if !reserve(layout.size()) {
+        if !reserve(&LIVE_BYTES, layout.size()) {
             return std::ptr::null_mut();
         }
         let pointer = unsafe { System.alloc_zeroed(layout) };
@@ -50,7 +57,7 @@ unsafe impl GlobalAlloc for BudgetAllocator {
 
     unsafe fn realloc(&self, pointer: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         let growth = size.saturating_sub(layout.size());
-        if !reserve(growth) {
+        if !reserve(&LIVE_BYTES, growth) {
             return std::ptr::null_mut();
         }
         let next = unsafe { System.realloc(pointer, layout, size) };
@@ -87,4 +94,41 @@ fn main() {
         return;
     }
     std::process::exit(bloomsweepy_core::run_document_worker());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reservation_accepts_exact_budget_and_rejects_growth() {
+        let counter = AtomicUsize::new(HEAP_BUDGET - 1);
+        assert!(reserve(&counter, 1));
+        assert!(reserve(&counter, 0));
+        assert!(!reserve(&counter, 1));
+        assert_eq!(counter.load(Ordering::Relaxed), HEAP_BUDGET);
+    }
+
+    #[test]
+    fn reservation_rejects_overflow_without_changing_count() {
+        let counter = AtomicUsize::new(usize::MAX - 1);
+        assert!(!reserve(&counter, 2));
+        assert_eq!(counter.load(Ordering::Relaxed), usize::MAX - 1);
+    }
+
+    #[test]
+    fn concurrent_reservations_share_the_same_budget() {
+        let counter = AtomicUsize::new(HEAP_BUDGET - 64);
+        let accepted = std::thread::scope(|scope| {
+            let threads: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| usize::from(reserve(&counter, 16))))
+                .collect();
+            threads
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .sum::<usize>()
+        });
+        assert_eq!(accepted, 4);
+        assert_eq!(counter.load(Ordering::Relaxed), HEAP_BUDGET);
+    }
 }

@@ -1558,7 +1558,7 @@ fn external_status(app: &AppHandle) -> Result<ControlStatus, String> {
             restricted_operation(operation)
         })
     };
-    status.active_operation = status.active_operation.take().and_then(&visible);
+    status.active_operation = status.active_operation.take().and_then(visible);
     status.last_operation = status.last_operation.take().and_then(visible);
     Ok(status)
 }

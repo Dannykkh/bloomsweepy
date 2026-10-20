@@ -114,23 +114,22 @@ pub(crate) fn effective_root(
     if let Some(access) = sessions
         .get(session_id)
         .filter(|access| access.binding == binding)
+        && let Some(root) = &access.effective_root
     {
-        if let Some(root) = &access.effective_root {
-            if binding.mode != AssistantPermissionMode::FullAccess {
-                return Err("전체 접근 권한이 변경됐습니다".into());
-            }
-            let live = bloomsweepy_core::validate_local_volume_directory(root)
-                .map_err(|error| error.to_string())?;
-            if &live != root
-                || Some(
-                    bloomsweepy_core::cleanup_tree_scope_identity(&live)
-                        .map_err(|error| error.to_string())?,
-                ) != access.effective_identity
-            {
-                return Err("드라이브 범위가 변경됐습니다".into());
-            }
-            return Ok((live, access.automatic_eligible));
+        if binding.mode != AssistantPermissionMode::FullAccess {
+            return Err("전체 접근 권한이 변경됐습니다".into());
         }
+        let live = bloomsweepy_core::validate_local_volume_directory(root)
+            .map_err(|error| error.to_string())?;
+        if &live != root
+            || Some(
+                bloomsweepy_core::cleanup_tree_scope_identity(&live)
+                    .map_err(|error| error.to_string())?,
+            ) != access.effective_identity
+        {
+            return Err("드라이브 범위가 변경됐습니다".into());
+        }
+        return Ok((live, access.automatic_eligible));
     }
     Ok((anchor.to_path_buf(), true))
 }
@@ -504,7 +503,7 @@ pub(crate) async fn execute(
         control_server::with_native_chat_authority(&task_app, binding, false, || {
             let state = task_app.state::<AssistantAccessState>();
             let mut sessions = state.sessions.lock().map_err(|_| "채팅 범위를 잠글 수 없습니다")?;
-            if !sessions.contains_key(&key) && sessions.len() >= MAX_SESSIONS { if let Some(old)=sessions.keys().next().cloned() { sessions.remove(&old); } }
+            if !sessions.contains_key(&key) && sessions.len() >= MAX_SESSIONS && let Some(old)=sessions.keys().next().cloned() { sessions.remove(&old); }
             let previous = sessions.remove(&key).filter(|old| old.binding == binding);
             sessions.insert(key, SessionAccess { binding, effective_root:previous.as_ref().and_then(|old|old.effective_root.clone()), effective_identity:previous.as_ref().and_then(|old|old.effective_identity), automatic_eligible:previous.as_ref().is_none_or(|old|old.automatic_eligible) && !truncated && unreadable==0, revision, volumes, entries, complete:!truncated && unreadable==0 });
             let mut result=AppToolResult::completed("files.workspace",data).with_presentation(presentation);

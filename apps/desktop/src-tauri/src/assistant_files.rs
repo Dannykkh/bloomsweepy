@@ -316,6 +316,7 @@ fn confined(scope: &Path, path: &Path) -> Result<PathBuf, String> {
     Ok(path_live)
 }
 
+#[cfg(test)]
 fn scan_workspace(
     scope: PathBuf,
     current: PathBuf,
@@ -544,6 +545,10 @@ pub(crate) async fn dispatch(
     Ok(view)
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Keep native scope, authority, and cancellation explicit at the existing composition boundary"
+)]
 pub(crate) async fn open_native_root(
     app: AppHandle,
     session_id: String,
@@ -707,6 +712,7 @@ async fn dispatch_root(
     .map_err(|error| format!("파일 대화 작업이 중단됐습니다: {error}"))?
 }
 
+#[cfg(test)]
 fn apply_workspace_action(
     state: &AssistantFilesState,
     reports: &StoredReports,
@@ -728,6 +734,10 @@ fn apply_workspace_action(
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Preserve the existing policy-aware workspace composition without changing its execution API"
+)]
 fn apply_workspace_action_with_policy(
     state: &AssistantFilesState,
     reports: &StoredReports,

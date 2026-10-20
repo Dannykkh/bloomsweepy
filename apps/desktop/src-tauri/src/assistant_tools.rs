@@ -114,13 +114,12 @@ fn normalize_envelope(raw: &str) -> &str {
     // Only unwrap one complete Markdown JSON fence. Never search prose for JSON
     // or recover a message/action from a partially valid document.
     for opening in ["```json\r\n", "```json\n", "```\r\n", "```\n"] {
-        if let Some(body) = raw.strip_prefix(opening) {
-            if let Some(body) = body
+        if let Some(body) = raw.strip_prefix(opening)
+            && let Some(body) = body
                 .strip_suffix("\r\n```")
                 .or_else(|| body.strip_suffix("\n```"))
-            {
-                return body.trim();
-            }
+        {
+            return body.trim();
         }
     }
     raw

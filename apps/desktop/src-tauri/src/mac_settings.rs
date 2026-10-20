@@ -327,10 +327,10 @@ fn journal_error(error: rusqlite::Error) -> String {
 }
 
 fn open_journal(path: &Path, write: bool) -> Result<Connection, String> {
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("Mac 설정 기록 위치가 일반 파일이 아닙니다".into());
-        }
+    if let Ok(metadata) = std::fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err("Mac 설정 기록 위치가 일반 파일이 아닙니다".into());
     }
     if write {
         let parent = path
