@@ -225,6 +225,102 @@ pub(crate) fn load(path: &Path) -> Result<PermissionPreferences, String> {
     Ok(settings)
 }
 
+pub(crate) fn save(path: &Path, settings: &PermissionPreferences) -> Result<(), String> {
+    let payload = serde_json::to_string(&settings.persisted())
+        .map_err(|_| "권한 설정을 준비하지 못했습니다")?;
+    if payload.len() > MAX_PAYLOAD_BYTES {
+        return Err("권한 설정 크기 한도를 초과했습니다".into());
+    }
+    let parent = path
+        .parent()
+        .ok_or("권한 설정 저장 위치가 올바르지 않습니다")?;
+    fs::create_dir_all(parent).map_err(|_| "권한 설정 폴더를 만들지 못했습니다")?;
+    if fs::symlink_metadata(parent)
+        .map_err(|_| "권한 설정 폴더를 확인하지 못했습니다")?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("권한 설정 폴더는 링크일 수 없습니다".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|_| "권한 설정 폴더를 보호하지 못했습니다")?;
+    }
+    if !safe_database(path)? {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(path)
+            .map_err(|_| "권한 설정 파일을 만들지 못했습니다")?;
+    }
+    let connection = Connection::open(path).map_err(|_| "권한 설정 저장소를 열지 못했습니다")?;
+    connection
+        .busy_timeout(Duration::from_secs(2))
+        .map_err(|_| "권한 설정 저장소를 준비하지 못했습니다")?;
+    connection
+        .pragma_update(None, "journal_mode", "DELETE")
+        .map_err(|_| "권한 설정 저널을 준비하지 못했습니다")?;
+    connection
+        .pragma_update(None, "synchronous", "FULL")
+        .map_err(|_| "권한 설정 동기화를 준비하지 못했습니다")?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS permission_settings (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB)) <= 32768));")
+        .map_err(|_| "권한 설정 저장소를 준비하지 못했습니다")?;
+    connection.execute("INSERT INTO permission_settings(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", [payload])
+        .map_err(|_| "권한 설정을 저장하지 못했습니다".to_owned())?;
+    Ok(())
+}
+
+// On a revocation write failure, discard this dedicated grant DB rather than
+// leaving yesterday's grants to silently return. No user files are removed.
+pub(crate) fn forget(path: &Path) -> Result<(), String> {
+    for target in [path.with_extension("sqlite3-journal"), path.to_path_buf()] {
+        match fs::remove_file(target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => return Err("기억한 권한 설정을 지우지 못했습니다".into()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn commit(
+    path: &Path,
+    previous: &PermissionPreferences,
+    next: &mut PermissionPreferences,
+) -> Result<Option<String>, String> {
+    if previous.lifetime == PermissionLifetime::Session
+        && next.lifetime == PermissionLifetime::Session
+    {
+        return Ok(None);
+    }
+    match save(path, next) {
+        Ok(()) => Ok(None),
+        Err(_error) if next.only_restricts(previous) => {
+            let forgotten = forget(path).is_ok();
+            next.lifetime = if forgotten {
+                PermissionLifetime::Session
+            } else {
+                // Do not claim Session or skip future writes while an older
+                // remembered grant record could still restore on next launch.
+                PermissionLifetime::Remember
+            };
+            Ok(Some(if forgotten {
+                "저장 오류로 권한 기억을 해제했습니다. 현재 허용은 이번 실행에만 적용됩니다.".into()
+            } else {
+                "현재 권한은 제한했지만 기억한 설정을 지우지 못했습니다. 재실행 시 이전 허용이 복원될 수 있습니다.".into()
+            }))
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,101 +694,5 @@ mod tests {
         retry.lifetime = PermissionLifetime::Session;
         assert!(commit(&path, &restricted, &mut retry).unwrap().is_some());
         assert_eq!(retry.lifetime, PermissionLifetime::Remember);
-    }
-}
-
-pub(crate) fn save(path: &Path, settings: &PermissionPreferences) -> Result<(), String> {
-    let payload = serde_json::to_string(&settings.persisted())
-        .map_err(|_| "권한 설정을 준비하지 못했습니다")?;
-    if payload.len() > MAX_PAYLOAD_BYTES {
-        return Err("권한 설정 크기 한도를 초과했습니다".into());
-    }
-    let parent = path
-        .parent()
-        .ok_or("권한 설정 저장 위치가 올바르지 않습니다")?;
-    fs::create_dir_all(parent).map_err(|_| "권한 설정 폴더를 만들지 못했습니다")?;
-    if fs::symlink_metadata(parent)
-        .map_err(|_| "권한 설정 폴더를 확인하지 못했습니다")?
-        .file_type()
-        .is_symlink()
-    {
-        return Err("권한 설정 폴더는 링크일 수 없습니다".into());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
-            .map_err(|_| "권한 설정 폴더를 보호하지 못했습니다")?;
-    }
-    if !safe_database(path)? {
-        let mut options = fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        options
-            .open(path)
-            .map_err(|_| "권한 설정 파일을 만들지 못했습니다")?;
-    }
-    let connection = Connection::open(path).map_err(|_| "권한 설정 저장소를 열지 못했습니다")?;
-    connection
-        .busy_timeout(Duration::from_secs(2))
-        .map_err(|_| "권한 설정 저장소를 준비하지 못했습니다")?;
-    connection
-        .pragma_update(None, "journal_mode", "DELETE")
-        .map_err(|_| "권한 설정 저널을 준비하지 못했습니다")?;
-    connection
-        .pragma_update(None, "synchronous", "FULL")
-        .map_err(|_| "권한 설정 동기화를 준비하지 못했습니다")?;
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS permission_settings (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB)) <= 32768));")
-        .map_err(|_| "권한 설정 저장소를 준비하지 못했습니다")?;
-    connection.execute("INSERT INTO permission_settings(id,payload) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", [payload])
-        .map_err(|_| "권한 설정을 저장하지 못했습니다".to_owned())?;
-    Ok(())
-}
-
-// On a revocation write failure, discard this dedicated grant DB rather than
-// leaving yesterday's grants to silently return. No user files are removed.
-pub(crate) fn forget(path: &Path) -> Result<(), String> {
-    for target in [path.with_extension("sqlite3-journal"), path.to_path_buf()] {
-        match fs::remove_file(target) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-            Err(_) => return Err("기억한 권한 설정을 지우지 못했습니다".into()),
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn commit(
-    path: &Path,
-    previous: &PermissionPreferences,
-    next: &mut PermissionPreferences,
-) -> Result<Option<String>, String> {
-    if previous.lifetime == PermissionLifetime::Session
-        && next.lifetime == PermissionLifetime::Session
-    {
-        return Ok(None);
-    }
-    match save(path, next) {
-        Ok(()) => Ok(None),
-        Err(_error) if next.only_restricts(previous) => {
-            let forgotten = forget(path).is_ok();
-            next.lifetime = if forgotten {
-                PermissionLifetime::Session
-            } else {
-                // Do not claim Session or skip future writes while an older
-                // remembered grant record could still restore on next launch.
-                PermissionLifetime::Remember
-            };
-            Ok(Some(if forgotten {
-                "저장 오류로 권한 기억을 해제했습니다. 현재 허용은 이번 실행에만 적용됩니다.".into()
-            } else {
-                "현재 권한은 제한했지만 기억한 설정을 지우지 못했습니다. 재실행 시 이전 허용이 복원될 수 있습니다.".into()
-            }))
-        }
-        Err(error) => Err(error),
     }
 }

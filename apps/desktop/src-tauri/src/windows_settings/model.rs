@@ -276,16 +276,17 @@ pub(crate) fn decode_metadata_string(
     reported_length: usize,
 ) -> Option<String> {
     if value_type != "REG_SZ"
-        || reported_length < 2
-        || reported_length > 256
+        || !(2..=256).contains(&reported_length)
         || reported_length > bytes.len()
-        || reported_length % 2 != 0
+        || !reported_length.is_multiple_of(2)
     {
         return None;
     }
     let units = bytes[..reported_length]
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect::<Vec<_>>();
     if units.last() != Some(&0) || units[..units.len() - 1].contains(&0) {
         return None;
