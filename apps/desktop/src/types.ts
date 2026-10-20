@@ -6,6 +6,8 @@ export type ViewId =
   | "documents"
   | "cleanup"
   | "applications"
+  | "macos-management"
+  | "windows-management"
   | "large-files"
   | "duplicates"
   | "performance"
@@ -825,6 +827,7 @@ export interface DirectoryScanReport {
 }
 
 export type CleanupCandidateKind =
+  | "developerCache"
   | "temporaryEntry"
   | "appDataDirectory"
   | "cacheDirectory";

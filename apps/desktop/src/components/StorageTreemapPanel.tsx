@@ -549,8 +549,8 @@ export function StorageTreemapPanel({
             <ChevronRight size={16} />
             <Folder size={18} />
           </span>
-          <strong>{root ? t("큰 사각형부터 폴더 안쪽으로 이동합니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
-          <small>{root ? t("지도를 다시 만들 수 있습니다.") : t("폴더를 고르면 용량 지도를 바로 만듭니다.")}</small>
+          <strong>{root ? t("이 폴더의 용량 지도가 아직 없습니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
+          <small>{root ? t("폴더를 검사하면 큰 항목부터 지도로 확인할 수 있습니다.") : t("폴더를 고르면 용량 지도를 바로 만듭니다.")}</small>
         </button>
       ) : (
         <div className="storage-map__start is-static">
@@ -559,7 +559,7 @@ export function StorageTreemapPanel({
             <ChevronRight size={16} />
             <Folder size={18} />
           </span>
-          <strong>{root ? t("큰 사각형부터 폴더 안쪽으로 이동합니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
+          <strong>{root ? t("이 폴더의 용량 지도가 아직 없습니다") : t("먼저 검사할 폴더를 선택하세요")}</strong>
           <small>{root ? t("위 안내의 버튼으로 폴더 용량 지도를 만드세요.") : t("폴더를 고른 뒤 용량 지도를 만들 수 있습니다.")}</small>
         </div>
       )}

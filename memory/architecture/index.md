@@ -17,3 +17,7 @@
 - [013 — 공통 파일·MCP 결과](013-common-file-mcp-results.md): 작은 기능 index/상세, 같은 파일 dispatcher, 외부 범위 epoch, 상태 분석 전용 응답.
 - [014 — 선택적 변경 파일 검토](014-optional-file-change-review.md): 기본 OFF·단일 폴더 metadata 주기 비교, 넘김≠안전, 비영속 상한·세대 취소·동일 범위 읽기 전용 AI/MCP.
 - [015 — 내장 채팅 권한](015-native-chat-access.md): 기본 confirm·명시적 readonly/full, Rust epoch·유한 로컬 볼륨 검색.009/011 계승·외부/OS/본문 별도. 이 Mac 설치형 현재값 복원·native popup stacking 확인.
+- [016 — Mac 설정·개발 캐시](016-macos-management.md): Bool5개·선기록/복원·로컬 실행, 공통 읽기 전용 AI, 기존 bounded 정리 후보.
+- [017 — 작업 중심 메뉴·설정](017-workspace-navigation.md): 상위 현재 위치, 6분류 mount 보존, 시스템 정리 명시 진입, compact dashboard.
+- [018 — Windows 설정 조회·연결](018-windows-management.md): 고정10행 저장값·8개 로컬 진입, 공통 읽기 전용 AI, 실효/지원 미확인, OS 메뉴 분리.
+- [019 — Mac A형 그룹 설정](019-mac-control-a.md): 파일표시3/경로정보2, 초안·적용·기록 직접조작, 단일제목·nonsticky·중복메뉴 제거.

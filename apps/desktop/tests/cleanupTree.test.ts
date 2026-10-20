@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cleanupPlanIsLive, knownCleanupRootIds, MAX_VISIBLE_CLEANUP_ROWS, visibleCleanupRows } from "../src/lib/cleanupTree.ts";
+import { cleanupPlanIsLive, cleanupReviewAcknowledgement, knownCleanupRootIds, MAX_VISIBLE_CLEANUP_ROWS, visibleCleanupRows } from "../src/lib/cleanupTree.ts";
 import type { CleanupTreeNode, CleanupTreeView } from "../src/types/cleanupTree.ts";
 
 function entry(id: string, parentId: string | null, isDirectory = false): CleanupTreeNode {
@@ -68,4 +68,53 @@ test("confirmation is stale after selection changes or either expiry", () => {
   tree.selectionRevision = 1;
   tree.expiresAtUnixMs = 900;
   assert.equal(cleanupPlanIsLive(tree, 1_000), false);
+});
+
+test("developer-only Review explains rebuilding/downloading, not account-data loss", () => {
+  const message = cleanupReviewAcknowledgement([
+    { kind: "developerCache", confidence: "review" },
+    { kind: "temporaryEntry", confidence: "likelySafe" },
+  ]);
+  assert.match(message!, /재빌드·재다운로드/);
+  assert.doesNotMatch(message!, /계정|설정 데이터/);
+  assert.equal(message!.match(/\{\{count\}\}/g)?.length, 1);
+});
+
+test("app-data-only Review explains account/settings impact, not rebuilds", () => {
+  const message = cleanupReviewAcknowledgement([
+    { kind: "appDataDirectory", confidence: "review" },
+    { kind: "cacheDirectory", confidence: "likelySafe" },
+  ]);
+  assert.match(message!, /계정이나 설정 데이터/);
+  assert.doesNotMatch(message!, /재빌드|재다운로드/);
+});
+
+test("mixed developer/app-data Review retains both distinct impacts regardless of order", () => {
+  const selected = [
+    { kind: "developerCache" as const, confidence: "review" as const },
+    { kind: "appDataDirectory" as const, confidence: "review" as const },
+  ];
+  const before = structuredClone(selected);
+  const message = cleanupReviewAcknowledgement(selected);
+  assert.match(message!, /재빌드·재다운로드/);
+  assert.match(message!, /계정이나 설정 데이터/);
+  assert.equal(cleanupReviewAcknowledgement([...selected].reverse()), message);
+  assert.deepEqual(selected, before, "warning selection must not modify candidates or approval state");
+});
+
+test("warning follows Review candidates only, not every selected candidate's kind", () => {
+  const message = cleanupReviewAcknowledgement([
+    { kind: "developerCache", confidence: "review" },
+    { kind: "appDataDirectory", confidence: "likelySafe" },
+  ]);
+  assert.match(message!, /재빌드/);
+  assert.doesNotMatch(message!, /계정|설정 데이터/);
+  assert.equal(cleanupReviewAcknowledgement([]), undefined);
+  assert.equal(cleanupReviewAcknowledgement([{ kind: "developerCache", confidence: "likelySafe" }]), undefined);
+});
+
+test("other Review kinds get a neutral acknowledgement instead of misleading account data copy", () => {
+  const message = cleanupReviewAcknowledgement([{ kind: "cacheDirectory", confidence: "review" }]);
+  assert.match(message!, /사용 여부와 정리 영향/);
+  assert.doesNotMatch(message!, /계정|설정 데이터|재빌드/);
 });

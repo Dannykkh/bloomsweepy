@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import { SafetyActionDialog } from "../components/SafetyActionDialog";
 import { TrashResultPanel } from "../components/TrashResultPanel";
 import { FileInspectionStatus, FileOpenActions, useFileInspectionActions } from "../components/FileOpenActions";
+import { cleanupReviewAcknowledgement } from "../lib/cleanupTree";
 import {
   formatBytes,
   formatCount,
@@ -66,6 +67,10 @@ const cleanupPresentation: Record<
   cacheDirectory: {
     label: "오래된 캐시",
     description: "운영체제가 지정한 캐시 위치",
+  },
+  developerCache: {
+    label: "개발 캐시",
+    description: "재빌드·재다운로드가 필요할 수 있는 Xcode 데이터",
   },
 };
 
@@ -122,6 +127,7 @@ export function CleanupView({
   const selectedReviewCount = selectedCandidates.filter(
     (candidate) => candidate.confidence === "review",
   ).length;
+  const selectedReviewAcknowledgement = cleanupReviewAcknowledgement(selectedCandidates);
 
   function updateSelection(candidate: CleanupCandidate, selected: boolean) {
     setSelectedPaths((current) => {
@@ -242,7 +248,7 @@ export function CleanupView({
             <CleanupMetric
               label={t("검토 필요")}
               value={t("{{count}}개", { count: formatCount(reviewCount) })}
-              detail={t("프로그램 설정 폴더·설치 기록")}
+              detail={t("프로그램 설정·개발 캐시·설치 기록")}
               icon={<ShieldAlert size={18} />}
             />
             <CleanupMetric
@@ -269,6 +275,7 @@ export function CleanupView({
                   ["temporaryEntry", t("임시 파일")],
                   ["appDataDirectory", t("프로그램 설정")],
                   ["cacheDirectory", t("캐시")],
+                  ["developerCache", t("개발 캐시")],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -295,7 +302,7 @@ export function CleanupView({
                 })}</strong>
                 <small>
                   {selectedReviewCount > 0
-                    ? t("한 번 더 확인할 프로그램 설정 {{count}}개 포함", { count: formatCount(selectedReviewCount) })
+                    ? t("직접 검토할 항목 {{count}}개 포함", { count: formatCount(selectedReviewCount) })
                     : t("이동 직전 모든 항목을 다시 검사합니다.")}
                 </small>
               </div>
@@ -445,6 +452,9 @@ export function CleanupView({
         itemCount={selectedPaths.size}
         logicalBytes={selectedBytes}
         reviewCount={selectedReviewCount}
+        reviewAcknowledgementLabel={selectedReviewAcknowledgement
+          ? t(selectedReviewAcknowledgement, { count: formatCount(selectedReviewCount) })
+          : undefined}
         busy={actionRunning}
         progress={actionProgress}
         error={dialogError ?? actionError}

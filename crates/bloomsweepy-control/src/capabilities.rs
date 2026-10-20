@@ -30,6 +30,8 @@ pub enum AppToolRequest {
         operation: FileWorkspaceAction,
     },
     StorageOverview {},
+    MacosInspect {},
+    WindowsInspect {},
     Performance {
         #[serde(default)]
         query: String,
@@ -314,6 +316,8 @@ pub enum AppToolView {
     Dashboard,
     Performance,
     Applications,
+    MacosManagement,
+    WindowsManagement,
     Overview,
     LargeFiles,
     Duplicates,
@@ -331,6 +335,8 @@ impl AppToolRequest {
             Self::CapabilityDetails { .. } => "capabilities.details",
             Self::FileWorkspace { .. } => "files.workspace",
             Self::StorageOverview {} => "storage.overview",
+            Self::MacosInspect {} => "macos.inspect",
+            Self::WindowsInspect {} => "windows.inspect",
             Self::Performance { .. } => "performance.inspect",
             Self::Applications { .. } => "applications.list",
             Self::ApplicationInspect { .. } => "applications.inspect",
@@ -361,6 +367,8 @@ impl AppToolRequest {
         matches!(
             self,
             Self::Performance { .. }
+                | Self::MacosInspect {}
+                | Self::WindowsInspect {}
                 | Self::Applications { .. }
                 | Self::ApplicationInspect { .. }
                 | Self::ApplicationReview { .. }
@@ -617,6 +625,26 @@ pub fn capability_catalog() -> Value {
         .map(|operation| AppToolRequest::FileWorkspace { operation })
         .collect();
     let mut capabilities = vec![
+        entry(
+            AppToolRequest::WindowsInspect {},
+            "Inspect ten fixed Explorer/AI-policy stored values through the Windows app reader.",
+            "external inspection disclosure permission; local chat read-only",
+            "Windows only. Raw DWORDs, absent/type/access errors and scope stay distinct. Stored values are not effective behavior, user consent or installed feature support. AI-policy build/SKU/app/hardware support remains unverified; legacy Copilot policy is deprecated and does not control the new app. No registry writes, shell, elevation, security changes, removal or OS-setting launches. Use local Windows settings controls; file full_access is not OS authority.",
+            &[
+                "Windows 설정 상태를 확인해줘",
+                "윈도우 탐색기 표시 속성을 확인해줘",
+            ],
+        ),
+        entry(
+            AppToolRequest::MacosInspect {},
+            "Inspect the app-owned five-setting Finder catalog and stored preference states.",
+            "external system/app inspection disclosure permission; local chat read-only",
+            "macOS only, fixed Bool settings. Unset is not false; readback is not visible Finder application. No setting writes, Finder restart, profiles, background-service or model deletion. Use local Mac management Apply/Restore controls for changes; file full_access does not authorize OS changes.",
+            &[
+                "맥 설정 상태를 확인해줘",
+                "Finder에서 숨김 파일 표시가 켜져 있어?",
+            ],
+        ),
         entry(
             AppToolRequest::Capabilities {},
             "Read the app capability contract, not OS data.",
@@ -896,7 +924,7 @@ pub fn capability_catalog() -> Value {
             "file_search.request.sort": ["relevance", "name", "largest", "modified"],
             "file_search.request.kind": ["file", "directory", "symlink", "other"],
             "docker_review.actions": ["build_cache", "dangling_images", "stopped_containers"],
-            "view.view": ["dashboard", "performance", "applications", "overview", "large_files", "duplicates", "system_cleanup", "fast_search", "document_search", "docker", "settings"]
+            "view.view": ["dashboard", "performance", "applications", "macos_management", "windows_management", "overview", "large_files", "duplicates", "system_cleanup", "fast_search", "document_search", "docker", "settings"]
         },
         "inputTypes": {
             "capability_details.capabilityId": "Exact known capability ID from discovery, not a path or operation ID",
@@ -977,7 +1005,13 @@ pub fn discovery_index() -> Value {
             .collect::<Vec<_>>();
         index[field] = json!(entries);
     }
-    index["discoveryFormatVersion"] = json!(1);
+    // Full field descriptions are already returned by every required detail
+    // lookup. Avoid duplicating them in the index as the catalog grows.
+    index
+        .as_object_mut()
+        .expect("catalog object")
+        .remove("inputTypes");
+    index["discoveryFormatVersion"] = json!(2);
     index["detailsRequired"] = json!(true);
     index["detailLookup"] =
         json!("Use detailRequestExample with capabilityId replaced by an id from capabilities.");
@@ -1023,6 +1057,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn windows_inspection_never_accepts_os_mutation_or_launch_fields() {
+        let request: AppToolRequest =
+            serde_json::from_value(json!({"kind":"windows_inspect"})).unwrap();
+        assert_eq!(request.capability_id(), "windows.inspect");
+        assert!(request.requires_inspection_access());
+        for invalid in [
+            json!({"kind":"windows_inspect","enabled":true}),
+            json!({"kind":"windows_inspect","targetId":"privacy"}),
+            json!({"kind":"windows_apply","settingId":"legacy_copilot","enabled":true}),
+            json!({"kind":"windows_open","targetId":"privacy"}),
+        ] {
+            assert!(serde_json::from_value::<AppToolRequest>(invalid).is_err());
+        }
+        let details = capability_details("windows.inspect").unwrap();
+        assert_eq!(details["capability"]["finalExecution"], false);
+        assert_eq!(
+            serde_json::to_value(AppToolRequest::View {
+                view: AppToolView::WindowsManagement
+            })
+            .unwrap(),
+            json!({"kind":"view","view":"windows_management"})
+        );
+    }
+
+    #[test]
+    fn macos_inspection_is_read_only_and_requires_external_disclosure() {
+        let request: AppToolRequest =
+            serde_json::from_value(json!({"kind":"macos_inspect"})).unwrap();
+        assert_eq!(request.capability_id(), "macos.inspect");
+        assert!(request.requires_inspection_access());
+        assert!(
+            serde_json::from_value::<AppToolRequest>(
+                json!({"kind":"macos_inspect","enabled":true})
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<AppToolRequest>(
+                json!({"kind":"macos_apply","settingId":"show_hidden_files","enabled":true})
+            )
+            .is_err()
+        );
+        let details = capability_details("macos.inspect").unwrap();
+        assert_eq!(details["capability"]["finalExecution"], false);
+        let view = AppToolRequest::View {
+            view: AppToolView::MacosManagement,
+        };
+        assert_eq!(
+            serde_json::to_value(view).unwrap(),
+            json!({"kind":"view","view":"macos_management"})
+        );
+    }
+
+    #[test]
     fn catalog_examples_are_valid_typed_requests_with_unique_ids() {
         let catalog = capability_catalog();
         let mut ids = std::collections::HashSet::new();
@@ -1038,7 +1126,7 @@ mod tests {
             );
             assert_eq!(item["finalExecution"], false);
         }
-        assert_eq!(ids.len(), 25);
+        assert_eq!(ids.len(), 27);
         assert!(native_prompt_catalog().contains(&catalog.to_string()));
     }
 
@@ -1114,7 +1202,8 @@ mod tests {
     fn discovery_and_all_details_preserve_canonical_identity_and_fit_the_result_budget() {
         let full = capability_catalog();
         let index = discovery_index();
-        assert_eq!(index["discoveryFormatVersion"], 1);
+        assert_eq!(index["discoveryFormatVersion"], 2);
+        assert!(index.get("inputTypes").is_none());
         assert_eq!(index["detailsRequired"], true);
         assert_eq!(index["finalExecution"], false);
         assert_eq!(index["resultSource"], "broomsweepy");

@@ -1,0 +1,22 @@
+flowchart TD
+    start([Explicit local Apply or Restore]) --> validate{Allowlisted input and current expected state?}
+    validate -->|No| refuse([Report stale, managed, invalid or unsupported])
+    validate -->|Yes| route{Operation and observed value}
+    route -->|Apply already equals requested Bool| noop([Success without journal or preference write])
+    route -->|Unfinished restore already equals original| recovery{Re-read still equals original?}
+    recovery -->|No| refuse
+    recovery -->|Yes, no preference write| final[[Commit applied or restored result]]
+    route -->|Preference change required| journal[[Commit prepared or restorePrepared record]]
+    journal --> durable{Prepared commit succeeded?}
+    durable -->|No| noWrite([Report error without preference write])
+    durable -->|Yes| recheck{Re-read still equals expected?}
+    recheck -->|No| failure[[Try failed or restoreFailed status]]
+    recheck -->|Yes| write[[Write Bool or remove previous override]]
+    write -->|Native error| failure
+    write --> verify{Stored value matches?}
+    verify -->|No or read error| failure
+    verify -->|Yes| final
+    failure --> pending([Report error; keep failed or pending evidence; never replay])
+    final --> committed{Result commit succeeded?}
+    committed -->|No| pending
+    committed -->|Yes| result([Refresh success; Finder not restarted])

@@ -41,7 +41,7 @@
   --text-faint: #7b8496;
   --text-faint: oklch(0.62 0.018 265);
   --primary: #2f6feb;
-  --primary: oklch(0.58 0.19 258);
+  --primary: oklch(0.56 0.19 258);
   --on-primary: #fbfcff;
   --accent-blue: #4c7ff7;
   --accent-blue: oklch(0.66 0.19 258);
@@ -489,9 +489,15 @@ option {
 
 .utility-header.utility-header--storage,
 .utility-header.utility-header--assistant,
-.utility-header.utility-header--settings {
+.utility-header.utility-header--settings,
+.utility-header.utility-header--mac-settings {
   position: relative;
   z-index: auto;
+}
+
+.utility-header--mac-settings {
+  min-height: 64px;
+  background: none;
 }
 
 .utility-header__identity {

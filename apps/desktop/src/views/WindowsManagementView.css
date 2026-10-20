@@ -1,0 +1,66 @@
+.windows-management-view { width: 100%; min-width: 0; display: grid; gap: 24px; font-size: .875rem; line-height: 1.5; container: windows-management / inline-size; }
+.windows-management-view :is(h2, h3, h4, p) { margin: 0; }
+.windows-management-view h2 { display: flex; gap: 12px; align-items: center; font-size: 1.5rem; line-height: 1.25; letter-spacing: -.02em; }
+.windows-management-view h3 { font-size: 1.125rem; line-height: 1.35; }
+.windows-management-view h4 { font-size: 1rem; font-weight: 650; }
+.windows-management-view button { min-height: 44px; font-size: .875rem; white-space: normal; overflow-wrap: anywhere; }
+.windows-management-header { display: flex; gap: 16px 24px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.windows-management-header > div { display: grid; gap: 8px; min-width: 0; }
+.windows-management-header p, .windows-management-scope p, .windows-management-setting__copy p, .windows-management-platform dt, .windows-management-section-heading > span, .windows-management-footnote, .windows-management-targets > p, .windows-management-error p { color: var(--text-muted); }
+.windows-management-scope, .windows-management-unsupported { display: flex; gap: 14px; align-items: flex-start; padding: 18px 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); }
+.windows-management-scope > svg, .windows-management-unsupported > svg { flex-shrink: 0; margin-top: 2px; color: var(--accent-blue); }
+.windows-management-scope > div, .windows-management-unsupported > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.windows-management-platform { display: flex; flex-wrap: wrap; gap: 12px 32px; margin: 0; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.windows-management-platform > div { display: grid; gap: 4px; min-width: 0; }
+.windows-management-platform dd { margin: 0; overflow-wrap: anywhere; }
+.windows-management-status { display: flex; gap: 10px; align-items: center; min-width: 0; color: var(--text-muted); }
+.windows-management-status:empty { display: none; }
+.windows-management-status > svg { flex-shrink: 0; }
+.windows-management-error { display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px; border-left: 3px solid var(--danger); border-radius: 0 12px 12px 0; background: var(--surface-subtle); }
+.windows-management-error > svg { color: var(--danger); flex-shrink: 0; }
+.windows-management-error > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.windows-management-section-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 10px 24px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.windows-management-setting-list { list-style: none; margin: 0; padding: 0; }
+.windows-management-setting { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, auto); align-items: center; gap: 14px 24px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.windows-management-setting__copy { display: grid; gap: 7px; min-width: 0; }
+.windows-management-setting__copy p { max-width: 70ch; overflow-wrap: anywhere; }
+.windows-management-setting__metadata { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--text-muted); }
+.windows-management-view .has-issue { color: var(--warning); }
+.windows-management-setting__value { display: grid; gap: 4px; justify-items: end; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.windows-management-setting__value strong { font-family: "JetBrains Mono", monospace; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.windows-management-setting__value small { color: var(--text-muted); font-size: .875rem; }
+.windows-management-setting__value button { margin-top: 6px; }
+.windows-management-section-action { display: flex; justify-content: flex-end; padding-top: 16px; }
+.windows-management-footnote { padding-top: 14px; }
+.windows-management-policies { min-width: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.windows-management-policies > summary { display: flex; justify-content: space-between; align-items: center; gap: 16px; min-height: 64px; padding: 12px 0; cursor: pointer; list-style: none; }
+.windows-management-policies > summary::-webkit-details-marker { display: none; }
+.windows-management-policies > summary > span { display: grid; gap: 4px; min-width: 0; }
+.windows-management-policies > summary small { color: var(--text-muted); font-size: .875rem; }
+.windows-management-policies > summary > svg { flex-shrink: 0; }
+.windows-management-policies[open] > summary > svg { transform: rotate(180deg); }
+.windows-management-policies > summary:focus-visible, .windows-management-warnings > summary:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 2px; }
+.windows-management-targets, .windows-management-connections { display: grid; gap: 14px; }
+.windows-management-target-list, .windows-management-connections > div { display: flex; flex-wrap: wrap; gap: 10px; }
+.windows-management-target { display: flex; align-items: center; gap: 12px; flex: 1 1 220px; min-width: 0; padding: 12px 14px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.windows-management-target > svg:last-child { margin-left: auto; flex-shrink: 0; color: var(--text-muted); }
+.windows-management-target > span { display: grid; gap: 4px; }
+.windows-management-target small { color: var(--text-muted); font-size: .875rem; }
+.windows-management-target:hover:not(:disabled) { border-color: var(--line-strong); background: var(--surface-strong); }
+.windows-management-target:active:not(:disabled) { transform: scale(.98); }
+.windows-management-warnings { min-width: 0; padding: 0 16px; border: 1px solid var(--line); border-radius: 12px; }
+.windows-management-warnings summary { display: flex; gap: 10px; align-items: center; min-height: 48px; cursor: pointer; color: var(--warning); }
+.windows-management-warnings ul { padding-left: 20px; color: var(--text-muted); overflow-wrap: anywhere; }
+@container windows-management (max-width: 620px) {
+  .windows-management-setting { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .windows-management-setting__value { justify-items: start; text-align: left; }
+  .windows-management-scope, .windows-management-unsupported { padding: 16px; }
+  .windows-management-target { flex-basis: 100%; }
+}
+@container windows-management (min-width: 320px) and (max-width: 620px) {
+  .windows-management-target-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .windows-management-view *, .windows-management-view *::before, .windows-management-view *::after { animation: none !important; transition: none !important; }
+  .windows-management-target:active:not(:disabled) { transform: none; }
+}

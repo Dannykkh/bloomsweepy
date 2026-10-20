@@ -1,0 +1,195 @@
+//! Audit-only real Wry transport. Never sends an allowlisted mutation ID.
+use serde_json::{Value, json};
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    io::{Read, Write},
+    net::TcpListener,
+    path::Path,
+    sync::{Arc, atomic::{AtomicBool, AtomicU64, Ordering}, mpsc},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tauri::{
+    Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    utils::assets::{AssetKey, AssetsIter, CspHash}, webview::PageLoadEvent,
+};
+
+// Byte-identical snapshot, preserving the production module's child layout.
+mod mac_settings;
+
+type AuditResult<T> = Result<T, String>;
+const HTML: &[u8] = b"<!doctype html><meta charset=utf-8><title>Argos isolated IPC probe</title><body>Audit only</body>";
+struct InlineAssets;
+impl<R: tauri::Runtime> tauri::Assets<R> for InlineAssets {
+    fn get(&self, _key: &AssetKey) -> Option<Cow<'_, [u8]>> {
+        Some(Cow::Borrowed(HTML))
+    }
+    fn iter(&self) -> Box<AssetsIter<'_>> {
+        Box::new(std::iter::once((Cow::Borrowed("/index.html"), Cow::Borrowed(HTML))))
+    }
+    fn csp_hashes(&self, _: &AssetKey) -> Box<dyn Iterator<Item = CspHash<'_>> + '_> {
+        Box::new(std::iter::empty())
+    }
+}
+
+fn invoke(window: &WebviewWindow<Wry>, command: &str, args: Value) -> AuditResult<Value> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = format!("audit-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let key = serde_json::to_string(&id).map_err(|e| e.to_string())?;
+    let cmd = serde_json::to_string(command).map_err(|e| e.to_string())?;
+    window.eval(format!(r#"globalThis.__audit ??= {{}};
+        Promise.resolve().then(() => window.__TAURI_INTERNALS__.invoke({cmd}, {args})).then(
+          value => {{globalThis.__audit[{key}] = {{ok:true,value}}}},
+          error => {{globalThis.__audit[{key}] = {{ok:false,error:String(error)}}}}
+        );"#)).map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let (tx, rx) = mpsc::sync_channel(1);
+        window.eval_with_callback(
+            format!("JSON.stringify(globalThis.__audit?.[{key}] ?? null)"),
+            move |raw| { let _ = tx.try_send(raw); },
+        ).map_err(|e| e.to_string())?;
+        if let Ok(raw) = rx.recv_timeout(Duration::from_millis(500)) {
+            let mut value: Value = serde_json::from_str(&raw).map_err(|e| format!("Invalid eval JSON: {e}"))?;
+            if let Some(text) = value.as_str() {
+                value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+            }
+            if !value.is_null() { return Ok(value); }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("{command}: bounded native response timeout"))
+}
+
+fn success(value: Value) -> AuditResult<Value> {
+    if value["ok"] == true { Ok(value["value"].clone()) }
+    else { Err(format!("Expected native success: {value}")) }
+}
+fn reject(id: &str, value: Value, expected: &str) -> AuditResult<()> {
+    let actual = value["error"].as_str().unwrap_or("");
+    let passed = value["ok"] == false && actual.contains(expected);
+    println!("{}", json!({"case":id,"passed":passed,"expectedContains":expected,"actual":actual}));
+    if passed { Ok(()) } else { Err(format!("{id}: rejection mismatch: {value}")) }
+}
+fn stamp(path: &Path) -> AuditResult<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(blake3::hash(&bytes).to_hex().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+fn wait_load(rx: &mpsc::Receiver<(String, String)>, label: &str, url: &str) -> AuditResult<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok((got_label, got_url)) = rx.recv_timeout(Duration::from_millis(500)) {
+            if got_label == label && got_url == url { return Ok(()); }
+        }
+    }
+    Err(format!("Load timeout: {label} {url}"))
+}
+fn remote_page() -> AuditResult<tauri::Url> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let address = listener.local_addr().map_err(|e| e.to_string())?;
+    thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut request = [0u8;4096];
+            let _ = stream.read(&mut request);
+            let header = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", HTML.len());
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(HTML);
+        }
+    });
+    format!("http://{address}/index.html").parse::<tauri::Url>().map_err(|e| e.to_string())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let done = Arc::new(AtomicBool::new(false));
+    let watch = done.clone();
+    thread::spawn(move || {
+        for _ in 0..120 { if watch.load(Ordering::Relaxed) { return; } thread::sleep(Duration::from_secs(1)); }
+        eprintln!("Audit watchdog expired; no automatic setting restore attempted");
+        std::process::exit(124);
+    });
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let mut context: tauri::Context<Wry> = tauri::test::mock_context(InlineAssets);
+    context.config_mut().identifier = format!("com.broomsweepy.audit.p{nonce}");
+    let app = tauri::Builder::<Wry>::default()
+        .enable_macos_default_menu(false)
+        .manage(mac_settings::MacSettingsState::default())
+        .invoke_handler(tauri::generate_handler![
+            mac_settings::get_mac_settings,
+            mac_settings::apply_mac_setting,
+            mac_settings::restore_mac_setting,
+        ]).build(context)?;
+    let (tx, rx) = mpsc::channel();
+    let mut windows = Vec::new();
+    for label in ["main", "secondary"] {
+        let loaded_tx = tx.clone();
+        windows.push(WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
+            .visible(false)
+            .on_page_load(move |window, payload| {
+                if payload.event() == PageLoadEvent::Finished {
+                    let _ = loaded_tx.send((window.label().to_owned(), payload.url().to_string()));
+                }
+            }).build()?);
+    }
+    let db = app.path().app_data_dir()?.join("mac-settings-v1.sqlite3");
+    let handle = app.handle().clone();
+    thread::spawn(move || {
+        let result = (|| -> AuditResult<()> {
+            let mut loaded = HashSet::new();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while loaded.len() < 2 && Instant::now() < deadline {
+                if let Ok((label, _)) = rx.recv_timeout(Duration::from_millis(500)) { loaded.insert(label); }
+            }
+            if loaded.len() != 2 { return Err("Initial load timeout".into()); }
+            let main = &windows[0];
+            let secondary = &windows[1];
+            let local = main.url().map_err(|e| e.to_string())?;
+            let db_before = stamp(&db)?;
+            if db_before.is_some() { return Err("Fresh audit app unexpectedly has a journal".into()); }
+            let before = success(invoke(main, "get_mac_settings", json!({}))?)?;
+            if before["settings"].as_array().map(Vec::len) != Some(5) { return Err("Expected exactly five preferences".into()); }
+            println!("{}", json!({"case":"IPC-CONTROL-READ","passed":true,"settingCount":5,"journalExists":false}));
+            let canary = json!({"request":{"settingId":"__invalid_canary__","enabled":true,"expectedValue":null}});
+            let check = |id: &str, response: Value, expected: &str| -> AuditResult<()> {
+                reject(id, response, expected)?;
+                // Observe after every rejection, not just after the full batch.
+                // Secondary stays local while main is temporarily remote.
+                let observed = success(invoke(secondary,"get_mac_settings",json!({}))?)?;
+                let same = before["settings"] == observed["settings"] && db_before == stamp(&db)?;
+                println!("{}", json!({"afterRequest":id,"fiveSettingsAndJournalUnchanged":same}));
+                if !same { return Err(format!("State changed after {id}; no automatic restore")); }
+                Ok(())
+            };
+            check("IPC-CONTROL-CANARY", invoke(main,"apply_mac_setting",canary.clone())?, "지원하지 않는 Mac 설정")?;
+            check("IPC-SECONDARY-APPLY", invoke(secondary,"apply_mac_setting",canary.clone())?, "로컬 기본 창")?;
+            check("IPC-LOCAL-RESTORE-ID", invoke(main,"restore_mac_setting",json!({"request":{"changeId":"invalid-hex"}}))?, "식별자가 올바르지")?;
+            check("IPC-SECONDARY-RESTORE", invoke(secondary,"restore_mac_setting",json!({"request":{"changeId":"invalid-hex"}}))?, "로컬 기본 창")?;
+            check("IPC-FIELD-EXTRA", invoke(main,"apply_mac_setting",json!({"request":{"settingId":"__invalid_canary__","enabled":true,"expectedValue":null,"domain":"not-accepted"}}))?, "unknown field")?;
+            check("IPC-FIELD-MISSING", invoke(main,"apply_mac_setting",json!({"request":{"settingId":"__invalid_canary__","enabled":true}}))?, "missing field")?;
+            check("IPC-FIELD-TYPE", invoke(main,"apply_mac_setting",json!({"request":{"settingId":"__invalid_canary__","enabled":"true","expectedValue":null}}))?, "invalid type")?;
+            let remote = remote_page()?;
+            main.navigate(remote.clone()).map_err(|e| e.to_string())?;
+            wait_load(&rx, "main", remote.as_str())?;
+            check("IPC-REMOTE-APPLY", invoke(main,"apply_mac_setting",canary)?, "not allowed")?;
+            main.navigate(local.clone()).map_err(|e| e.to_string())?;
+            wait_load(&rx, "main", local.as_str())?;
+            let after = success(invoke(main,"get_mac_settings",json!({}))?)?;
+            let settings_same = before["settings"] == after["settings"];
+            let journal_same = db_before == stamp(&db)?;
+            println!("{}", json!({"case":"IPC-STATE-UNCHANGED","passed":settings_same&&journal_same,"fiveSettingsUnchanged":settings_same,"journalUnchanged":journal_same}));
+            if !settings_same || !journal_same { return Err("Observed state changed; do not restore automatically".into()); }
+            Ok(())
+        })();
+        let code = if result.is_ok() {0} else {1};
+        println!("{}", json!({"isolatedWryNegative":result.is_ok(),"error":result.err(),"successfulOsMutationTested":false,"productSetupTested":false}));
+        done.store(true,Ordering::Relaxed);
+        handle.exit(code);
+    });
+    let code = app.run_return(|_,_|{});
+    std::process::exit(code);
+}

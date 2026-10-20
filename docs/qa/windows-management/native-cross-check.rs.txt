@@ -1,0 +1,16 @@
+//! Compile-time only: includes production sources without executing Windows APIs.
+#[path = "/Users/dannysmacair/Documents/git/BroomSweepy/apps/desktop/src-tauri/src/windows_settings/model.rs"]
+mod model;
+#[path = "/Users/dannysmacair/Documents/git/BroomSweepy/apps/desktop/src-tauri/src/windows_settings/native.rs"]
+mod native;
+
+pub fn check_native_contract() {
+    let reader = native::NativeReader;
+    let _ = model::build_snapshot(true, "windows", &reader);
+    let _launcher: fn() -> Result<(), String> = native::launch_folder_options;
+    let _ = model::open_target_with(true, "about", |target| {
+        let _ = target.uri();
+        Ok(())
+    });
+    let _ = model::trusted_main_caller("main", "tauri", Some("localhost"), None, false, false);
+}

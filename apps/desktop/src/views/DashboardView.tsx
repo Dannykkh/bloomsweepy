@@ -49,6 +49,7 @@ import type {
   VolumeInfo,
 } from "../types";
 import { useLanguage } from "../i18n";
+import "./DashboardView.css";
 
 interface DashboardViewProps {
   system: SystemOverview | null;
@@ -142,9 +143,6 @@ export function DashboardView({
   const cleanupScanning = cleanupState === "scanning";
   const usedBytes = primaryVolume
     ? Math.max(0, primaryVolume.totalBytes - primaryVolume.availableBytes)
-    : 0;
-  const usedPercent = primaryVolume?.totalBytes
-    ? Math.min(100, (usedBytes / primaryVolume.totalBytes) * 100)
     : 0;
   const largeBytes = report?.largeFiles.reduce(
     (total, file) => total + file.logicalBytes,
@@ -278,20 +276,22 @@ export function DashboardView({
   return (
     <div className="view-stack dashboard-view">
       <header className="dashboard-briefing" aria-labelledby="dashboard-title">
-        <div>
+        <div className="dashboard-briefing__copy">
           <p className="eyebrow">{t("오늘의 저장공간")}</p>
           <h1 id="dashboard-title">{t("저장공간 상태")}</h1>
-          <p>{t("한눈에 보고, 한 번 눌러 원인을 찾습니다.")}</p>
         </div>
-        <button
-          className="secondary-button dashboard-refresh"
-          type="button"
-          disabled={loading || blocked}
-          onClick={onRefresh}
-        >
-          <RefreshCw size={17} aria-hidden="true" />
-          {loading ? `${t("확인 중")}…` : t("새로 고침")}
-        </button>
+        <div className="dashboard-briefing__tools">
+          <PerformancePulse onOpen={onOpenPerformance} />
+          <button
+            className="secondary-button dashboard-refresh"
+            type="button"
+            disabled={loading || blocked}
+            onClick={onRefresh}
+          >
+            <RefreshCw size={17} aria-hidden="true" />
+            {loading ? `${t("확인 중")}…` : t("새로 고침")}
+          </button>
+        </div>
       </header>
 
       {error ? (
@@ -309,8 +309,6 @@ export function DashboardView({
         </div>
       ) : null}
 
-      <PerformancePulse onOpen={onOpenPerformance} />
-
       <section
         className="dashboard-hero glass-panel"
         aria-labelledby="dashboard-hero-title"
@@ -325,7 +323,7 @@ export function DashboardView({
           </p>
           <h2 id="dashboard-hero-title">
             {primaryVolume
-              ? t("{{size}} 여유", { size: formatBytes(primaryVolume.availableBytes) })
+              ? volumeLabel(primaryVolume)
               : loading
                 ? `${t("디스크 확인 중")}…`
                 : t("드라이브 정보를 읽지 못했습니다")}
@@ -337,12 +335,8 @@ export function DashboardView({
                 <dd>{formatBytes(usedBytes)}</dd>
               </div>
               <div>
-                <dt>{t("남음")}</dt>
-                <dd>{formatBytes(primaryVolume.availableBytes)}</dd>
-              </div>
-              <div>
-                <dt>{t("사용")}</dt>
-                <dd>{Math.round(usedPercent)}%</dd>
+                <dt>{t("드라이브 용량")}</dt>
+                <dd>{formatBytes(primaryVolume.totalBytes)}</dd>
               </div>
             </dl>
           ) : (
@@ -416,7 +410,6 @@ export function DashboardView({
         <div className="dashboard-hero__actions">
           <div className="dashboard-hero__action-copy">
             <strong>{t("큰 파일과 중복 파일을 한 번에 검사하세요")}</strong>
-            <p>{t("한 번의 자세한 검사로 큰 파일 목록과 실제 중복 결과를 함께 만듭니다.")}</p>
           </div>
           <div className="dashboard-hero__buttons">
             {scanning ? (
@@ -527,8 +520,7 @@ export function DashboardView({
       <section className="dashboard-quick-section" aria-labelledby="dashboard-quick-title">
         <div className="dashboard-section-heading">
           <div>
-            <p className="eyebrow">{t("빠른 실행")}</p>
-            <h2 id="dashboard-quick-title">{t("필요한 결과로 바로 이동하세요")}</h2>
+            <h2 id="dashboard-quick-title">{t("빠른 실행")}</h2>
           </div>
         </div>
         <div className="dashboard-quick-grid">

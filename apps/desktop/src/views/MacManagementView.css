@@ -1,0 +1,95 @@
+.mac-management-view { display: grid; gap: 18px; min-width: 0; width: 100%; font-size: .875rem; line-height: 1.5; container: mac-management / inline-size; }
+.mac-management-view :is(h2, h3, p) { margin: 0; }
+.mac-management-view button { min-height: 44px; font-size: .875rem; white-space: normal; }
+.mac-management-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 20px; min-width: 0; }
+.mac-management-context { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mac-management-context > svg { flex-shrink: 0; color: var(--text-muted); }
+.mac-management-context > div { display: grid; gap: 3px; min-width: 0; }
+.mac-management-context strong { font-size: .9375rem; font-weight: 600; }
+.mac-management-context span { color: var(--text-muted); overflow-wrap: anywhere; }
+.mac-management-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.mac-management-toolbar-actions button { padding: 9px 12px; }
+.mac-management-history-trigger > span { min-width: 20px; padding: 0 4px; border: 1px solid var(--line); border-radius: 5px; font-variant-numeric: tabular-nums; }
+.mac-management-status { display: flex; align-items: center; gap: 9px; min-width: 0; color: var(--text-muted); }
+.mac-management-status:empty { display: none; }
+.mac-management-status > svg { flex-shrink: 0; }
+.mac-management-error { display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border-left: 3px solid var(--danger); border-radius: 0 12px 12px 0; background: var(--surface-subtle); }
+.mac-management-error > svg { color: var(--danger); flex-shrink: 0; }
+.mac-management-error > div { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.mac-management-error p { color: var(--text-muted); }
+.mac-management-unsupported { display: flex; align-items: flex-start; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.mac-management-unsupported > svg { color: var(--text-muted); flex-shrink: 0; }
+.mac-management-unsupported > div { display: grid; gap: 6px; min-width: 0; }
+.mac-management-unsupported h2 { font-size: 1rem; }
+.mac-management-unsupported p { color: var(--text-muted); }
+.mac-management-groups { display: grid; gap: 20px; min-width: 0; }
+.mac-management-group-title { padding: 0 4px 10px; color: var(--text-muted); font-size: .9375rem; font-weight: 600; line-height: 1.4; }
+.mac-management-setting-list, .mac-management-history-list { list-style: none; margin: 0; padding: 0; }
+.mac-management-setting-list { overflow: hidden; border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
+.mac-management-setting { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 10px 16px; min-height: 78px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.mac-management-setting:last-child { border-bottom: 0; }
+.mac-management-setting-icon { color: var(--text-muted); }
+.mac-management-setting-copy { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.mac-management-setting-copy h3 { font-size: 1rem; font-weight: 600; line-height: 1.35; }
+.mac-management-value { color: var(--text-muted); }
+.mac-management-value.has-issue { color: var(--warning); }
+.mac-management-pending { justify-self: start; padding-left: 6px; border-left: 2px solid var(--accent-blue); color: var(--accent-blue); }
+.mac-management-setting-controls { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mac-management-setting-controls > button { min-width: 66px; padding: 9px 12px; }
+.mac-management-choice-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mac-management-choice-label { display: grid; flex-shrink: 0; gap: 1px; color: var(--text-muted); }
+.mac-management-choice-label small { font-size: .875rem; }
+.mac-management-value-choice { display: flex; min-width: 0; }
+.mac-management-value-choice button { min-width: 54px; padding: 8px 11px; border: 1px solid var(--line-strong); border-radius: 0; background: var(--canvas-elevated); color: var(--text); }
+.mac-management-value-choice button:first-child { border-radius: 8px 0 0 8px; }
+.mac-management-value-choice button:last-child { margin-left: -1px; border-radius: 0 8px 8px 0; }
+.mac-management-value-choice button[aria-pressed="true"] { position: relative; border-color: var(--accent-blue); color: var(--accent-blue); background: var(--surface-strong); font-weight: 650; }
+.mac-management-value-choice button:hover:not(:disabled) { background: var(--surface-strong); }
+.mac-management-value-choice button:active:not(:disabled) { transform: scale(.98); }
+.mac-management-null-note { color: var(--text-muted); }
+.mac-management-warnings { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-subtle); }
+.mac-management-warnings h2 { display: flex; align-items: center; gap: 9px; color: var(--warning); font-size: .9375rem; }
+.mac-management-warnings ul { margin: 8px 0 0; padding-left: 20px; color: var(--text-muted); overflow-wrap: anywhere; }
+.mac-management-history { display: grid; gap: 12px; min-width: 0; padding-top: 2px; }
+.mac-management-section-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 7px 20px; padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+.mac-management-section-heading h2 { display: flex; align-items: center; gap: 8px; font-size: 1rem; font-weight: 600; }
+.mac-management-section-heading > span, .mac-management-history > p, .mac-management-history-copy p, .mac-management-history-readonly { color: var(--text-muted); }
+#mac-history-title { scroll-margin-top: 18px; }
+#mac-history-title:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 4px; }
+.mac-management-history-list > li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.mac-management-history-copy { display: grid; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.mac-management-history-copy strong { font-size: .9375rem; font-weight: 600; }
+.mac-management-restore { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.mac-management-history-empty { padding: 4px 0; }
+.mac-management-explanations { min-width: 0; border: 1px solid var(--line); border-radius: 12px; }
+.mac-management-explanations summary { display: flex; align-items: center; gap: 9px; min-height: 48px; padding: 10px 15px; color: var(--text-muted); cursor: pointer; list-style: none; }
+.mac-management-explanations summary::-webkit-details-marker { display: none; }
+.mac-management-explanations summary > svg { flex-shrink: 0; }
+.mac-management-explanations summary > svg:last-child { margin-left: auto; }
+.mac-management-explanations[open] summary > svg:last-child { transform: rotate(180deg); }
+.mac-management-explanations summary:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: 3px; }
+.mac-management-explanations > div { display: grid; gap: 12px; padding: 0 15px 16px; color: var(--text-muted); overflow-wrap: anywhere; }
+.mac-management-explanations dl { display: grid; gap: 12px; margin: 0; }
+.mac-management-explanations dt { color: var(--text); font-weight: 600; }
+.mac-management-explanations dd { margin: 3px 0 0; }
+body.mac-management-fixture-host { overflow: hidden; }
+.mac-management-fixture-host, .mac-management-fixture-host #root { height: auto; min-height: 100dvh; overflow: visible; }
+.mac-management-fixture { max-width: 1260px; margin: 0 auto; padding: 28px 32px 48px; height: auto; overflow: visible; }
+.mac-management-fixture-log { color: var(--text-muted); font-size: .875rem; padding: 20px 0; overflow-wrap: anywhere; }
+@container mac-management (max-width: 620px) {
+  .mac-management-toolbar { align-items: flex-start; }
+  .mac-management-toolbar-actions { width: 100%; }
+  .mac-management-toolbar-actions > button { flex: 1 1 auto; }
+  .mac-management-setting { grid-template-columns: 22px minmax(0, 1fr); gap: 10px 12px; padding: 15px 14px; }
+  .mac-management-setting-controls { grid-column: 1 / -1; justify-content: space-between; gap: 10px; }
+  .mac-management-choice-field { flex: 1; }
+  .mac-management-value-choice { flex: 1; }
+  .mac-management-value-choice button { flex: 1; min-width: 44px; padding: 8px 10px; }
+  .mac-management-history-list > li { flex-direction: column; align-items: flex-start; }
+  .mac-management-restore { justify-content: flex-start; width: 100%; }
+}
+@media (max-width: 680px) { .mac-management-fixture { padding: 24px 20px 40px; } }
+@media (prefers-reduced-motion: reduce) {
+  .mac-management-view *, .mac-management-view *::before, .mac-management-view *::after { animation: none !important; transition: none !important; }
+  .mac-management-value-choice button:active:not(:disabled) { transform: none; }
+}

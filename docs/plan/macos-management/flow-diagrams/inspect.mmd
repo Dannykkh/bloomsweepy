@@ -1,0 +1,8 @@
+flowchart TD
+    start([Chat or MCP macos.inspect]) --> permit{Existing inspection disclosure allowed?}
+    permit -->|No| deny([permission_required])
+    permit -->|Yes| read[[Same settings engine read-only snapshot]]
+    read --> live{Permission still current and not cancelled?}
+    live -->|No| discard([Discard late result])
+    live -->|Yes| project[[Bound five rows, omit journal and local paths]]
+    project --> result([Observed states and Mac view link; no mutation])

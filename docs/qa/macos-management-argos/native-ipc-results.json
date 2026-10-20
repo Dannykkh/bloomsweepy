@@ -1,0 +1,110 @@
+{
+  "performedAt": "2026-10-20 Asia/Seoul",
+  "exitCode": 0,
+  "transport": "Tauri2.11.5 real Wry; isolated test Context/assets; default production Builder; no mockIPC or injected invoke key",
+  "productionModuleSha256": "a19a7ef59a269aec84dc33a81b2cbc970646da5f95b5235d472d826149c64668",
+  "caseCount": 10,
+  "afterRejectionStateChecks": 8,
+  "successfulOsMutationTested": false,
+  "productSetupTested": false,
+  "events": [
+    {
+      "case": "IPC-CONTROL-READ",
+      "journalExists": false,
+      "passed": true,
+      "settingCount": 5
+    },
+    {
+      "actual": "지원하지 않는 Mac 설정입니다",
+      "case": "IPC-CONTROL-CANARY",
+      "expectedContains": "지원하지 않는 Mac 설정",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-CONTROL-CANARY",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "Mac 설정 변경은 앱의 로컬 기본 창에서만 사용할 수 있습니다",
+      "case": "IPC-SECONDARY-APPLY",
+      "expectedContains": "로컬 기본 창",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-SECONDARY-APPLY",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "Mac 설정 복원 식별자가 올바르지 않습니다",
+      "case": "IPC-LOCAL-RESTORE-ID",
+      "expectedContains": "식별자가 올바르지",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-LOCAL-RESTORE-ID",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "Mac 설정 변경은 앱의 로컬 기본 창에서만 사용할 수 있습니다",
+      "case": "IPC-SECONDARY-RESTORE",
+      "expectedContains": "로컬 기본 창",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-SECONDARY-RESTORE",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "invalid args `request` for command `apply_mac_setting`: unknown field `domain`, expected one of `settingId`, `enabled`, `expectedValue`",
+      "case": "IPC-FIELD-EXTRA",
+      "expectedContains": "unknown field",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-FIELD-EXTRA",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "invalid args `request` for command `apply_mac_setting`: missing field `expectedValue`",
+      "case": "IPC-FIELD-MISSING",
+      "expectedContains": "missing field",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-FIELD-MISSING",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "invalid args `request` for command `apply_mac_setting`: invalid type: string \"true\", expected a boolean",
+      "case": "IPC-FIELD-TYPE",
+      "expectedContains": "invalid type",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-FIELD-TYPE",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "actual": "Command apply_mac_setting not allowed by ACL",
+      "case": "IPC-REMOTE-APPLY",
+      "expectedContains": "not allowed",
+      "passed": true
+    },
+    {
+      "afterRequest": "IPC-REMOTE-APPLY",
+      "fiveSettingsAndJournalUnchanged": true
+    },
+    {
+      "case": "IPC-STATE-UNCHANGED",
+      "fiveSettingsUnchanged": true,
+      "journalUnchanged": true,
+      "passed": true
+    },
+    {
+      "error": null,
+      "isolatedWryNegative": true,
+      "productSetupTested": false,
+      "successfulOsMutationTested": false
+    }
+  ]
+}

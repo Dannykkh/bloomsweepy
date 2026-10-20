@@ -1,0 +1,13 @@
+[package]
+name = "broomsweepy-windows-native-check"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_System_Registry", "Win32_System_SystemInformation"] }
+winreg = "=0.55.0"

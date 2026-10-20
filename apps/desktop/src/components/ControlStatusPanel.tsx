@@ -145,7 +145,7 @@ export function ControlStatusPanel({
 
   return (
     <section
-      className={`control-status-panel ${status.bridgeAvailable ? "is-available" : "is-unavailable"}`}
+      className={`control-status-panel ${!status.bridgeAvailable ? "is-unavailable" : status.connectedClients > 0 ? "is-available" : "is-waiting"}`}
       aria-labelledby="control-status-title"
     >
       <span className="control-status-panel__icon" aria-hidden="true">

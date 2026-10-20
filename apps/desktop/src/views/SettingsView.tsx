@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Database, HardDrive, Languages, ShieldCheck } from "lucide-react";
 import { DockerManagementPanel } from "../components/DockerManagementPanel";
 import { McpConnectionPanel } from "../components/McpConnectionPanel";
@@ -8,6 +9,7 @@ import { FileChangeReviewPanel } from "../components/FileChangeReviewPanel";
 import { ControlStatusPanel, type ControlStatusPanelProps } from "../components/ControlStatusPanel";
 import { useLanguage, type LanguagePreference } from "../i18n";
 import type { DockerManagementStatus, ScanConfig } from "../types";
+import "./SettingsView.css";
 
 interface SettingsViewProps {
   controlSettings: ControlStatusPanelProps;
@@ -22,6 +24,15 @@ interface SettingsViewProps {
 }
 
 const megabyte = 1024 * 1024;
+const settingsCategories = [
+  { id: "general", label: "일반" },
+  { id: "scanning", label: "검사·검색" },
+  { id: "ai", label: "AI·권한" },
+  { id: "monitoring", label: "파일 감시" },
+  { id: "developer", label: "개발 도구" },
+  { id: "about", label: "정보" },
+] as const;
+type SettingsCategory = (typeof settingsCategories)[number]["id"];
 
 export function SettingsView({
   controlSettings,
@@ -35,181 +46,283 @@ export function SettingsView({
   onOpenDocker,
 }: SettingsViewProps) {
   const { language, preference, setPreference, storageError, t } = useLanguage();
+  const [selectedCategory, setSelectedCategory] = useState<SettingsCategory>("general");
 
   function update<Key extends keyof ScanConfig>(key: Key, value: ScanConfig[Key]) {
     onConfigChange({ ...config, [key]: value });
   }
 
   return (
-    <div className="settings-layout">
-      <section className="settings-panel settings-connections-panel">
-        <div className="settings-panel__heading"><ShieldCheck size={20} aria-hidden="true" />
-          <div><h2>{t("연결과 권한")}</h2><p>{t("외부 터미널 제어와 전송 범위 확인")}</p></div>
-        </div>
-        <ControlStatusPanel {...controlSettings} />
-      </section>
-      <AssistantModelSettingsPanel />
-      <FileChangeReviewPanel />
-      <section className="settings-panel settings-language-panel">
-        <div className="settings-panel__heading">
-          <Languages size={20} aria-hidden="true" />
-          <div>
-            <h2>{t("표시 언어")}</h2>
-            <p>{t("이 앱의 메뉴와 설명에 사용할 언어입니다.")}</p>
-          </div>
-        </div>
+    <div className="settings-workspace">
+      <div className="settings-workspace__layout">
+        <nav className="settings-category-nav" aria-label={t("앱 설정 분류")}>
+          {settingsCategories.map((category) => (
+            <button
+              type="button"
+              key={category.id}
+              aria-current={selectedCategory === category.id ? "page" : undefined}
+              aria-controls={`settings-category-${category.id}`}
+              onClick={() => setSelectedCategory(category.id)}
+            >
+              {t(category.label)}
+            </button>
+          ))}
+        </nav>
 
-        <label className="setting-row setting-row--language">
-          <span>
-            <strong>{t("언어")}</strong>
-            <small id="language-setting-description">
-              {t("이 앱의 표시만 바뀌며 파일과 운영체제 설정은 바뀌지 않습니다.")}
-            </small>
-            <small className="setting-row__status">
-              {t("현재 적용: {{language}}", {
-                language:
-                  language === "ko"
-                    ? "한국어"
-                    : language === "ja"
-                      ? "日本語"
-                      : language === "zh-CN"
-                        ? "简体中文"
-                        : "English",
-              })}
-            </small>
-          </span>
-          <select
-            value={preference}
-            aria-describedby="language-setting-description"
-            onChange={(event) =>
-              setPreference(event.currentTarget.value as LanguagePreference)
-            }
+        <div className="settings-workspace__content">
+          <section
+            id="settings-category-general"
+            className="settings-category"
+            aria-labelledby="settings-category-general-title"
+            hidden={selectedCategory !== "general"}
           >
-            <option value="en">English</option>
-            <option value="ko">한국어</option>
-            <option value="ja">日本語</option>
-            <option value="zh-CN">简体中文</option>
-          </select>
-        </label>
-        <p className="settings-language-panel__storage-note">
-          {storageError
-            ? t("언어 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 언어를 사용합니다.")
-            : t("언어 선택은 이 컴퓨터에만 저장됩니다.")}
-        </p>
-      </section>
+            <header className="settings-category__heading">
+              <h2 id="settings-category-general-title">{t("일반")}</h2>
+              <p>{t("표시 언어와 앱 시작·메뉴 막대 동작을 설정합니다.")}</p>
+            </header>
+            <div className="settings-category__panels settings-category__panels--compact">
+              <section className="settings-panel settings-language-panel">
+                <div className="settings-panel__heading">
+                  <Languages size={20} aria-hidden="true" />
+                  <div>
+                    <h2>{t("표시 언어")}</h2>
+                    <p>{t("이 앱의 메뉴와 설명에 사용할 언어입니다.")}</p>
+                  </div>
+                </div>
 
-      <section className="settings-panel">
-        <div className="settings-panel__heading">
-          <HardDrive size={20} aria-hidden="true" />
-          <div>
-            <h2>{t("파일 크기 기준")}</h2>
-            <p>{t("다음 스캔부터 적용됩니다.")}</p>
-          </div>
+                <label className="setting-row setting-row--language">
+                  <span>
+                    <strong>{t("언어")}</strong>
+                    <small id="language-setting-description">
+                      {t("이 앱의 표시만 바뀌며 파일과 운영체제 설정은 바뀌지 않습니다.")}
+                    </small>
+                    <small className="setting-row__status">
+                      {t("현재 적용: {{language}}", {
+                        language:
+                          language === "ko"
+                            ? "한국어"
+                            : language === "ja"
+                              ? "日本語"
+                              : language === "zh-CN"
+                                ? "简体中文"
+                                : "English",
+                      })}
+                    </small>
+                  </span>
+                  <select
+                    value={preference}
+                    aria-describedby="language-setting-description"
+                    onChange={(event) =>
+                      setPreference(event.currentTarget.value as LanguagePreference)
+                    }
+                  >
+                    <option value="en">English</option>
+                    <option value="ko">한국어</option>
+                    <option value="ja">日本語</option>
+                    <option value="zh-CN">简体中文</option>
+                  </select>
+                </label>
+                <p className="settings-language-panel__storage-note">
+                  {storageError
+                    ? t("언어 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 언어를 사용합니다.")
+                    : t("언어 선택은 이 컴퓨터에만 저장됩니다.")}
+                </p>
+              </section>
+
+              <StartupSettingsPanel />
+              <MenuBarSettingsPanel />
+            </div>
+          </section>
+
+          <section
+            id="settings-category-scanning"
+            className="settings-category"
+            aria-labelledby="settings-category-scanning-title"
+            hidden={selectedCategory !== "scanning"}
+          >
+            <header className="settings-category__heading">
+              <h2 id="settings-category-scanning-title">{t("검사·검색")}</h2>
+              <p>{t("파일 검사 기준과 결과 보관 한도를 조정합니다.")}</p>
+            </header>
+            <div className="settings-category__panels settings-category__panels--compact">
+              <section className="settings-panel">
+                <div className="settings-panel__heading">
+                  <HardDrive size={20} aria-hidden="true" />
+                  <div>
+                    <h2>{t("파일 크기 기준")}</h2>
+                    <p>{t("다음 스캔부터 적용됩니다.")}</p>
+                  </div>
+                </div>
+
+                <label className="setting-row">
+                  <span>
+                    <strong>{t("큰 파일 최소 크기")}</strong>
+                    <small>{t("결과 목록에 보여줄 최소 파일 크기")}</small>
+                  </span>
+                  <select
+                    value={config.minLargeFileBytes}
+                    onChange={(event) => update("minLargeFileBytes", Number(event.currentTarget.value))}
+                  >
+                    <option value={10 * megabyte}>10 MB</option>
+                    <option value={50 * megabyte}>50 MB</option>
+                    <option value={100 * megabyte}>100 MB</option>
+                    <option value={500 * megabyte}>500 MB</option>
+                    <option value={1024 * megabyte}>1 GB</option>
+                  </select>
+                </label>
+
+                <label className="setting-row">
+                  <span>
+                    <strong>{t("중복 검사 최소 크기")}</strong>
+                    <small>{t("작은 파일을 비교하는 작업량을 줄입니다")}</small>
+                  </span>
+                  <select
+                    value={config.minDuplicateFileBytes}
+                    onChange={(event) => update("minDuplicateFileBytes", Number(event.currentTarget.value))}
+                  >
+                    <option value={100 * 1024}>100 KB</option>
+                    <option value={megabyte}>1 MB</option>
+                    <option value={10 * megabyte}>10 MB</option>
+                    <option value={50 * megabyte}>50 MB</option>
+                  </select>
+                </label>
+              </section>
+
+              <section className="settings-panel">
+                <div className="settings-panel__heading">
+                  <Database size={20} aria-hidden="true" />
+                  <div>
+                    <h2>{t("결과 한도")}</h2>
+                    <p>{t("메모리 사용량과 화면 밀도를 제어합니다.")}</p>
+                  </div>
+                </div>
+
+                <label className="setting-row">
+                  <span>
+                    <strong>{t("큰 파일 결과")}</strong>
+                    <small>{t("크기순으로 보관할 최대 항목 수")}</small>
+                  </span>
+                  <select
+                    value={config.maxLargeFiles}
+                    onChange={(event) => update("maxLargeFiles", Number(event.currentTarget.value))}
+                  >
+                    <option value={100}>{t("{{count}}개", { count: 100 })}</option>
+                    <option value={250}>{t("{{count}}개", { count: 250 })}</option>
+                    <option value={500}>{t("{{count}}개", { count: 500 })}</option>
+                  </select>
+                </label>
+
+                <label className="setting-row">
+                  <span>
+                    <strong>{t("중복 그룹 결과")}</strong>
+                    <small>{t("낭비 용량순으로 보관할 최대 그룹 수")}</small>
+                  </span>
+                  <select
+                    value={config.maxDuplicateGroups}
+                    onChange={(event) => update("maxDuplicateGroups", Number(event.currentTarget.value))}
+                  >
+                    <option value={50}>{t("{{count}}개", { count: 50 })}</option>
+                    <option value={100}>{t("{{count}}개", { count: 100 })}</option>
+                    <option value={250}>{t("{{count}}개", { count: 250 })}</option>
+                  </select>
+                </label>
+              </section>
+            </div>
+          </section>
+
+          <section
+            id="settings-category-ai"
+            className="settings-category"
+            aria-labelledby="settings-category-ai-title"
+            hidden={selectedCategory !== "ai"}
+          >
+            <header className="settings-category__heading">
+              <h2 id="settings-category-ai-title">{t("AI·권한")}</h2>
+              <p>{t("대화 모델, 앱 접근 권한, 외부 AI 연결을 관리합니다.")}</p>
+            </header>
+            <div className="settings-category__panels">
+              <section className="settings-panel settings-connections-panel">
+                <div className="settings-panel__heading">
+                  <ShieldCheck size={20} aria-hidden="true" />
+                  <div>
+                    <h2>{t("연결과 권한")}</h2>
+                    <p>{t("외부 터미널 제어와 전송 범위 확인")}</p>
+                  </div>
+                </div>
+                <ControlStatusPanel {...controlSettings} />
+              </section>
+              <AssistantModelSettingsPanel />
+              <McpConnectionPanel />
+            </div>
+          </section>
+
+          <section
+            id="settings-category-monitoring"
+            className="settings-category"
+            aria-labelledby="settings-category-monitoring-title"
+            hidden={selectedCategory !== "monitoring"}
+          >
+            <header className="settings-category__heading">
+              <h2 id="settings-category-monitoring-title">{t("파일 감시")}</h2>
+              <p>{t("선택한 폴더의 변경을 주기적으로 확인하고 검토합니다.")}</p>
+            </header>
+            <div className="settings-category__panels">
+              <FileChangeReviewPanel />
+            </div>
+          </section>
+
+          <section
+            id="settings-category-developer"
+            className="settings-category"
+            aria-labelledby="settings-category-developer-title"
+            hidden={selectedCategory !== "developer"}
+          >
+            <header className="settings-category__heading">
+              <h2 id="settings-category-developer-title">{t("개발 도구")}</h2>
+              <p>{t("Docker 용량 관리 기능의 사용 여부를 설정합니다.")}</p>
+            </header>
+            <div className="settings-category__panels">
+              <DockerManagementPanel
+                status={dockerStatus}
+                loading={dockerLoading}
+                changing={dockerChanging}
+                error={dockerError}
+                onEnabledChange={onDockerEnabledChange}
+                onOpenDocker={onOpenDocker}
+              />
+            </div>
+          </section>
+
+          <section
+            id="settings-category-about"
+            className="settings-category"
+            aria-labelledby="settings-category-about-title"
+            hidden={selectedCategory !== "about"}
+          >
+            <header className="settings-category__heading">
+              <h2 id="settings-category-about-title">{t("정보")}</h2>
+              <p>{t("앱의 현재 안전 원칙을 확인합니다.")}</p>
+            </header>
+            <div className="settings-category__panels">
+              <section className="safety-contract">
+                <ShieldCheck size={22} aria-hidden="true" />
+                <div>
+                  <h2>{t("현재 안전 계약")}</h2>
+                  <ul>
+                    <li>{t("스캔은 파일을 수정하거나 이동하지 않습니다.")}</li>
+                    <li>{t("같은 저장공간을 가리키는 여러 파일 이름은 중복 낭비로 세지 않습니다.")}</li>
+                    <li>{t("일부 내용으로 후보를 줄인 뒤 전체 내용을 끝까지 비교해 중복을 확정합니다.")}</li>
+                    <li>{t("선택 항목은 실행 직전 재검증하고 운영체제 휴지통으로만 이동합니다.")}</li>
+                    <li>{t("일반 파일은 영구 삭제하지 않으며 Windows 설치 정보도 변경하지 않습니다.")}</li>
+                    <li>{t("Docker 정리는 예외적으로 휴지통을 거치지 않아 별도 확인 뒤에만 실행합니다.")}</li>
+                    <li>{t("휴지통 비우기는 예외적으로 휴지통 전체를 영구 삭제하며 별도 확인 뒤에만 실행합니다.")}</li>
+                  </ul>
+                </div>
+              </section>
+            </div>
+          </section>
         </div>
-
-        <label className="setting-row">
-          <span>
-            <strong>{t("큰 파일 최소 크기")}</strong>
-            <small>{t("결과 목록에 보여줄 최소 파일 크기")}</small>
-          </span>
-          <select
-            value={config.minLargeFileBytes}
-            onChange={(event) => update("minLargeFileBytes", Number(event.currentTarget.value))}
-          >
-            <option value={10 * megabyte}>10 MB</option>
-            <option value={50 * megabyte}>50 MB</option>
-            <option value={100 * megabyte}>100 MB</option>
-            <option value={500 * megabyte}>500 MB</option>
-            <option value={1024 * megabyte}>1 GB</option>
-          </select>
-        </label>
-
-        <label className="setting-row">
-          <span>
-            <strong>{t("중복 검사 최소 크기")}</strong>
-            <small>{t("작은 파일을 비교하는 작업량을 줄입니다")}</small>
-          </span>
-          <select
-            value={config.minDuplicateFileBytes}
-            onChange={(event) => update("minDuplicateFileBytes", Number(event.currentTarget.value))}
-          >
-            <option value={100 * 1024}>100 KB</option>
-            <option value={megabyte}>1 MB</option>
-            <option value={10 * megabyte}>10 MB</option>
-            <option value={50 * megabyte}>50 MB</option>
-          </select>
-        </label>
-      </section>
-
-      <section className="settings-panel">
-        <div className="settings-panel__heading">
-          <Database size={20} aria-hidden="true" />
-          <div>
-            <h2>{t("결과 한도")}</h2>
-            <p>{t("메모리 사용량과 화면 밀도를 제어합니다.")}</p>
-          </div>
-        </div>
-
-        <label className="setting-row">
-          <span>
-            <strong>{t("큰 파일 결과")}</strong>
-            <small>{t("크기순으로 보관할 최대 항목 수")}</small>
-          </span>
-          <select
-            value={config.maxLargeFiles}
-            onChange={(event) => update("maxLargeFiles", Number(event.currentTarget.value))}
-          >
-            <option value={100}>{t("{{count}}개", { count: 100 })}</option>
-            <option value={250}>{t("{{count}}개", { count: 250 })}</option>
-            <option value={500}>{t("{{count}}개", { count: 500 })}</option>
-          </select>
-        </label>
-
-        <label className="setting-row">
-          <span>
-            <strong>{t("중복 그룹 결과")}</strong>
-            <small>{t("낭비 용량순으로 보관할 최대 그룹 수")}</small>
-          </span>
-          <select
-            value={config.maxDuplicateGroups}
-            onChange={(event) => update("maxDuplicateGroups", Number(event.currentTarget.value))}
-          >
-            <option value={50}>{t("{{count}}개", { count: 50 })}</option>
-            <option value={100}>{t("{{count}}개", { count: 100 })}</option>
-            <option value={250}>{t("{{count}}개", { count: 250 })}</option>
-          </select>
-        </label>
-      </section>
-
-      <StartupSettingsPanel />
-      <MenuBarSettingsPanel />
-
-      <DockerManagementPanel
-        status={dockerStatus}
-        loading={dockerLoading}
-        changing={dockerChanging}
-        error={dockerError}
-        onEnabledChange={onDockerEnabledChange}
-        onOpenDocker={onOpenDocker}
-      />
-
-      <McpConnectionPanel />
-
-      <section className="safety-contract">
-        <ShieldCheck size={22} aria-hidden="true" />
-        <div>
-          <h2>{t("현재 안전 계약")}</h2>
-          <ul>
-            <li>{t("스캔은 파일을 수정하거나 이동하지 않습니다.")}</li>
-            <li>{t("같은 저장공간을 가리키는 여러 파일 이름은 중복 낭비로 세지 않습니다.")}</li>
-            <li>{t("일부 내용으로 후보를 줄인 뒤 전체 내용을 끝까지 비교해 중복을 확정합니다.")}</li>
-            <li>{t("선택 항목은 실행 직전 재검증하고 운영체제 휴지통으로만 이동합니다.")}</li>
-            <li>{t("일반 파일은 영구 삭제하지 않으며 Windows 설치 정보도 변경하지 않습니다.")}</li>
-            <li>{t("Docker 정리는 예외적으로 휴지통을 거치지 않아 별도 확인 뒤에만 실행합니다.")}</li>
-            <li>{t("휴지통 비우기는 예외적으로 휴지통 전체를 영구 삭제하며 별도 확인 뒤에만 실행합니다.")}</li>
-          </ul>
-        </div>
-      </section>
+      </div>
     </div>
   );
 }

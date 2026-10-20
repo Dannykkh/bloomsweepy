@@ -1,0 +1,420 @@
+//! Read-only/negative real Wry IPC probe. Never sends an allowlisted Mac mutation ID.
+//! The Windows adapter is cfg-excluded on this Mac host; valid Windows launch is never attempted.
+use serde_json::{Value, json};
+use std::{
+    borrow::Cow,
+    collections::HashSet,
+    io::{Read, Write},
+    net::TcpListener,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tauri::{
+    Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry,
+    utils::assets::{AssetKey, AssetsIter, CspHash},
+    webview::PageLoadEvent,
+};
+
+// Byte-identical snapshot, preserving the production module's child layout.
+mod mac_settings;
+mod windows_settings;
+
+static CASE_COUNT: AtomicU64 = AtomicU64::new(0);
+static STATE_OBSERVATIONS: AtomicU64 = AtomicU64::new(0);
+const EXPECTED_CASES: u64 = 15;
+const EXPECTED_REJECTION_OBSERVATIONS: u64 = 12;
+
+type AuditResult<T> = Result<T, String>;
+const HTML: &[u8] = b"<!doctype html><meta charset=utf-8><title>Windows/Mac isolated IPC probe</title><body>Audit only</body>";
+struct InlineAssets;
+impl<R: tauri::Runtime> tauri::Assets<R> for InlineAssets {
+    fn get(&self, _key: &AssetKey) -> Option<Cow<'_, [u8]>> {
+        Some(Cow::Borrowed(HTML))
+    }
+    fn iter(&self) -> Box<AssetsIter<'_>> {
+        Box::new(std::iter::once((
+            Cow::Borrowed("/index.html"),
+            Cow::Borrowed(HTML),
+        )))
+    }
+    fn csp_hashes(&self, _: &AssetKey) -> Box<dyn Iterator<Item = CspHash<'_>> + '_> {
+        Box::new(std::iter::empty())
+    }
+}
+
+fn invoke(window: &WebviewWindow<Wry>, command: &str, args: Value) -> AuditResult<Value> {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let id = format!("audit-{}", NEXT.fetch_add(1, Ordering::Relaxed));
+    let key = serde_json::to_string(&id).map_err(|e| e.to_string())?;
+    let cmd = serde_json::to_string(command).map_err(|e| e.to_string())?;
+    window
+        .eval(format!(
+            r#"globalThis.__audit ??= {{}};
+        Promise.resolve().then(() => window.__TAURI_INTERNALS__.invoke({cmd}, {args})).then(
+          value => {{globalThis.__audit[{key}] = {{ok:true,value}}}},
+          error => {{globalThis.__audit[{key}] = {{ok:false,error:String(error)}}}}
+        );"#
+        ))
+        .map_err(|e| e.to_string())?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let (tx, rx) = mpsc::sync_channel(1);
+        window
+            .eval_with_callback(
+                format!("JSON.stringify(globalThis.__audit?.[{key}] ?? null)"),
+                move |raw| {
+                    let _ = tx.try_send(raw);
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        if let Ok(raw) = rx.recv_timeout(Duration::from_millis(500)) {
+            let mut value: Value =
+                serde_json::from_str(&raw).map_err(|e| format!("Invalid eval JSON: {e}"))?;
+            if let Some(text) = value.as_str() {
+                value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+            }
+            if !value.is_null() {
+                return Ok(value);
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err(format!("{command}: bounded native response timeout"))
+}
+
+fn success(value: Value) -> AuditResult<Value> {
+    if value["ok"] == true {
+        Ok(value["value"].clone())
+    } else {
+        Err(format!("Expected native success: {value}"))
+    }
+}
+fn record_case(id: &str, passed: bool, detail: Value) -> AuditResult<()> {
+    let mut row = detail.as_object().cloned().unwrap_or_default();
+    row.insert("case".into(), json!(id));
+    row.insert("passed".into(), json!(passed));
+    println!("{}", Value::Object(row));
+    CASE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if passed {
+        Ok(())
+    } else {
+        Err(format!("{id}: failed"))
+    }
+}
+fn reject(id: &str, value: Value, expected: &str) -> AuditResult<()> {
+    let actual = value["error"].as_str().unwrap_or("");
+    let passed = value["ok"] == false && actual.contains(expected);
+    record_case(
+        id,
+        passed,
+        json!({"expectedContains":expected,"actual":actual}),
+    )
+}
+fn stamp(path: &Path) -> AuditResult<Option<String>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(blake3::hash(&bytes).to_hex().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+fn journal_stamps(path: &Path) -> AuditResult<Vec<Option<String>>> {
+    let base = path.as_os_str().to_string_lossy();
+    [
+        base.to_string(),
+        format!("{base}-wal"),
+        format!("{base}-shm"),
+    ]
+    .iter()
+    .map(|path| stamp(Path::new(path)))
+    .collect()
+}
+fn wait_load(rx: &mpsc::Receiver<(String, String)>, label: &str, url: &str) -> AuditResult<()> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if let Ok((got_label, got_url)) = rx.recv_timeout(Duration::from_millis(500)) {
+            if got_label == label && got_url == url {
+                return Ok(());
+            }
+        }
+    }
+    Err(format!("Load timeout: {label} {url}"))
+}
+fn remote_page() -> AuditResult<tauri::Url> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+    let address = listener.local_addr().map_err(|e| e.to_string())?;
+    thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { break };
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+            let mut request = [0u8; 4096];
+            let _ = stream.read(&mut request);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                HTML.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(HTML);
+        }
+    });
+    format!("http://{address}/index.html")
+        .parse::<tauri::Url>()
+        .map_err(|e| e.to_string())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if !cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        return Err(
+            "This negative probe is restricted to Apple Silicon macOS; never run it on Windows"
+                .into(),
+        );
+    }
+    let done = Arc::new(AtomicBool::new(false));
+    let watch = done.clone();
+    thread::spawn(move || {
+        for _ in 0..120 {
+            if watch.load(Ordering::Relaxed) {
+                return;
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        eprintln!("Audit watchdog expired; no automatic setting restore attempted");
+        std::process::exit(124);
+    });
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let mut context: tauri::Context<Wry> = tauri::test::mock_context(InlineAssets);
+    context.config_mut().identifier = format!("com.broomsweepy.windowsipc.p{nonce}");
+    let app = tauri::Builder::<Wry>::default()
+        .enable_macos_default_menu(false)
+        .manage(mac_settings::MacSettingsState::default())
+        .invoke_handler(tauri::generate_handler![
+            mac_settings::get_mac_settings,
+            mac_settings::apply_mac_setting,
+            mac_settings::restore_mac_setting,
+            windows_settings::get_windows_settings,
+            windows_settings::open_windows_settings_target,
+        ])
+        .build(context)?;
+    let (tx, rx) = mpsc::channel();
+    let mut windows = Vec::new();
+    for label in ["main", "secondary"] {
+        let loaded_tx = tx.clone();
+        windows.push(
+            WebviewWindowBuilder::new(&app, label, WebviewUrl::App("index.html".into()))
+                .visible(false)
+                .on_page_load(move |window, payload| {
+                    if payload.event() == PageLoadEvent::Finished {
+                        let _ =
+                            loaded_tx.send((window.label().to_owned(), payload.url().to_string()));
+                    }
+                })
+                .build()?,
+        );
+    }
+    let db = app.path().app_data_dir()?.join("mac-settings-v1.sqlite3");
+    let handle = app.handle().clone();
+    thread::spawn(move || {
+        let result = (|| -> AuditResult<()> {
+            let mut loaded = HashSet::new();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while loaded.len() < 2 && Instant::now() < deadline {
+                if let Ok((label, _)) = rx.recv_timeout(Duration::from_millis(500)) {
+                    loaded.insert(label);
+                }
+            }
+            if loaded.len() != 2 {
+                return Err("Initial load timeout".into());
+            }
+            let main = &windows[0];
+            let secondary = &windows[1];
+            let local = main.url().map_err(|e| e.to_string())?;
+            let db_before = journal_stamps(&db)?;
+            if db_before.iter().any(Option::is_some) {
+                return Err("Fresh audit app unexpectedly has a journal or sidecar".into());
+            }
+            let before = success(invoke(main, "get_mac_settings", json!({}))?)?;
+            let read_ok = before["supported"] == true
+                && before["settings"].as_array().map(Vec::len) == Some(5)
+                && before["settings"]
+                    .as_array()
+                    .is_some_and(|rows| rows.iter().all(|row| row["id"] != "__invalid_canary__"))
+                && before["history"].as_array().is_some_and(Vec::is_empty)
+                && db_before == journal_stamps(&db)?;
+            record_case(
+                "IPC-MAC-CONTROL-READ",
+                read_ok,
+                json!({"settingCount":before["settings"].as_array().map(Vec::len),"journalAndSidecarsAbsent":true,"canaryNotAllowlisted":true}),
+            )?;
+            let windows = success(invoke(main, "get_windows_settings", json!({}))?)?;
+            let windows_ok = windows["supported"] == false
+                && windows["platform"] == "macos"
+                && windows["settings"].as_array().is_some_and(Vec::is_empty)
+                && windows["targets"].as_array().is_some_and(Vec::is_empty)
+                && windows["osBuild"].is_null()
+                && windows["osRevision"].is_null()
+                && windows["edition"].is_null()
+                && windows["warnings"]
+                    .as_array()
+                    .is_some_and(|warnings| !warnings.is_empty());
+            record_case(
+                "IPC-WINDOWS-UNSUPPORTED-READ",
+                windows_ok,
+                json!({"supported":windows["supported"],"platform":windows["platform"],
+                    "settingCount":windows["settings"].as_array().map(Vec::len),
+                    "targetCount":windows["targets"].as_array().map(Vec::len),
+                    "windowsNativeAdapterCompiled":cfg!(windows),
+                    "zeroReaderCallsBasis":"UnsupportedReader methods panic if reached; read succeeded via OS-first gate"}),
+            )?;
+            let canary = json!({"request":{"settingId":"__invalid_canary__","enabled":true,"expectedValue":null}});
+            let check = |id: &str, response: Value, expected: &str| -> AuditResult<()> {
+                reject(id, response, expected)?;
+                // Observe after every rejection, not just after the full batch.
+                // Secondary stays local while main is temporarily remote.
+                let observed = success(invoke(secondary, "get_mac_settings", json!({}))?)?;
+                let same =
+                    before["settings"] == observed["settings"] && db_before == journal_stamps(&db)?;
+                STATE_OBSERVATIONS.fetch_add(1, Ordering::Relaxed);
+                println!(
+                    "{}",
+                    json!({"afterRequest":id,"fiveSettingsAndJournalUnchanged":same,
+                    "journalAndSidecarsAbsent":journal_stamps(&db)?.iter().all(Option::is_none)})
+                );
+                if !same {
+                    return Err(format!("State changed after {id}; no automatic restore"));
+                }
+                Ok(())
+            };
+            check(
+                "IPC-WINDOWS-LOCAL-TARGET",
+                invoke(
+                    main,
+                    "open_windows_settings_target",
+                    json!({"targetId":"folder_options"}),
+                )?,
+                "Windows에서만 설정 화면 연결",
+            )?;
+            check(
+                "IPC-WINDOWS-SECONDARY-TARGET",
+                invoke(
+                    secondary,
+                    "open_windows_settings_target",
+                    json!({"targetId":"folder_options"}),
+                )?,
+                "로컬 기본 창",
+            )?;
+            // OS-first rejection intentionally precedes ID parsing on macOS.
+            check(
+                "IPC-WINDOWS-UNKNOWN-TARGET",
+                invoke(
+                    main,
+                    "open_windows_settings_target",
+                    json!({"targetId":"__invalid_canary__"}),
+                )?,
+                "Windows에서만 설정 화면 연결",
+            )?;
+            check(
+                "IPC-CONTROL-CANARY",
+                invoke(main, "apply_mac_setting", canary.clone())?,
+                "지원하지 않는 Mac 설정",
+            )?;
+            check(
+                "IPC-SECONDARY-APPLY",
+                invoke(secondary, "apply_mac_setting", canary.clone())?,
+                "로컬 기본 창",
+            )?;
+            check(
+                "IPC-LOCAL-RESTORE-ID",
+                invoke(
+                    main,
+                    "restore_mac_setting",
+                    json!({"request":{"changeId":"invalid-hex"}}),
+                )?,
+                "식별자가 올바르지",
+            )?;
+            check(
+                "IPC-SECONDARY-RESTORE",
+                invoke(
+                    secondary,
+                    "restore_mac_setting",
+                    json!({"request":{"changeId":"invalid-hex"}}),
+                )?,
+                "로컬 기본 창",
+            )?;
+            check(
+                "IPC-FIELD-EXTRA",
+                invoke(
+                    main,
+                    "apply_mac_setting",
+                    json!({"request":{"settingId":"__invalid_canary__","enabled":true,"expectedValue":null,"domain":"not-accepted"}}),
+                )?,
+                "unknown field",
+            )?;
+            check(
+                "IPC-FIELD-MISSING",
+                invoke(
+                    main,
+                    "apply_mac_setting",
+                    json!({"request":{"settingId":"__invalid_canary__","enabled":true}}),
+                )?,
+                "missing field",
+            )?;
+            check(
+                "IPC-FIELD-TYPE",
+                invoke(
+                    main,
+                    "apply_mac_setting",
+                    json!({"request":{"settingId":"__invalid_canary__","enabled":"true","expectedValue":null}}),
+                )?,
+                "invalid type",
+            )?;
+            let remote = remote_page()?;
+            main.navigate(remote.clone()).map_err(|e| e.to_string())?;
+            wait_load(&rx, "main", remote.as_str())?;
+            check(
+                "IPC-REMOTE-APPLY",
+                invoke(main, "apply_mac_setting", canary)?,
+                "not allowed",
+            )?;
+            check(
+                "IPC-WINDOWS-REMOTE-TARGET",
+                invoke(
+                    main,
+                    "open_windows_settings_target",
+                    json!({"targetId":"folder_options"}),
+                )?,
+                "not allowed",
+            )?;
+            main.navigate(local.clone()).map_err(|e| e.to_string())?;
+            wait_load(&rx, "main", local.as_str())?;
+            let after = success(invoke(main, "get_mac_settings", json!({}))?)?;
+            let settings_same = before["settings"] == after["settings"];
+            let journal_same = db_before == journal_stamps(&db)?;
+            record_case(
+                "IPC-STATE-UNCHANGED",
+                settings_same && journal_same,
+                json!({"fiveSettingsUnchanged":settings_same,"journalAndSidecarsUnchanged":journal_same,
+                    "journalAndSidecarsAbsent":journal_stamps(&db)?.iter().all(Option::is_none)}),
+            )?;
+            if CASE_COUNT.load(Ordering::Relaxed) != EXPECTED_CASES
+                || STATE_OBSERVATIONS.load(Ordering::Relaxed) != EXPECTED_REJECTION_OBSERVATIONS
+            {
+                return Err("Probe case or per-rejection observation count mismatch".into());
+            }
+            Ok(())
+        })();
+        let code = if result.is_ok() { 0 } else { 1 };
+        println!(
+            "{}",
+            json!({"isolatedWryNegative":result.is_ok(),"error":result.err(),"caseCount":CASE_COUNT.load(Ordering::Relaxed),"expectedCaseCount":EXPECTED_CASES,"rejectionStateObservationCount":STATE_OBSERVATIONS.load(Ordering::Relaxed),"expectedRejectionStateObservations":EXPECTED_REJECTION_OBSERVATIONS,"windowsNativeAdapterCompiled":cfg!(windows),"windowsReadAndLaunchCallsZeroByPlatformGate":!cfg!(windows),"successfulOsMutationTested":false,"productSetupTested":false,"installationTested":false})
+        );
+        done.store(true, Ordering::Relaxed);
+        handle.exit(code);
+    });
+    let code = app.run_return(|_, _| {});
+    std::process::exit(code);
+}

@@ -183,6 +183,16 @@ pub(crate) async fn execute(
                 AppToolResult::completed(request.capability_id(), data)
                     .with_presentation(json!({"view":"dashboard","overview":local}))
             }
+            AppToolRequest::MacosInspect {} => {
+                let snapshot = crate::mac_settings::inspect_mac_settings(app).await?;
+                let local = serde_json::to_value(&snapshot).map_err(|error| error.to_string())?;
+                macos_inspection_result(local, &cancellation)?
+            }
+            AppToolRequest::WindowsInspect {} => {
+                let snapshot = crate::windows_settings::inspect().await?;
+                let local = serde_json::to_value(&snapshot).map_err(|error| error.to_string())?;
+                windows_inspection_result(local, &cancellation)?
+            }
             AppToolRequest::DockerStatus {} => {
                 let context = crate::docker_tools::assistant_context(app).await?;
                 AppToolResult::completed(
@@ -239,6 +249,54 @@ pub(crate) async fn execute(
     Ok(result)
 }
 
+fn macos_inspection_result(
+    local: Value,
+    cancellation: &AtomicBool,
+) -> Result<AppToolResult, String> {
+    // Called only after the blocking read: never return a late result after cancel.
+    if cancellation.load(Ordering::Acquire) {
+        return Err("조회가 취소되었습니다".into());
+    }
+    let supported = local["supported"].as_bool() == Some(true);
+    let settings = local["settings"].as_array().into_iter().flatten().take(5)
+        .map(|item| json!({"id":item["id"],"title":item["title"],"value":item["value"],"state":item["state"],"managed":item["managed"]}))
+        .collect::<Vec<_>>();
+    Ok(AppToolResult::with_status("macos.inspect",
+        if supported { AppToolStatus::Completed } else { AppToolStatus::Unsupported },
+        json!({"supported":supported,"platform":local["platform"],"settings":settings,
+            "performed":false,"scope":"five Finder Bool preferences only", "mutation":"local Apply/Restore buttons only", "storedPreferencesOnly":true}))
+        .with_presentation(json!({"view":"macos_management"})))
+}
+
+fn windows_inspection_result(
+    local: Value,
+    cancellation: &AtomicBool,
+) -> Result<AppToolResult, String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err("조회가 취소되었습니다".into());
+    }
+    let supported = local["supported"].as_bool() == Some(true);
+    let settings = local["settings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .take(10)
+        .map(|item| {
+            json!({"id":item["id"],"title":item["title"],"category":item["category"],
+            "scope":item["scope"],"state":item["state"],"value":item["value"],
+            "valueType":item["valueType"],"support":item["support"]})
+        })
+        .collect::<Vec<_>>();
+    Ok(AppToolResult::with_status("windows.inspect",
+        if supported { AppToolStatus::Completed } else { AppToolStatus::Unsupported },
+        json!({"supported":supported,"platform":local["platform"],"osBuild":local["osBuild"],
+            "osRevision":local["osRevision"],"edition":local["edition"],"settings":settings,
+            "performed":false,"storedValuesOnly":true,"effectiveStateKnown":false,
+            "scope":"ten fixed Explorer and AI-policy values; current-user and machine scopes are not merged",
+            "mutation":"none; local controls only request a fixed Windows settings page"}))
+        .with_presentation(json!({"view":"windows_management"})))
+}
+
 fn bound_model_result(result: &mut AppToolResult) -> Result<(), String> {
     if model_context(result)?.len() > 16 * 1024 {
         result.truncated = true;
@@ -256,6 +314,40 @@ pub(crate) fn model_context(result: &AppToolResult) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_projection_is_bounded_read_only_and_drops_local_evidence() {
+        let cancellation = AtomicBool::new(false);
+        let settings = (0..14).map(|index| json!({"id":format!("setting-{index}"),"title":"Synthetic policy",
+            "category":"aiPolicy","scope":"machine","state":"unset","value":null,"valueType":null,
+            "support":"requiresVerification","registryPath":"private-key","diagnostic":"private-error"})).collect::<Vec<_>>();
+        let local = json!({"supported":true,"platform":"windows","osBuild":"26100","osRevision":3915,"edition":"Professional",
+            "settings":settings,"warnings":["private-warning"],"targets":[{"id":"privacy","uri":"private-uri"}]});
+        let result = windows_inspection_result(local.clone(), &cancellation).unwrap();
+        assert_eq!(result.data["settings"].as_array().unwrap().len(), 10);
+        assert_eq!(result.data["settings"][0]["value"], Value::Null);
+        assert_eq!(result.data["storedValuesOnly"], true);
+        assert_eq!(result.data["effectiveStateKnown"], false);
+        assert_eq!(result.data["performed"], false);
+        let context = model_context(&result).unwrap();
+        for private in [
+            "private-key",
+            "private-error",
+            "private-warning",
+            "private-uri",
+        ] {
+            assert!(!context.contains(private));
+        }
+        cancellation.store(true, Ordering::Release);
+        assert!(windows_inspection_result(local, &cancellation).is_err());
+        cancellation.store(false, Ordering::Release);
+        let unsupported = windows_inspection_result(
+            json!({"supported":false,"platform":"macos","settings":[]}),
+            &cancellation,
+        )
+        .unwrap();
+        assert_eq!(unsupported.status, AppToolStatus::Unsupported);
+    }
     #[test]
     fn readonly_blocks_mutation_reviews_but_keeps_queries_and_native_discovery() {
         let id = "a".repeat(32);
@@ -311,6 +403,28 @@ mod tests {
             record_mutating_request(&mut history, &format!("r{index}"), &mutation).unwrap();
         }
         assert_eq!(history.len(), 128);
+    }
+
+    #[test]
+    fn macos_projection_omits_local_evidence_and_rejects_cancelled_late_reads() {
+        let cancellation = AtomicBool::new(false);
+        let settings = (0..12).map(|index| json!({"id":format!("setting-{index}"),"title":"Synthetic setting", "value":null,"state":"unset","managed":false,"domain":"private-domain","key":"private-key"})).collect::<Vec<_>>();
+        let local = json!({"supported":true,"platform":"macOS synthetic", "settings":settings,"history":[{"id":"private-journal"}],"warnings":["/private/local/path"]});
+        let result = macos_inspection_result(local.clone(), &cancellation).unwrap();
+        assert_eq!(result.data["settings"].as_array().unwrap().len(), 5);
+        assert_eq!(result.data["settings"][0]["value"], Value::Null);
+        assert_eq!(result.data["performed"], false);
+        let context = model_context(&result).unwrap();
+        for private in [
+            "private-domain",
+            "private-key",
+            "private-journal",
+            "/private/local/path",
+        ] {
+            assert!(!context.contains(private));
+        }
+        cancellation.store(true, Ordering::Release);
+        assert!(macos_inspection_result(local, &cancellation).is_err());
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 | 목표 | 상태 |
 |------|------|
-| 대화형 파일관리 BroomSweepy | 트리 맥 설치 확인; LLM·Windows·장시간 검증 남음 |
+| 대화형 파일관리 BroomSweepy | Mac A안 설치·채팅 일부 통과; Windows·장시간 남음 |
 | 8 GiB 맥의 RAM·디스크 보호 | 소스·합성 회귀 완료, 설치형 전체 계측 남음 |
 
 ---
@@ -31,7 +31,7 @@
 | chat-workbench, timeline, retry | [008](memory/architecture/008-conversation-workbench.md) |
 | permissions, chat-access, webkit-popup | [009·010·015](memory/architecture/index.md) |
 | multi-drive, drive-deck, flip-animation, scan-root | [memory/architecture.md](memory/architecture.md) |
-| macos, disk-image, hdiutil, volume-filter | [memory/architecture.md](memory/architecture.md) |
+| os-settings, mac-control-a | [016·018·019](memory/architecture/index.md) |
 | performance-monitor, sysinfo, appkit, graceful-termination | [memory/architecture.md](memory/architecture.md) |
 | memory-cleaner, malloc-zone, current-process, one-click | [memory/architecture.md](memory/architecture.md) |
 | dual-rings, cpu, ram, scoped-cleanup | [memory/architecture.md](memory/architecture.md) |
@@ -51,7 +51,7 @@
 | node-x64, rust-arm64 | [memory/gotchas.md](memory/gotchas.md) |
 | application-management, windows-uninstall, related-data, file-open | [memory/architecture.md](memory/architecture.md) |
 | release-allocator-probe, allocation-elision, heap-budget | [memory/gotchas.md](memory/gotchas.md) |
-| navigation-order, dashboard, performance, applications-nav | [memory/architecture.md](memory/architecture.md) |
+| navigation, settings, system-cleanup | [017](memory/architecture/017-workspace-navigation.md) |
 | macos-menu-bar, native-popover, resident-window, aggregate-sampler | [memory/architecture.md](memory/architecture.md) |
 
 ---
@@ -74,4 +74,4 @@
 ## meta/
 - **프로젝트**: BroomSweepy
 - **생성일**: 2026-09-04
-- **마지막 업데이트**: 2026-10-11
+- **마지막 업데이트**: 2026-10-21

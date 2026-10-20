@@ -43,6 +43,8 @@ mod external_program;
 mod file_change_review;
 mod file_inspection;
 mod folder_actions;
+mod mac_cleanup;
+mod mac_settings;
 mod mcp_registration;
 mod menu_bar;
 mod permission_settings;
@@ -50,6 +52,7 @@ mod system_inventory;
 mod system_memory;
 mod system_performance;
 mod trash_actions;
+mod windows_settings;
 #[cfg(windows)]
 mod windows_single_instance;
 #[cfg(windows)]
@@ -1022,6 +1025,12 @@ fn cleanup_reason_codes(kind: CleanupCandidateKind) -> Vec<&'static str> {
     match kind {
         CleanupCandidateKind::TemporaryEntry => vec!["inactive", "user_temporary_root"],
         CleanupCandidateKind::CacheDirectory => vec!["inactive", "operating_system_cache"],
+        CleanupCandidateKind::DeveloperCache => vec![
+            "inactive",
+            "developer_cache",
+            "manual_review",
+            "rebuild_or_download_required",
+        ],
         CleanupCandidateKind::AppDataDirectory => {
             vec!["inactive", "unmatched_installed_app", "manual_review"]
         }
@@ -1748,6 +1757,11 @@ fn cleanup_scan_config(installed_apps: &InstalledAppInventory) -> CleanupScanCon
         ));
     }
 
+    #[cfg(target_os = "macos")]
+    if let Some(home) = dirs::home_dir() {
+        roots.extend(mac_cleanup::developer_cleanup_roots(&home));
+    }
+
     CleanupScanConfig {
         roots,
         installed_identity_tokens,
@@ -1814,6 +1828,7 @@ pub fn run() {
         .manage(folder_actions::FolderActionsState::default())
         .manage(empty_trash::EmptyTrashState::default())
         .manage(application_actions::ApplicationActionsState::default())
+        .manage(mac_settings::MacSettingsState::default())
         .manage(docker_tools::DockerManagerState::default())
         .manage(file_change_review::FileChangeReviewState::default())
         .manage(control_server::ControlStatusStore::default())
@@ -1851,6 +1866,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            mac_settings::get_mac_settings,
+            mac_settings::apply_mac_setting,
+            mac_settings::restore_mac_setting,
+            windows_settings::get_windows_settings,
+            windows_settings::open_windows_settings_target,
             menu_bar::get_menu_bar_settings,
             menu_bar::set_menu_bar_memory_percent,
             menu_bar::open_menu_bar_panel,

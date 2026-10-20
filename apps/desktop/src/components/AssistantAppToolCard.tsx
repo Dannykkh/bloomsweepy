@@ -5,6 +5,7 @@ import { cancelExternalFilePlan, cleanAppMemory, confirmExternalFilePlan, execut
 import { externalFileReviewDecision, preparedExternalFileWorkspace } from "../lib/externalFileReview";
 import { formatBytes, formatCount, formatDate } from "../lib/format";
 import { fileChangeReviewDisposition, fileChangeReviewKind, fileChangeReviewPhase, fileChangeReviewReason, type FileChangeReviewEntry, type FileChangeReviewPhase } from "../lib/fileChangeReview";
+import { windowsSettingStateKey, windowsSettingTitle, type WindowsSettingState } from "../lib/windowsSettings";
 import type { ApplicationInventory, ApplicationTrashPlan } from "../lib/applicationTypes";
 import type { AppToolResult, AssistantFileAccessAction, AssistantFileWorkspace, DockerCleanupPreview, DockerManagementStatus, TerminationPreview, TrashOperationResult, ViewId } from "../types";
 import { ApplicationReview, type ReviewTarget } from "../views/ApplicationsView";
@@ -15,6 +16,8 @@ import { AssistantTrashResultCard } from "./AssistantEmptyFolderCard";
 import "./AssistantAppToolCard.css";
 
 export const appToolTitles: Record<string, MessageKey> = {
+  "macos.inspect": "맥 관리",
+  "windows.inspect": "Windows 설정",
   "files.workspace": "파일 검사", "empty.workspace": "빈 폴더",
   "files.changes": "변경 파일 검토",
   "storage.overview": "드라이브 사용량", "performance.inspect": "시스템 성능",
@@ -40,8 +43,8 @@ function rows(value: unknown): Record<string, unknown>[] { return Array.isArray(
 
 export function appToolView(result: AppToolResult): ViewId | null {
   const raw = text(result.presentation?.view);
-  const aliases: Record<string, ViewId> = { large_files: "large-files", system_cleanup: "cleanup", fast_search: "files", document_search: "documents" };
-  const views = ["dashboard", "performance", "applications", "overview", "large-files", "duplicates", "cleanup", "files", "documents", "docker", "settings"];
+  const aliases: Record<string, ViewId> = { large_files: "large-files", system_cleanup: "cleanup", fast_search: "files", document_search: "documents", macos_management: "macos-management", windows_management: "windows-management" };
+  const views = ["dashboard", "performance", "applications", "macos-management", "windows-management", "overview", "large-files", "duplicates", "cleanup", "files", "documents", "docker", "settings"];
   if (aliases[raw]) return aliases[raw];
   if (views.includes(raw)) return raw as ViewId;
   if (result.capability === "files.search" || result.capability === "index.status" && result.data.source === "files") return "files";
@@ -49,6 +52,8 @@ export function appToolView(result: AppToolResult): ViewId | null {
   if (result.capability.startsWith("cleanup.")) return "cleanup";
   if (result.capability === "storage.scan") return "large-files";
   if (result.capability === "files.changes") return "settings";
+  if (result.capability === "macos.inspect") return "macos-management";
+  if (result.capability === "windows.inspect") return "windows-management";
   return null;
 }
 
@@ -62,7 +67,9 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
   const data = object(result.data);
   const memory = object(data.memory);
   const accessSearch = data.accessKind === "search";
-  const items = rows(accessSearch ? data.entries : data.items ?? data.results ?? data.relatedData ?? data.categories ?? data.volumes ?? data.entries);
+  const macSettings = result.capability === "macos.inspect";
+  const windowsSettings = result.capability === "windows.inspect";
+  const items = rows(accessSearch ? data.entries : data.items ?? data.results ?? data.relatedData ?? data.categories ?? data.volumes ?? data.entries ?? data.settings);
   const [accessQuery, setAccessQuery] = useState("");
   const fileAccess = result.capability === "files.workspace" && data.nativeOnly === true && result.presentation?.reviewKind === "fileAccess";
   const application = object(data.application);
@@ -73,6 +80,7 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
   return <section className="assistant-app-tool-card" aria-label={t("앱에서 확인한 결과")}>
     <header><div><p className="eyebrow">BroomSweepy</p><h3>{t(appToolTitles[result.capability] ?? "앱에서 확인한 결과")}</h3></div><span className="assistant-app-tool-state">{t(appToolStatusKeys[result.status])}</span></header>
     <p className="assistant-app-tool-meta">{t("실제 앱 조회 · {{date}}", { date: formatDate(measuredAt) })}</p>
+    {windowsSettings ? <p>{t("실제 적용 상태 미확인")}</p> : null}
     {result.capability === "files.changes" ? <>
       {text(data.phase) ? <p>{t(fileChangeReviewPhase(text(data.phase) as FileChangeReviewPhase) as MessageKey)}</p> : null}
       <p>{t("넘김은 안전 판정이 아닙니다. 같은 파일이 다시 바뀌면 새 기록으로 검토합니다.")}</p>
@@ -90,8 +98,12 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
     {items.length ? <ol className="assistant-app-tool-list">{items.map((item, i) => {
       const size = number(item.residentBytes ?? item.estimatedBytes ?? item.logicalBytes ?? item.sizeBytes ?? item.totalBytes);
       const cpu = number(item.cpuMachinePercent);
+      const windowsTitle = windowsSettings ? windowsSettingTitle(text(item.id)) : undefined;
+      const storedValue = number(item.value);
+      const hasStoredValue = (item.state === "value" || item.state === "unsupportedValue") && storedValue !== null && Number.isInteger(storedValue) && storedValue >= 0 && storedValue <= 0xffff_ffff;
       return <li key={`${text(item.id ?? item.targetId)}-${i}`}>
-        <div><strong>{text(item.displayName ?? item.name ?? item.label ?? item.kind) || t("요청한 작업")}</strong>
+        <div><strong>{windowsTitle ? t(windowsTitle) : text(item.displayName ?? item.name ?? item.label ?? item.title ?? item.kind) || t("요청한 작업")}</strong>
+          {windowsSettings ? <span>{item.scope === "machine" ? t("컴퓨터 전체 정책") : t("현재 사용자")} · {t(item.support === "deprecated" ? "폐기된 정책" : item.support === "requiresVerification" ? "지원 확인 필요" : "저장값만 확인")}</span> : null}
           {text(item.displayVersion) ? <span>{t("버전 {{version}}", { version: text(item.displayVersion) })}</span> : null}
           {text(item.snippet) ? <p>{text(item.snippet)}</p> : null}
           {text(item.protectionReason) ? <span>{text(item.protectionReason)}</span> : null}
@@ -102,7 +114,9 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
           </> : null}
         </div><div className="assistant-app-tool-values">
           {cpu !== null ? <span>CPU {cpu.toFixed(1)}%</span> : null}
-          <span>{size === null ? t("용량 미측정") : formatBytes(size)}</span>
+          {windowsSettings ? <span>{t(windowsSettingStateKey(text(item.state) as WindowsSettingState))}{hasStoredValue ? ` · DWORD ${storedValue}` : ""}</span>
+            : macSettings ? <span>{item.managed === true ? t("관리되는 설정") : item.state === "value" && typeof item.value === "boolean" ? t(item.value ? "켜짐" : "꺼짐") : item.state === "unset" ? t("명시값 없음") : t("상태 확인 필요")}</span>
+            : <span>{size === null ? t("용량 미측정") : formatBytes(size)}</span>}
           {number(item.modifiedAtUnixMs) !== null ? <span>{formatDate(number(item.modifiedAtUnixMs)!)}</span> : null}
           {fileAccess && onFileAccessAction && text(data.revision) && text(item.id) ? <button type="button" className="text-button" disabled={busy}
             onClick={() => onFileAccessAction(accessSearch

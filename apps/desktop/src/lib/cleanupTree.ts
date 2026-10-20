@@ -1,4 +1,5 @@
 import type { CleanupTreeNode, CleanupTreeView } from "../types/cleanupTree.ts";
+import type { CleanupCandidate } from "../types.ts";
 
 export const MAX_VISIBLE_CLEANUP_ROWS = 200;
 export const MAX_CLEANUP_DEPTH = 32;
@@ -52,4 +53,24 @@ export function cleanupPlanIsLive(tree: CleanupTreeView, now: number): boolean {
     && tree.plan.selectionRevision === tree.selectionRevision
     && tree.plan.expiresAtUnixMs > now
     && tree.expiresAtUnixMs > now);
+}
+
+// Presentation only. The existing Review count and native approval remain authoritative.
+export function cleanupReviewAcknowledgement(
+  candidates: ReadonlyArray<Pick<CleanupCandidate, "kind" | "confidence">>,
+) {
+  const review = candidates.filter((candidate) => candidate.confidence === "review");
+  if (review.length === 0) return undefined;
+  const developer = review.some((candidate) => candidate.kind === "developerCache");
+  const appData = review.some((candidate) => candidate.kind === "appDataDirectory");
+  if (developer && appData) {
+    return "검토 항목 {{count}}개를 확인했습니다. 개발 캐시는 재빌드·재다운로드가 필요할 수 있고, 프로그램 설정 폴더에는 계정이나 설정 데이터가 포함될 수 있습니다." as const;
+  }
+  if (developer) {
+    return "검토 항목 {{count}}개를 확인했습니다. 개발 캐시는 재빌드·재다운로드가 필요할 수 있습니다." as const;
+  }
+  if (appData) {
+    return "검토 항목 {{count}}개를 확인했습니다. 프로그램 설정 폴더에는 계정이나 설정 데이터가 포함될 수 있습니다." as const;
+  }
+  return "검토 항목 {{count}}개의 사용 여부와 정리 영향을 직접 확인했습니다." as const;
 }

@@ -1,0 +1,28 @@
+{"canaryNotAllowlisted":true,"case":"IPC-MAC-CONTROL-READ","journalAndSidecarsAbsent":true,"passed":true,"settingCount":5}
+{"case":"IPC-WINDOWS-UNSUPPORTED-READ","passed":true,"platform":"macos","settingCount":0,"supported":false,"targetCount":0,"windowsNativeAdapterCompiled":false,"zeroReaderCallsBasis":"UnsupportedReader methods panic if reached; read succeeded via OS-first gate"}
+{"actual":"Windows에서만 설정 화면 연결을 요청할 수 있습니다","case":"IPC-WINDOWS-LOCAL-TARGET","expectedContains":"Windows에서만 설정 화면 연결","passed":true}
+{"afterRequest":"IPC-WINDOWS-LOCAL-TARGET","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Windows 설정 연결은 앱의 로컬 기본 창에서만 요청할 수 있습니다","case":"IPC-WINDOWS-SECONDARY-TARGET","expectedContains":"로컬 기본 창","passed":true}
+{"afterRequest":"IPC-WINDOWS-SECONDARY-TARGET","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Windows에서만 설정 화면 연결을 요청할 수 있습니다","case":"IPC-WINDOWS-UNKNOWN-TARGET","expectedContains":"Windows에서만 설정 화면 연결","passed":true}
+{"afterRequest":"IPC-WINDOWS-UNKNOWN-TARGET","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"지원하지 않는 Mac 설정입니다","case":"IPC-CONTROL-CANARY","expectedContains":"지원하지 않는 Mac 설정","passed":true}
+{"afterRequest":"IPC-CONTROL-CANARY","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Mac 설정 변경은 앱의 로컬 기본 창에서만 사용할 수 있습니다","case":"IPC-SECONDARY-APPLY","expectedContains":"로컬 기본 창","passed":true}
+{"afterRequest":"IPC-SECONDARY-APPLY","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Mac 설정 복원 식별자가 올바르지 않습니다","case":"IPC-LOCAL-RESTORE-ID","expectedContains":"식별자가 올바르지","passed":true}
+{"afterRequest":"IPC-LOCAL-RESTORE-ID","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Mac 설정 변경은 앱의 로컬 기본 창에서만 사용할 수 있습니다","case":"IPC-SECONDARY-RESTORE","expectedContains":"로컬 기본 창","passed":true}
+{"afterRequest":"IPC-SECONDARY-RESTORE","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"invalid args `request` for command `apply_mac_setting`: unknown field `domain`, expected one of `settingId`, `enabled`, `expectedValue`","case":"IPC-FIELD-EXTRA","expectedContains":"unknown field","passed":true}
+{"afterRequest":"IPC-FIELD-EXTRA","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"invalid args `request` for command `apply_mac_setting`: missing field `expectedValue`","case":"IPC-FIELD-MISSING","expectedContains":"missing field","passed":true}
+{"afterRequest":"IPC-FIELD-MISSING","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"invalid args `request` for command `apply_mac_setting`: invalid type: string \"true\", expected a boolean","case":"IPC-FIELD-TYPE","expectedContains":"invalid type","passed":true}
+{"afterRequest":"IPC-FIELD-TYPE","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Command apply_mac_setting not allowed by ACL","case":"IPC-REMOTE-APPLY","expectedContains":"not allowed","passed":true}
+{"afterRequest":"IPC-REMOTE-APPLY","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"actual":"Command open_windows_settings_target not allowed by ACL","case":"IPC-WINDOWS-REMOTE-TARGET","expectedContains":"not allowed","passed":true}
+{"afterRequest":"IPC-WINDOWS-REMOTE-TARGET","fiveSettingsAndJournalUnchanged":true,"journalAndSidecarsAbsent":true}
+{"case":"IPC-STATE-UNCHANGED","fiveSettingsUnchanged":true,"journalAndSidecarsAbsent":true,"journalAndSidecarsUnchanged":true,"passed":true}
+{"caseCount":15,"error":null,"expectedCaseCount":15,"expectedRejectionStateObservations":12,"installationTested":false,"isolatedWryNegative":true,"productSetupTested":false,"rejectionStateObservationCount":12,"successfulOsMutationTested":false,"windowsNativeAdapterCompiled":false,"windowsReadAndLaunchCallsZeroByPlatformGate":true}

@@ -1,0 +1,11 @@
+flowchart TD
+    start([User starts existing cleanup scan]) --> roots[[Known roots including two developer roots]]
+    roots --> local{No cloud or linked root?}
+    local -->|No| skip([Exclude linked developer root; no candidate])
+    local -->|Yes| measure[[Bounded metadata walk with age checks]]
+    measure --> complete{Complete candidate and old descendants?}
+    complete -->|No| partial([Exclude incomplete candidate; report partial])
+    complete -->|Yes| review([Review-only candidate in existing report])
+    review --> consent{Existing exact local trash approval?}
+    consent -->|No| unchanged([No deletion])
+    consent -->|Yes| trash[[Existing revalidation and trash journal]]

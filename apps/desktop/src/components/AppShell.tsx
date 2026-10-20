@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AppWindow,
   Boxes,
@@ -8,6 +8,7 @@ import {
   HardDrive,
   LayoutDashboard,
   Menu,
+  SlidersHorizontal,
   MessageSquare,
   Settings,
   Sparkles,
@@ -17,6 +18,7 @@ import {
 import { formatBytes, formatDate } from "../lib/format";
 import { useLanguage, type MessageKey } from "../i18n";
 import type { ScanReport, ViewId, VolumeInfo } from "../types";
+import "./WorkspaceNavigation.css";
 
 interface AppShellProps {
   activeView: ViewId;
@@ -27,6 +29,8 @@ interface AppShellProps {
   mobileNavigationOpen: boolean;
   selectionBlocked: boolean;
   dockerEnabled: boolean;
+  macosAvailable?: boolean;
+  windowsAvailable?: boolean;
   onMobileNavigationChange: (open: boolean) => void;
   onNavigate: (view: ViewId) => void;
   onPickFolder: () => void;
@@ -51,6 +55,12 @@ interface NavigationItem {
   activeViews: ReadonlySet<ViewId>;
 }
 
+const navigationGroups: { label: MessageKey; views: ReadonlySet<ViewId> }[] = [
+  { label: "컴퓨터", views: new Set(["dashboard", "performance", "applications", "macos-management", "windows-management"]) },
+  { label: "파일과 공간", views: new Set(["overview", "files"]) },
+  { label: "도구", views: new Set(["assistant", "docker"]) },
+];
+
 const dashboardViews = new Set<ViewId>(["dashboard"]);
 const storageViews = new Set<ViewId>([
   "overview",
@@ -61,6 +71,8 @@ const storageViews = new Set<ViewId>([
 const fileViews = new Set<ViewId>(["files", "documents"]);
 const performanceViews = new Set<ViewId>(["performance"]);
 const applicationViews = new Set<ViewId>(["applications"]);
+const macosViews = new Set<ViewId>(["macos-management"]);
+const windowsViews = new Set<ViewId>(["windows-management"]);
 const assistantViews = new Set<ViewId>(["assistant"]);
 const dockerViews = new Set<ViewId>(["docker"]);
 const settingsViews = new Set<ViewId>(["settings"]);
@@ -91,6 +103,22 @@ const navigationBeforeDocker: NavigationItem[] = [
     activeViews: applicationViews,
   },
   {
+    id: "macos-management",
+    label: "맥 설정",
+    description: "Finder 표시·변경 기록",
+    icon: SlidersHorizontal,
+    tone: "settings",
+    activeViews: macosViews,
+  },
+  {
+    id: "windows-management",
+    label: "Windows 설정",
+    description: "탐색기·시스템 속성",
+    icon: SlidersHorizontal,
+    tone: "settings",
+    activeViews: windowsViews,
+  },
+  {
     id: "overview",
     label: "공간 정리",
     description: "지도·큰 파일·중복",
@@ -100,7 +128,7 @@ const navigationBeforeDocker: NavigationItem[] = [
   },
   {
     id: "files",
-    label: "파일 관리",
+    label: "파일 찾기",
     description: "이름과 문서 내용으로 찾기",
     icon: Folder,
     tone: "files",
@@ -109,7 +137,7 @@ const navigationBeforeDocker: NavigationItem[] = [
   {
     id: "assistant",
     label: "AI 도우미",
-    description: "설치된 AI CLI",
+    description: "앱 기능과 대화",
     icon: MessageSquare,
     tone: "assistant",
     activeViews: assistantViews,
@@ -129,7 +157,7 @@ const navigationAfterDocker: NavigationItem[] = [
   {
     id: "settings",
     label: "설정",
-    description: "스캔 기준과 안전",
+    description: "일반·AI·권한·감시",
     icon: Settings,
     tone: "settings",
     activeViews: settingsViews,
@@ -188,6 +216,16 @@ const titles: Record<
     title: "설치된 앱",
     description: "앱 제거와 관련 데이터 정리를 나누어 검토합니다.",
   },
+  "macos-management": {
+    eyebrow: "시스템 설정",
+    title: "맥 설정",
+    description: "Finder 설정을 확인하고 변경 기록에서 되돌립니다.",
+  },
+  "windows-management": {
+    eyebrow: "시스템 설정",
+    title: "Windows 설정",
+    description: "Windows 저장값을 확인하고 정식 설정 화면으로 이동합니다.",
+  },
   duplicates: {
     eyebrow: "용량 관리",
     title: "중복 파일",
@@ -205,8 +243,8 @@ const titles: Record<
   },
   settings: {
     eyebrow: "앱 설정",
-    title: "스캔 설정",
-    description: "분석 범위와 결과 한도를 조정합니다.",
+    title: "앱 설정",
+    description: "필요한 설정을 분류별로 확인합니다.",
   },
 };
 
@@ -219,15 +257,21 @@ export function AppShell({
   mobileNavigationOpen,
   selectionBlocked,
   dockerEnabled,
+  macosAvailable = false,
+  windowsAvailable = false,
   onMobileNavigationChange,
   onNavigate,
   onPickFolder,
 }: AppShellProps) {
   const { t } = useLanguage();
   const mobileNavigationButtonRef = useRef<HTMLButtonElement>(null);
-  const navigation = dockerEnabled
+  const [navigationTooltip, setNavigationTooltip] = useState<{ id: ViewId; label: MessageKey; top: number } | null>(null);
+  const allNavigation = dockerEnabled
     ? [...navigationBeforeDocker, dockerNavigation, ...navigationAfterDocker]
     : [...navigationBeforeDocker, ...navigationAfterDocker];
+  const navigation = allNavigation.filter(item =>
+    (item.id !== "macos-management" || macosAvailable) &&
+    (item.id !== "windows-management" || windowsAvailable));
   const usedPercent = volume?.totalBytes
     ? ((volume.totalBytes - volume.availableBytes) / volume.totalBytes) * 100
     : 0;
@@ -255,8 +299,48 @@ export function AppShell({
   }, [mobileNavigationOpen, onMobileNavigationChange]);
 
   function navigate(view: ViewId) {
+    setNavigationTooltip(null);
     onNavigate(view);
     onMobileNavigationChange(false);
+  }
+
+  function showNavigationTooltip(item: NavigationItem, button: HTMLButtonElement) {
+    if (!window.matchMedia("(min-width: 681px) and (max-width: 920px)").matches) return;
+    const rect = button.getBoundingClientRect();
+    setNavigationTooltip({ id: item.id, label: item.label, top: Math.max(20, Math.min(window.innerHeight - 20, rect.top + rect.height / 2)) });
+  }
+
+  useEffect(() => {
+    const clear = () => setNavigationTooltip(null);
+    window.addEventListener("resize", clear);
+    return () => window.removeEventListener("resize", clear);
+  }, []);
+
+  function renderNavigationItem(item: NavigationItem) {
+    const Icon = item.icon;
+    const active = item.activeViews.has(activeView);
+    return (
+      <button
+        type="button"
+        className={`nav-item nav-item--${item.tone}${active ? " is-active is-current" : ""}`}
+        aria-label={`${t(item.label)}: ${t(item.description)}`}
+        aria-current={active ? "page" : undefined}
+        aria-describedby={navigationTooltip?.id === item.id ? "workspace-navigation-tooltip" : undefined}
+        data-tone={item.tone}
+        data-tooltip={t(item.label)}
+        title={`${t(item.label)} - ${t(item.description)}`}
+        key={item.id}
+        onClick={() => navigate(item.id)}
+        onFocus={(event) => showNavigationTooltip(item, event.currentTarget)}
+        onMouseEnter={(event) => showNavigationTooltip(item, event.currentTarget)}
+        onBlur={() => setNavigationTooltip(null)}
+        onMouseLeave={() => setNavigationTooltip(null)}
+        onKeyDown={(event) => { if (event.key === "Escape") setNavigationTooltip(null); }}
+      >
+        <span className="nav-item__icon" aria-hidden="true"><Icon size={18} strokeWidth={2} /></span>
+        <span className="nav-item__copy"><strong>{t(item.label)}</strong><small>{t(item.description)}</small></span>
+      </button>
+    );
   }
 
   return (
@@ -294,40 +378,14 @@ export function AppShell({
           </span>
         </div>
 
-        <nav className="primary-navigation" aria-label={t("주요 화면")}>
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            const active = item.activeViews.has(activeView);
-            const current = activeView === item.id;
-            const stateClasses = [
-              `nav-item--${item.tone}`,
-              active ? "is-active" : "",
-              current ? "is-current" : "",
-            ]
-              .filter(Boolean)
-              .join(" ");
-            return (
-              <button
-                type="button"
-                className={`nav-item ${stateClasses}`}
-                aria-label={`${t(item.label)}: ${t(item.description)}`}
-                aria-current={current ? "page" : undefined}
-                data-tone={item.tone}
-                data-tooltip={t(item.label)}
-                title={`${t(item.label)} - ${t(item.description)}`}
-                key={item.id}
-                onClick={() => navigate(item.id)}
-              >
-                <span className="nav-item__icon" aria-hidden="true">
-                  <Icon size={18} strokeWidth={2} />
-                </span>
-                <span className="nav-item__copy">
-                  <strong>{t(item.label)}</strong>
-                  <small>{t(item.description)}</small>
-                </span>
-              </button>
-            );
-          })}
+        <nav className="primary-navigation" aria-label={t("주요 화면")} onScroll={() => setNavigationTooltip(null)}>
+          {navigationGroups.map((group) => (
+            <div className="navigation-group" key={group.label}>
+              <p className="navigation-group__label">{t(group.label)}</p>
+              {navigation.filter(item => group.views.has(item.id)).map(renderNavigationItem)}
+            </div>
+          ))}
+          <div className="navigation-utility">{navigation.filter(item => item.id === "settings").map(renderNavigationItem)}</div>
         </nav>
 
         <div className="sidebar-volume" aria-label={t("기본 디스크 상태")}>
@@ -345,6 +403,8 @@ export function AppShell({
           </div>
         </div>
       </aside>
+
+      {navigationTooltip ? <div className="navigation-tooltip" id="workspace-navigation-tooltip" role="tooltip" style={{ top: navigationTooltip.top }}>{t(navigationTooltip.label)}</div> : null}
 
       {mobileNavigationOpen ? (
         <button
@@ -366,17 +426,18 @@ export function AppShell({
             "utility-header utility-header--compact",
             storageViews.has(activeView) ? "utility-header--storage" : "",
             activeView === "settings" ? "utility-header--settings" : "",
+            activeView === "macos-management" ? "utility-header--mac-settings" : "",
           ].filter(Boolean).join(" ")}>
             <div className="utility-header__identity">
-              <p className="eyebrow utility-header__context">
+              {activeView !== "settings" && activeView !== "macos-management" ? <p className="eyebrow utility-header__context">
                 {storageViews.has(activeView) && report
                   ? t("마지막 검사 {{date}}", {
                       date: formatDate(report.completedAtUnixMs),
                     })
                   : t(page.eyebrow)}
-              </p>
+              </p> : null}
               <h1>{t(page.title)}</h1>
-              <p className="utility-header__description">{t(page.description)}</p>
+              {activeView !== "macos-management" ? <p className="utility-header__description">{t(page.description)}</p> : null}
             </div>
             {showFolderButton ? (
               <button

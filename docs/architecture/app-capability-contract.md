@@ -32,6 +32,18 @@ Docker 정리·영구 삭제는 이 자동 권한에서 제외한다. MCP와 모
 
 ## 정본과 조합
 
+### Mac 설정 조회와 로컬 변경
+
+`macos.inspect` (`kind:macos_inspect`)는 Mac 관리 화면과 동일한 CFPreferences 엔진으로 고정 Finder Bool 설정5개를 읽는다. 외부 호출에는 기존 시스템·앱 조회 공개 동의가 필요하다. 모델 결과는 ID·이름·저장값/상태·관리 여부만 포함하며 설정 저널, 로컬 경로와 원본 오류는 전송하지 않는다. `ui.view:macos_management`와 결과 카드로 화면을 열 수 있다.
+
+변경·복원 요청은 AppToolRequest에 없다. Tauri의 신뢰된 main 로컬 창에서 명시적인 버튼으로만 호출하며 파일 full_access를 시스템 설정 권한으로 상속하지 않는다. current-user/any-host의 명시 Bool/부재를 구분하고 관리형·host별값·타입불일치·동기화 실패는 변경하지 않는다. durable prepared→write→stored-readback→result journal 순서다. 미완료 기록은 자동 실행하지 않으며 복원은 감지한 현재값 충돌을 거부한다. CFPreferences에는 외부 프로세스와의 원자적 CAS/ABA 보호가 없으므로 절대적 충돌 방지를 주장하지 않는다. Finder 재시작·프로필·모델·서비스 제어는 제공하지 않는다. [상세 계약](../plan/macos-management/api-spec.md)
+
+### Windows 설정 조회와 공식 설정 연결
+
+`windows.inspect` (`kind:windows_inspect`)는 Windows 화면과 같은 native reader로 탐색기4개·AI 정책6개의 저장값을 읽는다. 외부는 기존 시스템·앱 조회 공개 권한을 실행 전·후 확인한다. 최대10행·16KiB projection에 raw DWORD/부재/형식/거부/오류·사용자/기기 범위·지원 미확인/폐기를 보존한다. `storedValuesOnly:true`, `effectiveStateKnown:false`, `performed:false`이며 실제 동작·사용자 동의·지원·설치 상태로 해석하지 않는다. 원본 진단/레지스트리 경로/실행 URI는 모델로 보내지 않는다. `ui.view:windows_management`와 결과 카드는 Windows 화면으로 연결한다.
+
+`get_windows_settings`는 같은 조회 DTO를 반환한다. `open_windows_settings_target {targetId}`는 신뢰된 로컬 main에서만 고정8개 공식 진입을 요청하며 임의 URI/명령/권한 상승을 받지 않는다. 응답은 `requested:true, changed:false`이고 실제 창 표시나 변경 완료의 증거가 아니다. 모델/MCP에는 opener·쓰기·복원 capability가 없다. NonWindows는 빈행/targets의 unsupported이고 Windows reader/launcher를 호출하지 않는다. [상세 계약](../plan/windows-management/implementation-contract.md), [검증 경계](../qa/windows-management/verify-report.md)
+
 ### 내장 채팅 권한
 
 메인 창 전용 `configure_assistant_permission_mode`가 `read_only`·`confirm`(기본값)·
@@ -74,6 +86,7 @@ wire를 통과시키는 구조는 아니다. 입구가 달라도 실제 조회�
 반환한다. 해당 기능의 세부 제약/작업 예제는 `app_action`의
 `{"kind":"capability_details","capabilityId":"files.workspace"}`로 읽는다.
 index와 각 상세도 일반 결과와 같은16KiB 상한을 적용하며 전송 상한을 해제하지 않는다.
+discovery format2는 중복된 전체 inputTypes 설명만 index에서 제외한다. 모든 기능 ID·요청 예제·권한은 유지하고, 필드별 설명은 필수 상세 조회에 온전히 남긴다. 기능 추가로 index가16KiB를 넘은 회귀를 상한 확대 없이 수정한 것이다.
 내장 프롬프트에는 전체 정본을 바로 제공하므로 별도의 상세 조회 라운드를 요구하지 않는다.
 
 일반 파일 작업은 공통 `{"kind":"file_workspace","operation":{...}}` 요청이다.

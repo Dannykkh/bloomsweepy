@@ -12,6 +12,8 @@ import { EmptyTrashControl } from "./components/EmptyTrashControl";
 import { CleanupTreePanel } from "./components/CleanupTreePanel";
 import type { CleanupTreeSource, CleanupTreeView } from "./types/cleanupTree";
 import { ApplicationsView } from "./views/ApplicationsView";
+import { MacManagementView } from "./views/MacManagementView";
+import { WindowsManagementView } from "./views/WindowsManagementView";
 import { AssistantAppToolReview, appToolView, type AppToolReviewCompletion } from "./components/AssistantAppToolCard";
 import {
   cancelScan,
@@ -997,6 +999,11 @@ function App() {
     document.startViewTransition(() => setActiveView(view));
   }
 
+  function openSystemCleanup() {
+    setCleanupMode("system");
+    navigate("cleanup");
+  }
+
   async function refreshDockerStatus() {
     if (dockerStatusLoading || dockerStatus?.busy) return;
     setDockerStatusLoading(true);
@@ -1838,6 +1845,8 @@ function App() {
       mobileNavigationOpen={mobileNavigationOpen}
       selectionBlocked={selectionBlocked}
       dockerEnabled={dockerStatus?.enabled === true}
+      macosAvailable={system?.platform === "macos"}
+      windowsAvailable={system?.platform === "windows"}
       onMobileNavigationChange={setMobileNavigationOpen}
       onNavigate={navigate}
       onPickFolder={() => {
@@ -1909,7 +1918,7 @@ function App() {
           onOpenStorage={() => navigate("overview")}
           onOpenLargeFiles={() => navigate("large-files")}
           onOpenDuplicates={() => navigate("duplicates")}
-          onOpenCleanup={() => navigate("cleanup")}
+          onOpenCleanup={openSystemCleanup}
           onOpenPerformance={() => navigate("performance")}
           onRefreshFileCatalog={() =>
             void runFileCatalogBuild({ stayOnView: true })
@@ -2005,7 +2014,7 @@ function App() {
           trashProgress={trashResultSource === "overview" ? trashProgress : null}
           onOpenLargeFiles={() => navigate("large-files")}
           onOpenDuplicates={() => navigate("duplicates")}
-          onOpenCleanup={() => { setCleanupMode("system"); navigate("cleanup"); }}
+          onOpenCleanup={openSystemCleanup}
           onOpenCleanupTree={(generation) => void openCandidateTree({ kind: "directory", generation })}
         />
       ) : null}
@@ -2065,6 +2074,8 @@ function App() {
           onCancelIndex={() => void stopDocumentIndex()}
         />
       ) : null}
+      {activeView === "macos-management" ? <MacManagementView /> : null}
+      {activeView === "windows-management" ? <WindowsManagementView onNavigate={(view) => view === "cleanup" ? openSystemCleanup() : navigate(view)} /> : null}
       {activeView === "docker" ? (
         <DockerManagementView
           status={dockerStatus}
@@ -2108,7 +2119,7 @@ function App() {
               {directoryReport ? <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void openCandidateTree({ kind: "directory", generation: directoryReport.generation })}>{t("검사 결과에서 후보 열기")}</button> : null}
               <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void inspectCandidateFolder()}>{t("폴더를 선택해 후보 검사")}</button>
             </div> : null}
-            <p>{t("폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.")}</p>
+            <p>{cleanupMode === "tree" ? t("폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.") : t("캐시·임시 파일 후보를 검사하고, 정리할 항목을 검토합니다.")}</p>
           </section>
           {cleanupMode === "tree" ? <CleanupTreePanel
             tree={cleanupTree}

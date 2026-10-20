@@ -1,6 +1,6 @@
 use super::{ScanCompletionGuard, ScanRuntime, StoredReports};
 use bloomsweepy_core::{
-    CleanupConfidence, VerifiedTrashItem, revalidate_verified_trash_item,
+    CleanupCandidate, CleanupConfidence, VerifiedTrashItem, revalidate_verified_trash_item,
     validate_cleanup_trash_candidate, validate_directory_trash_file,
     validate_duplicate_trash_selection,
 };
@@ -509,10 +509,7 @@ pub(crate) async fn trash_cleanup_candidates_with_binding(
                 .iter()
                 .find(|candidate| candidate.path == *path)
                 .ok_or_else(|| "현재 서버의 스캔 결과에 없는 정리 후보입니다".to_owned())?;
-            if candidate.confidence == CleanupConfidence::Review && !request.allow_review_candidates
-            {
-                return Err("AppData 검토 후보에 대한 별도 확인이 필요합니다".to_owned());
-            }
+            require_cleanup_review(candidate, request.allow_review_candidates)?;
             verified.push(
                 validate_cleanup_trash_candidate(candidate, || {
                     cancellation_for_worker.load(Ordering::Acquire)
@@ -538,6 +535,13 @@ pub(crate) async fn trash_cleanup_candidates_with_binding(
     let clear_result = reports.clear_all();
     clear_result?;
     worker_result?
+}
+
+fn require_cleanup_review(candidate: &CleanupCandidate, approved: bool) -> Result<(), String> {
+    if candidate.confidence == CleanupConfidence::Review && !approved {
+        return Err("검토가 필요한 정리 후보에 대한 별도 확인이 필요합니다".into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -929,6 +933,42 @@ mod tests {
     use super::*;
     use bloomsweepy_core::{ScanConfig, scan_path};
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn developer_cleanup_requires_review_then_uses_existing_snapshot_verification() {
+        use bloomsweepy_core::{
+            CleanupCandidateKind, CleanupRootSpec, CleanupScanConfig, scan_cleanup_candidates,
+        };
+        use std::time::Duration;
+        let fixture = action_tempdir();
+        let project = fixture.path().join("SyntheticProject-build");
+        fs::create_dir(&project).unwrap();
+        let product = project.join("product.bin");
+        fs::write(&product, b"synthetic build output").unwrap();
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![CleanupRootSpec::new(
+                    fixture.path(),
+                    "Synthetic DerivedData",
+                    CleanupCandidateKind::DeveloperCache,
+                    Duration::ZERO,
+                )],
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let candidate = report.candidates.first().unwrap();
+        assert!(require_cleanup_review(candidate, false).is_err());
+        assert!(product.exists());
+        require_cleanup_review(candidate, true).unwrap();
+        let verified = validate_cleanup_trash_candidate(candidate, || false).unwrap();
+        revalidate_verified_trash_item(&verified, || false).unwrap();
+        fs::write(&product, b"changed after review").unwrap();
+        assert!(revalidate_verified_trash_item(&verified, || false).is_err());
+        assert!(product.exists(), "test must never call the OS Trash");
+    }
 
     #[test]
     #[ignore = "Opt-in native Trash check: moves only two tiny fixtures created by this test"]

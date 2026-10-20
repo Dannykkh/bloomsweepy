@@ -16,6 +16,7 @@ pub enum CleanupCandidateKind {
     TemporaryEntry,
     AppDataDirectory,
     CacheDirectory,
+    DeveloperCache,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -492,6 +493,15 @@ fn candidate_evidence(
                 "계정·설정 데이터일 수 있어 삭제 전 확인 필요".to_owned(),
             ],
         ),
+        CleanupCandidateKind::DeveloperCache => (
+            CleanupConfidence::Review,
+            vec![
+                age,
+                "알려진 Xcode 개발 데이터 위치의 직접 항목".to_owned(),
+                "삭제 후 다시 빌드하거나 기기 지원 데이터를 재다운로드해야 할 수 있음".to_owned(),
+                "Xcode나 연결된 기기에서 사용 중인지 삭제 전 확인 필요".to_owned(),
+            ],
+        ),
     }
 }
 
@@ -543,6 +553,185 @@ fn push_cleanup_issue(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn developer_cache_candidates_always_require_review() {
+        let temp = tempfile::tempdir().unwrap();
+        let build = temp.path().join("Sample-build/Build");
+        fs::create_dir_all(&build).unwrap();
+        fs::write(build.join("product.bin"), b"rebuildable output").unwrap();
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![CleanupRootSpec::new(
+                    temp.path(),
+                    "Xcode DerivedData",
+                    CleanupCandidateKind::DeveloperCache,
+                    Duration::ZERO,
+                )],
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+
+        assert_eq!(report.candidates.len(), 1);
+        let candidate = &report.candidates[0];
+        assert_eq!(candidate.name, "Sample-build");
+        assert_eq!(Path::new(&candidate.path).parent(), Some(temp.path()));
+        assert_eq!(candidate.kind, CleanupCandidateKind::DeveloperCache);
+        assert_eq!(candidate.confidence, CleanupConfidence::Review);
+        assert_eq!(candidate.logical_bytes, 18);
+        assert!(candidate.evidence.iter().any(|text| text.contains("빌드")));
+        assert!(
+            candidate
+                .evidence
+                .iter()
+                .any(|text| text.contains("재다운로드"))
+        );
+        assert!(
+            candidate
+                .evidence
+                .iter()
+                .any(|text| text.contains("사용 중"))
+        );
+        assert_eq!(report.candidate_bytes, candidate.logical_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn developer_cache_age_includes_recent_descendants() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = SystemTime::now() - Duration::from_secs(8 * 86_400);
+        for name in ["inactive-build", "active-build"] {
+            let directory = temp.path().join(name);
+            fs::create_dir(&directory).unwrap();
+            let product = directory.join("product.bin");
+            fs::write(&product, b"build output").unwrap();
+            if name == "inactive-build" {
+                fs::File::open(&product)
+                    .unwrap()
+                    .set_times(fs::FileTimes::new().set_modified(old))
+                    .unwrap();
+            }
+            // The parent looks old in both cases; a recent child must still
+            // prevent a build directory from becoming a cleanup candidate.
+            fs::File::open(&directory)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(old))
+                .unwrap();
+        }
+
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![CleanupRootSpec::new(
+                    temp.path(),
+                    "Xcode DerivedData",
+                    CleanupCandidateKind::DeveloperCache,
+                    Duration::from_secs(7 * 86_400),
+                )],
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(report.candidates[0].name, "inactive-build");
+        assert!(report.candidates[0].inactive_days >= 8);
+    }
+
+    #[test]
+    fn developer_cache_preserves_candidate_and_entry_bounds() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in ["first.bin", "second.bin"] {
+            fs::write(temp.path().join(name), b"build").unwrap();
+        }
+        let root = CleanupRootSpec::new(
+            temp.path(),
+            "Xcode DerivedData",
+            CleanupCandidateKind::DeveloperCache,
+            Duration::ZERO,
+        );
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![root],
+                max_candidates: 1,
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.candidates.len(), 1);
+        assert!(report.limit_reached);
+
+        let nested = tempfile::tempdir().unwrap();
+        let build = nested.path().join("build");
+        fs::create_dir(&build).unwrap();
+        for name in ["first.bin", "second.bin"] {
+            fs::write(build.join(name), b"build").unwrap();
+        }
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![CleanupRootSpec::new(
+                    nested.path(),
+                    "Xcode DerivedData",
+                    CleanupCandidateKind::DeveloperCache,
+                    Duration::ZERO,
+                )],
+                max_entries: 1,
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert!(report.candidates.is_empty());
+        assert_eq!(report.processed_entries, 1);
+        assert!(report.limit_reached);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn developer_cache_excludes_link_entries_and_link_roots() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("private.bin"), b"not a build").unwrap();
+        fs::write(temp.path().join("local.bin"), b"build").unwrap();
+        symlink(outside.path(), temp.path().join("linked-build")).unwrap();
+        let link_root = temp.path().join("linked-root");
+        symlink(outside.path(), &link_root).unwrap();
+        let report = scan_cleanup_candidates(
+            CleanupScanConfig {
+                roots: vec![
+                    CleanupRootSpec::new(
+                        temp.path(),
+                        "Xcode DerivedData",
+                        CleanupCandidateKind::DeveloperCache,
+                        Duration::ZERO,
+                    ),
+                    CleanupRootSpec::new(
+                        link_root,
+                        "Linked device support",
+                        CleanupCandidateKind::DeveloperCache,
+                        Duration::ZERO,
+                    ),
+                ],
+                ..CleanupScanConfig::default()
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        assert_eq!(report.scanned_roots, 1);
+        assert_eq!(report.candidates.len(), 1);
+        assert_eq!(report.candidates[0].name, "local.bin");
+        assert_eq!(report.candidate_bytes, 5);
+        assert!(!report.issues.is_empty());
+    }
 
     #[test]
     fn excludes_cleanup_parent_containing_cloud_descendants() {

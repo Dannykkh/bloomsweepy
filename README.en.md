@@ -13,28 +13,28 @@
 
 BroomSweepy is a project building a **conversational file management system** for Windows and macOS. Its goal is to make conversation the primary way to find files, scan folders, review candidates, refine conditions, confirm actions, and inspect results in one continuous workflow.
 
-Development update: chat Trash moves use one inline Yes/No question, without a
-second review modal or elapsed-time expiry. Settings can explicitly allow skipping
-extra confirmation for a human request naming the exact files, folders or app
-bundle to remove; it is off by default and follows Session/Remember duration.
-Advice, ambiguous targets, app-related data, permanent deletion, Docker cleanup and
-process termination do not qualify. Identity/content checks and one-shot execution
-remain, and neither models nor MCP receive an execution tool. Individual plans are
-not restored after restart. See [QA](docs/qa/2026-10-05-conversational-trash-consent.md).
-
 **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
+
+## Development status · 2026-10-21
+
+Public downloads and current source are different. These changes describe **the current source and the ARM64 development build installed on this Mac**, not an update to existing GitHub v1.7.0 assets. The local app still displays version 1.7.0.
+
+| Area | Verified scope |
+|---|---|
+| Mac interface | Grouped Mac preferences, task-based navigation, and six app-settings categories. Installed app launch, native glass, and change-history navigation checked |
+| Real Codex workflow | Largest-item inspection, shared-result treemap, name search, performance/app/Finder inspection, and one approved synthetic file moved to Trash. App-memory cleanup executed through its local confirmation screen |
+| Regression checks | 184 frontend tests passed; ARM64 build, signing, and bundle replacement verified. Preference apply/restore and error guards tested with isolated mocks |
+| Still pending | Real Finder writes/restores, successful document-body search, native Windows installation/runtime, and long-duration whole-process memory stability |
+
+[Latest Mac interface verification](docs/qa/mac-design-review-2026-10-21/review.md) · [Installed app/Codex audit and remaining usability issues](docs/qa/2026-10-21-installed-chat-audit.md)
+
+Known usability issues remain in identifying earlier file results after returning to chat and matching document-body disclosure to the current conversation folder. Permission boundaries are not bypassed; not every operation completes with one chat message.
 
 ## Current development build — conversational files and folders
 
-Chat Trash moves use one inline **Yes/No** question, without a second review dialog
-or a timer deadline. Enable **Settings → Connections and permissions → Allow skipping
-additional confirmation** to act directly on simple direct commands naming every target,
-such as `delete promo-video`. This opt-in is off by default and follows the existing
-Session/Remember lifetime. Conditional, advisory, quoted, compound, or unsupported
-phrasing falls back to Yes/No. Ambiguous requests, app-related
-data, process termination, Docker cleanup, and permanent deletion are excluded.
-Rust rechecks permission and targets before execution. Models/MCP receive no
-execution or automatic-approval tool. [Consent QA](docs/qa/2026-10-05-conversational-trash-consent.md)
+Chat Trash moves use one inline **Yes/No** question without a second review dialog or timer deadline. The composer permission control or **Settings → AI & permissions → Connections and permissions → Chat permissions** offers Read only, Confirm before acting (default), and Full access. Read only cannot prepare or execute changes. Explicit Full access permits simple direct removal commands naming every target, such as `delete promo-video`, after target revalidation without another question. Conditional, advisory, quoted, compound, or unsupported phrasing falls back to Yes/No. Ambiguous targets, app-related data, process termination, Docker cleanup, and permanent deletion do not qualify. Preferences follow the existing Session/Remember lifetime, but individual plans and approvals are not restored after restart. Models/MCP receive no execution or automatic-approval tool. [Consent QA](docs/qa/2026-10-05-conversational-trash-consent.md)
+
+Chat keeps the conversation and bottom composer visible, showing actual preparation, waiting, app-query, and analysis stages with elapsed time. Results normally accompany their answer; returning to chat can still place an earlier file result below the latest reply, a known provenance issue. Failures, permission problems, and final review remain expanded. This is not token streaming or an estimated completion percentage. [Chat verification](docs/qa/2026-10-05-chat-workbench.md) · [Latest installed audit](docs/qa/2026-10-21-installed-chat-audit.md)
 
 **Cleanup candidates → Folder tree** supports expanding folders and selecting all or individual items. Parent selection includes descendants; excluding a child prevents moving the parent itself. Enter from the storage map or a measured AI file list, then review exact targets before moving them to Trash. Whole-folder review on this new page strictly checks hidden protected items, links, clouds, and device boundaries. State is capped at 2,048 nodes and rendering at 200 rows; unmeasured, partial, and expired results remain explicit. This Mac's new installation passed three temporary targets/209B moved to Trash, child preservation, cancellation, rescan, local AI-card entry, and history after restart. Windows, external-model investigation end-to-end, and long-duration memory tests remain pending. [Tree QA](docs/qa/2026-10-05-cleanup-tree.md) · [Native Mac QA](docs/qa/2026-10-05-cleanup-tree-native.md)
 
@@ -47,6 +47,28 @@ Search retains at most 200 results, model/UI pages contain 24, and a trash revie
 These source/development additions are not in the existing GitHub v1.7.0 downloads. Real Codex scan/nonempty-folder review requests and native macOS Trash moves of synthetic items have been tested. Windows runtime and long-duration resource validation remain pending.
 
 On macOS, symlinks inside a real folder (such as `node_modules/.bin`) move only as links; targets are never followed. Review displays a separate link count and detects retargeting. Linked targets/ancestors, clouds, mount boundaries, and special files remain protected; Windows reparse points/junctions remain blocked. [Development QA](docs/qa/2026-10-04-conversational-files.md)
+
+### Task-based navigation and app settings
+
+Navigation groups **Computer** (Dashboard → Performance → App management → platform-specific Mac/Windows settings), **Files & storage** (Space cleanup → Find files), and **Tools** (AI assistant → optional Docker management), with Settings at the bottom. Other-platform settings stay hidden, and subviews retain their parent selection. Docker management is off by default.
+
+App settings has six categories: General, Scanning & search, AI & permissions, File monitoring, Developer tools, and About. Switching categories preserves settings and in-progress state. Dashboard cleanup shortcuts open system cache/temporary candidates without replacing folder-tree state. Mac settings prioritizes actual controls and history rather than duplicate links to other menus. [Navigation verification](docs/qa/workspace-navigation/verify-report.md)
+
+### macOS — Finder preferences and developer caches
+
+Mac settings reads five preferences: file extensions, hidden files, path bar, status bar, and folders first when sorting by name. **File display** and **Paths and information** group adjacent Off/On draft buttons and Apply. Selection alone does not write; an absent preference leaves both choices unselected. **Preference change history** restores the original value, including its absence. A different current value blocks restoration, but this is not an atomic lock against other applications. Verified storage does not establish visible Finder behavior, and Finder is never restarted automatically.
+
+![Actual installed Mac development build — grouped preferences](docs/qa/mac-design-review-2026-10-21/20-a-installed-native.png)
+
+Captured from the installed app on 2026-10-21, not a design prototype or synthetic settings screen. The grouped layout removes duplicate explanations and overlapping headings. No real Finder preference was changed during this UI inspection. [UI, mocked apply/restore, and installation verification](docs/qa/mac-design-review-2026-10-21/review.md)
+
+Cleanup adds direct entries in Xcode DerivedData unchanged for at least 7 days and iOS DeviceSupport unchanged for at least 30 days. Age does not prove an item unused. These are review candidates that may require rebuilding or downloading again, using the existing selection/revalidation/Trash workflow. Projects, Archives, simulators, Time Machine, and AI models are excluded. Logical candidate size is not guaranteed reclaimed disk space.
+
+Chat and external MCP `macos.inspect` use the same read-only app engine. Writes/restores require local buttons and are not inherited from chat Full access. Apple Intelligence removal, profiles, and background-service control are not supported. These source/development changes are not automatically added to public v1.7.0 or older installations. [Plan and scope](docs/plan/macos-management/plan.md)
+
+### Windows — dedicated inspection and official settings links
+
+Windows has its own settings view with four Explorer and six AI-policy stored values, including separate Recall user/computer scopes, plus eight official settings targets. Missing, wrong-type, and denied reads remain distinct; stored values do not establish whether a feature is effectively on or off. MCP `windows.inspect` shares the read-only engine. There are no registry writes, elevation, forced system-package removal, or Defender changes. Mac reads, regressions, and Windows-adapter cross-checks passed; **native Windows installation/runtime and settings-screen behavior remain unverified**. These changes are not in existing public v1.7.0 assets. [Implementation scope](docs/plan/windows-management/implementation-contract.md) · [Verification](docs/qa/windows-management/verify-report.md)
 
 ## v1.7.0 — Conversational tools and resource safeguards
 
@@ -94,7 +116,7 @@ Heavy work stops cooperatively above 512 MiB of host-process memory or below 256
 - Total app size, installation date, and selectable name/date/size sorting are not implemented. Substring search is available.
 - Windows installers and automated checks are built in CI. Passing CI does not prove interactive installation, GUI, or Recycle Bin behavior.
 
-## Preview
+## Historical release screenshots · v1.6.0
 
 These historical v1.6.0 captures render actual React components with synthetic documentation data. They do not show v1.7.0 navigation, app management, new confirmation flows, or the native menu bar. Drives, files, metrics, and conversations are examples, not real AI responses or user files. Browser captures do not reproduce macOS native window materials.
 
@@ -141,13 +163,15 @@ Docker management is off by default. When enabled, cleanup uses fixed commands, 
 
 ## AI, CLI, and MCP
 
-The development build shares one model preference between **AI model below the chat composer** and **Settings → AI model**. Codex and Claude Code support an explicit model or the CLI default; Ollama uses installed models. Choices are remembered per provider on this computer without changing global CLI settings, sign-in, or removal permissions. A listed model does not guarantee account access, and errors do not silently switch models. Grok and Antigravity currently use their CLI defaults. This is not part of the public v1.7.0 download. [Model-selection contract](docs/architecture/assistant-model-selection.md)
+The development build shares preferences between the composer's **[CLI] [Model · Reasoning effort]** controls and **Settings → AI & permissions → AI model**. Switching between Codex, Claude Code, AGY, Grok, and Ollama restores that provider's model and per-model effort. Codex, Claude Code, Grok, and Antigravity use actual CLI model/support metadata; Ollama lists installed models. Unsupported effort levels are not invented. Choices stay on this computer without changing global CLI settings, sign-in, or removal permissions. A listed model does not guarantee account access, and errors never silently switch models. Missing CLIs block questions with an installation-needed state. This is separate from public v1.7.0. [Model-selection contract](docs/architecture/assistant-model-selection.md)
 
-An explicit Codex model also offers **Reasoning effort** from its CLI-reported supported levels, remembered per model. The default leaves the choice to the CLI; an unsupported saved choice requires attention instead of silent fallback. Updating never automatically replaces your selected model. CLI0.160.1 on this Mac lists seven visible models including GPT-6.1-Sol. [Reasoning-selection verification](docs/qa/2026-10-06-cli-reasoning-selection.md)
+Explicit models offer **Reasoning effort** from each CLI model's supported levels, remembered per model. The default delegates to the CLI; an unsupported saved choice blocks sending until deliberately changed. Updates do not replace selected models. The 2026-10-06 check of CLI0.160.1 on this Mac found seven visible models including GPT-6.1-Sol; this is dated evidence, not a current model-catalog guarantee. [Reasoning-selection verification](docs/qa/2026-10-06-cli-reasoning-selection.md) · [Provider switching](docs/qa/2026-10-08-composer-provider.md)
 
-Installing the Codex desktop app does not establish that the Codex CLI is installed. Check your provider's CLI installation, compatible version, and sign-in state in BroomSweepy. The earlier summary-response flow was checked with Codex; the new v1.7.0 empty-folder tool flow still needs end-to-end validation. Adapters also exist for Claude Code, Grok, Antigravity, and Ollama, but not all were live-tested for this Mac release.
+The LLM chooses app inspections and analyzes the app's actual results, requesting further queries when needed. In-app chat sends structured CLI requests (JSON) to the common app dispatcher; it does not traverse the external MCP wire. External MCP shares the same [capability contract](docs/architecture/app-capability-contract.md) and app engine. Changes follow the permission mode, target revalidation, and operation-specific confirmations. Real Mac Codex workflows and the installed sidecar's read-only stdio checks passed separately, not every feature/provider end-to-end. [Actual verification and limits](docs/qa/2026-10-21-installed-chat-audit.md)
 
-In-app chat sends a bounded folder summary containing item names and sizes, plus your question and conversation history, to the selected provider. A local CLI does not mean offline model processing. MCP cleanup tools expose anonymous candidate IDs and bounded summaries, with no approval or deletion-execution tools. Separately enabling file or document search can expose paths and matching excerpts to external clients. Final file actions stay behind confirmation in the app.
+Installing the Codex desktop app does not establish that the Codex CLI is installed. Check your provider's CLI installation, compatible version, and sign-in state in BroomSweepy. See the status table for current Mac development checks; historical v1.7.0 pending checks remain in its release section. Claude Code, Grok, Antigravity, and Ollama adapters have not all been live-tested for this Mac development build.
+
+In-app chat sends a bounded folder summary containing item names and sizes, plus your question and conversation history, to the selected provider. A local CLI does not mean offline model processing. MCP cleanup tools expose anonymous candidate IDs and bounded summaries, with no approval or deletion-execution tools. Separately enabling file or document search can expose paths and matching excerpts to external clients. Actual file actions follow the app's permission, revalidation, and confirmation rules.
 
 ## Platforms and development
 

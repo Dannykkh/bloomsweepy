@@ -1,44 +1,31 @@
 {
-  "projectName": "BroomSweepy",
-  "currentPhase": "completed",
-  "startedAt": "2026-03-24T16:30:00+09:00",
-  "description": "BroomSweepy - macOS 네이티브 클리너 앱 (Swift/SwiftUI). App Store 배포 목표.",
+  "version": 2,
+  "description": "제우스 계획을 세우고 프로그램 개선까지 진행하자 — macOS 상태 관리와 공간 확보",
+  "startedAt": null,
+  "startedAtEvidence": "2026-10-20; exact starting time was not recorded",
+  "currentPhase": "complete",
+  "result": "PARTIAL",
+  "completionPromiseEmitted": false,
+  "planningDir": "docs/plan/macos-management",
   "parsed": {
     "industry": "utility",
-    "projectType": "macos-native-app",
-    "techStack": {
-      "language": "Swift 5.9+",
-      "ui": "SwiftUI",
-      "platform": "macOS 13.0+",
-      "ai": "Claude API (Anthropic SDK)",
-      "build": "Xcode 16 + xcodegen"
-    },
-    "features": [
-      "캐시/임시파일 정리",
-      "대용량 파일 탐색",
-      "중복 파일 탐색 (해시 기반)",
-      "디스크 사용량 시각화",
-      "파일 자동정리 (날짜 접두어, EXIF 분류, 폴더 자동생성)",
-      "LLM 스마트 파일 분류 (Claude API)",
-      "안전등급 시스템 (Safe/Review/Caution)",
-      "커스텀 규칙 빌더"
-    ],
-    "differentiation": [
-      "시각화 + 정리 통합 (DaisyDisk급 시각화 + CleanMyMac급 정리)",
-      "개발자 캐시 특화 (Xcode, Docker, npm, pip)",
-      "AI 파일 분류 (Claude API)",
-      "안전 우선 설계 (휴지통 이동, 안전등급)",
-      "Hazel 스타일 커스텀 규칙 빌더"
-    ],
-    "sandbox": "App Store (Security-Scoped Bookmarks)"
+    "projectType": "desktop",
+    "techStack": {"frontend": "React/TypeScript", "backend": "Rust/Tauri", "db": "existing SQLite"},
+    "features": ["Finder 설정 5개 조회·변경·복원", "개발 캐시 정리 후보", "Mac 관리 화면", "공통 채팅/MCP 조회"],
+    "hasUI": true, "hasDB": true, "hasAPI": true
   },
   "phases": {
-    "phase0": { "status": "completed" },
-    "phase1": { "status": "pending" },
-    "phase2": { "status": "pending" },
-    "phase3": { "status": "pending" },
-    "phase4": { "status": "pending" },
-    "phase5": { "status": "pending" },
-    "phase6": { "status": "pending" }
-  }
+    "parsing": {"status": "completed", "evidence": "proved"},
+    "planning": {"status": "completed", "evidence": "proved"},
+    "implementation": {"status": "completed", "evidence": "proved"},
+    "verification": {"status": "completed", "result": "CONDITIONAL", "evidence": "isolated real Wry IPC negative 10/10 and eight individual unchanged-state observations passed; installed-app full IPC/normal OS mutation and comprehensive security remain NOT RUN; Argos A1-A5 follow-up addressed"},
+    "docker": {"status": "completed", "mode": "native-dev-server-fallback", "evidence": "HTTP 200 on isolated Vite fixture; Docker unavailable"},
+    "testing": {"status": "completed", "evidence": "previous full Rust478 retained; follow-up focused Rust16 and frontend141 executed", "rustPassed": 478, "rustIgnored": 6, "focusedMacSettingsPassed": 16, "focusedMacSettingsIgnored": 1, "frontendPassed": 141, "nativeReadonlyPassed": 1, "browserPassed": 10, "browserFailed": 0, "browserPassRate": 100, "browserEnvironment": "Playwright1.64.1/ARM64 Node/Headless Shell156.0.8078.4", "isolatedWryIpcPassed": 10, "npmFullVulnerabilities": 0, "npmProductionVulnerabilities": 0},
+    "report": {"status": "completed", "evidence": "proved PARTIAL report, not a success claim"}
+  },
+  "artifacts": {"plan": "docs/plan/macos-management/plan.md", "sections": "docs/plan/macos-management/sections/", "report": "docs/zeus/zeus-report.md"},
+  "errors": [
+    {"phase": "testing", "status": "recovered-in-isolated-environment", "detail": "Initial alpha/browser environment 7/10; stable aligned ARM64 environment 10/10. Exact single cause not established."},
+    {"phase": "verification", "status": "partially-verified", "detail": "Isolated Wry negative10/10 passed; installed-app full IPC/normal Finder mutation/Windows/comprehensive security remain explicit gaps."}
+  ]
 }
