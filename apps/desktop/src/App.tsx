@@ -2109,17 +2109,17 @@ function App() {
       ) : null}
       {activeView === "performance" ? <PerformanceView /> : null}
       {activeView === "cleanup" ? (
-        <div className="view-stack">
+        <div className="view-stack cleanup-workspace">
           <section className="cleanup-source-toolbar" aria-label={t("정리 후보")}>
-            <div className="cleanup-source-toolbar__modes">
-              <button type="button" className={cleanupMode === "tree" ? "secondary-button is-active" : "text-button"} aria-pressed={cleanupMode === "tree"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("tree")}>{t("폴더 트리")}</button>
-              <button type="button" className={cleanupMode === "system" ? "secondary-button is-active" : "text-button"} aria-pressed={cleanupMode === "system"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("system")}>{t("시스템 후보")}</button>
+            <div className="segmented-control cleanup-source-toolbar__modes" role="group" aria-label={t("정리 후보 종류")}>
+              <button type="button" className={cleanupMode === "tree" ? "is-active" : ""} aria-pressed={cleanupMode === "tree"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("tree")}>{t("폴더 트리")}</button>
+              <button type="button" className={cleanupMode === "system" ? "is-active" : ""} aria-pressed={cleanupMode === "system"} disabled={cleanupTreeBusy || trashRunning} onClick={() => setCleanupMode("system")}>{t("시스템 후보")}</button>
             </div>
             {cleanupMode === "tree" ? <div className="cleanup-source-toolbar__actions">
               {directoryReport ? <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void openCandidateTree({ kind: "directory", generation: directoryReport.generation })}>{t("검사 결과에서 후보 열기")}</button> : null}
               <button type="button" className="secondary-button" disabled={selectionBlocked} onClick={() => void inspectCandidateFolder()}>{t("폴더를 선택해 후보 검사")}</button>
             </div> : null}
-            <p>{cleanupMode === "tree" ? t("폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.") : t("캐시·임시 파일 후보를 검사하고, 정리할 항목을 검토합니다.")}</p>
+            {cleanupMode === "tree" ? <p>{t("폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.")}</p> : null}
           </section>
           {cleanupMode === "tree" ? <CleanupTreePanel
             tree={cleanupTree}

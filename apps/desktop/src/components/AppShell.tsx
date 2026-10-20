@@ -209,7 +209,7 @@ const titles: Record<
   cleanup: {
     eyebrow: "용량 관리",
     title: "정리 후보",
-    description: "폴더별로 확인하고 이동할 항목만 선택합니다. 시스템 캐시 후보는 별도 목록에서 검토하세요.",
+    description: "용량과 근거를 확인하고, 휴지통으로 이동할 항목을 선택합니다.",
   },
   applications: {
     eyebrow: "앱 관리",

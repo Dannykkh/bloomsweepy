@@ -153,7 +153,11 @@ export function CleanupView({
   }
 
   if (!report && !scanning && actionResult) {
-    return <TrashResultPanel result={actionResult} onRescan={onStart} />;
+    return (
+      <div className="view-stack cleanup-view">
+        <TrashResultPanel result={actionResult} onRescan={onStart} />
+      </div>
+    );
   }
 
   return (
@@ -178,10 +182,14 @@ export function CleanupView({
             {error
               ? t("정리 후보 스캔을 완료하지 못했습니다")
               : scanning
-                ? t("남은 파일과 제거 정보를 대조하고 있습니다")
+                ? platform === "windows"
+                  ? t("남은 파일과 제거 정보를 대조하고 있습니다")
+                  : t("임시 파일과 오래된 캐시를 읽기 전용으로 확인합니다.")
                 : report
                   ? t("정리 후보 분석이 완료됐습니다")
-                  : t("삭제 후 남은 흔적을 근거별로 찾습니다")}
+                  : platform === "windows"
+                    ? t("삭제 후 남은 흔적을 근거별로 찾습니다")
+                    : t("정리 후보 스캔")}
           </strong>
           <p>
             {error
@@ -212,6 +220,15 @@ export function CleanupView({
           )}
         </div>
       </section>
+
+      {report && (report.limitReached || report.unreadableEntries > 0 || report.issues.length > 0) ? (
+        <div className="notice-panel" role="alert">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <p>{report.limitReached
+            ? t("스캔 안전 한도에 도달해 일부 항목은 생략했습니다. 현재 결과를 삭제 판단의 전체 목록으로 사용하면 안 됩니다.")
+            : t("부분 결과입니다. 생략된 항목이나 읽지 못한 자료가 있을 수 있습니다.")}</p>
+        </div>
+      ) : null}
 
       {scanning ? (
         <section className="cleanup-progress" role="status">
@@ -248,13 +265,17 @@ export function CleanupView({
             <CleanupMetric
               label={t("검토 필요")}
               value={t("{{count}}개", { count: formatCount(reviewCount) })}
-              detail={t("프로그램 설정·개발 캐시·설치 기록")}
+              detail={platform === "windows"
+                ? t("프로그램 설정 폴더·설치 기록")
+                : t("프로그램 설정·개발 캐시")}
               icon={<ShieldAlert size={18} />}
             />
             <CleanupMetric
               label={t("후보 용량")}
               value={formatBytes(report.candidateBytes)}
-              detail={t("Windows 설치 기록 제외")}
+              detail={platform === "windows"
+                ? t("Windows 설치 기록 제외")
+                : t("파일 후보의 논리 용량")}
               icon={<HardDrive size={18} />}
             />
           </section>
@@ -263,7 +284,9 @@ export function CleanupView({
             <ShieldAlert size={19} aria-hidden="true" />
             <div>
               <strong>{t("선택한 파일 후보만 운영체제 휴지통으로 이동합니다")}</strong>
-              <p>{t("옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 하며 Windows 설치 정보는 바꾸지 않습니다.")}</p>
+              <p>{platform === "windows"
+                ? t("옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 하며 Windows 설치 정보는 바꾸지 않습니다.")
+                : t("옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 합니다.")}</p>
             </div>
           </section>
 
@@ -275,7 +298,7 @@ export function CleanupView({
                   ["temporaryEntry", t("임시 파일")],
                   ["appDataDirectory", t("프로그램 설정")],
                   ["cacheDirectory", t("캐시")],
-                  ["developerCache", t("개발 캐시")],
+                  ...(platform === "macos" ? [["developerCache", t("개발 캐시")]] as const : []),
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -322,6 +345,7 @@ export function CleanupView({
           ) : null}
 
           <section className="cleanup-candidate-list" aria-label={t("파일 정리 후보")}>
+            <h2 className="cleanup-candidate-list__heading">{t("파일 정리 후보")}</h2>
             <FileInspectionStatus message={inspection.message} error={inspection.error} />
             {visibleCandidates.length === 0 ? (
               <div className="table-empty">{t("선택한 종류의 정리 후보가 없습니다.")}</div>
@@ -419,12 +443,6 @@ export function CleanupView({
             </section>
           ) : null}
 
-          {report.limitReached ? (
-            <div className="notice-panel" role="alert">
-              <AlertTriangle size={18} aria-hidden="true" />
-              <p>{t("스캔 안전 한도에 도달해 일부 항목은 생략했습니다. 현재 결과를 삭제 판단의 전체 목록으로 사용하면 안 됩니다.")}</p>
-            </div>
-          ) : null}
         </>
       ) : !scanning ? (
         <>
@@ -438,10 +456,6 @@ export function CleanupView({
             <FolderSearch size={28} aria-hidden="true" />
             <strong>{t("아직 정리 후보를 확인하지 않았습니다")}</strong>
             <p>{t("최근 사용 시각, 설치 앱 인벤토리, 경로 존재 여부를 함께 대조해 단순 파일명보다 보수적으로 분류합니다.")}</p>
-            <button className="primary-button" type="button" disabled={blocked} onClick={onStart}>
-              <Search size={17} aria-hidden="true" />
-              {t("정리 후보 스캔")}
-            </button>
           </div>
         </>
       ) : null}

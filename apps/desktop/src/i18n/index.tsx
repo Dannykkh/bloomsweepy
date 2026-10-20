@@ -404,6 +404,7 @@ const englishMessages = {
   "표시 상한에 도달했습니다. 다른 폴더를 접거나 페이지를 바꾸세요.": "The display limit was reached. Collapse another folder or change pages.",
   "폴더 트리": "Folder tree",
   "시스템 후보": "System candidates",
+  "용량과 근거를 확인하고, 휴지통으로 이동할 항목을 선택합니다.": "Review sizes and evidence, then select items to move to Trash.",
   "검사 결과에서 후보 열기": "Open candidates from scan results",
   "폴더를 선택해 후보 검사": "Choose a folder to inspect candidates",
   "정리 후보에서 검토": "Review in cleanup candidates",
@@ -1135,6 +1136,9 @@ const englishMessages = {
   "프로그램 설정 폴더·설치 기록": "Application data folders and installation records",
   "후보 용량": "Candidate size",
   "Windows 설치 기록 제외": "Excludes Windows installation records",
+  "프로그램 설정·개발 캐시": "Application data and developer caches",
+  "파일 후보의 논리 용량": "Logical size of file candidates",
+  "옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 합니다.": "Files are checked again for changes immediately before moving, and an operation journal is kept. Application data folders require extra confirmation.",
   "선택한 파일 후보만 운영체제 휴지통으로 이동합니다":
     "Only selected file candidates are moved to the operating-system Trash",
   "옮기기 직전에 파일이 바뀌지 않았는지 다시 확인하고 작업 기록을 남깁니다. 프로그램 설정 폴더는 한 번 더 확인해야 하며 Windows 설치 정보는 바꾸지 않습니다.":
