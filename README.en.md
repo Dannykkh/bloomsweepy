@@ -15,28 +15,32 @@ BroomSweepy is a project building a **conversational file management system** fo
 
 **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
-## Development status · 2026-10-21
+## v1.8.0 — features and verification scope · 2026-10-21
 
-Public downloads and current source are different. These changes describe **the current source and the ARM64 development build installed on this Mac**, not an update to existing GitHub v1.7.0 assets. The local app still displays version 1.7.0.
+The changes below are **the intended scope of v1.8.0 source and new installers**. The existing v1.7.0 tag and assets remain unchanged. Some installed-app/Codex checks on October 21 used the local development build while it still displayed 1.7.0; those observations are not relabeled as end-to-end verification of the new 1.8.0 installer.
+
+[v1.8.0 release and downloads](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.0) · [Release scope, installation and verification notes](docs/releases/v1.8.0.md) · [Changelog](CHANGELOG.md)
 
 | Area | Verified scope |
 |---|---|
 | Mac interface | Grouped Mac preferences, task-based navigation, and six app-settings categories. Installed app launch, native glass, and change-history navigation checked |
 | Real Codex workflow | Largest-item inspection, shared-result treemap, name search, performance/app/Finder inspection, and one approved synthetic file moved to Trash. App-memory cleanup executed through its local confirmation screen |
-| Regression checks | 184 frontend tests passed; ARM64 build, signing, and bundle replacement verified. Preference apply/restore and error guards tested with isolated mocks |
+| Regression checks | 192 frontend tests and TypeScript checking passed. ARM64 build, signing and replacement were verified before the version bump; preference apply/restore and error guards use isolated mocks |
 | Still pending | Real Finder writes/restores, successful document-body search, native Windows installation/runtime, and long-duration whole-process memory stability |
 
 [Latest Mac interface verification](docs/qa/mac-design-review-2026-10-21/review.md) · [Installed app/Codex audit and remaining usability issues](docs/qa/2026-10-21-installed-chat-audit.md)
 
 Known usability issues remain in identifying earlier file results after returning to chat and matching document-body disclosure to the current conversation folder. Permission boundaries are not bypassed; not every operation completes with one chat message.
 
-## Current development build — conversational files and folders
+System candidates now keeps its full width, uses one scan action and wraps long paths/evidence. Incomplete-scan warnings appear before candidate selection. Mac developer caches and read-only Windows installation records stay distinct, with existing review acknowledgements and preflight revalidation preserved. [Original installed defect, corrected synthetic screens and 192-test regression](docs/qa/system-candidates-2026-10-21/review.md)
+
+## v1.8.0 — conversational files and folders
 
 Chat Trash moves use one inline **Yes/No** question without a second review dialog or timer deadline. The composer permission control or **Settings → AI & permissions → Connections and permissions → Chat permissions** offers Read only, Confirm before acting (default), and Full access. Read only cannot prepare or execute changes. Explicit Full access permits simple direct removal commands naming every target, such as `delete promo-video`, after target revalidation without another question. Conditional, advisory, quoted, compound, or unsupported phrasing falls back to Yes/No. Ambiguous targets, app-related data, process termination, Docker cleanup, and permanent deletion do not qualify. Preferences follow the existing Session/Remember lifetime, but individual plans and approvals are not restored after restart. Models/MCP receive no execution or automatic-approval tool. [Consent QA](docs/qa/2026-10-05-conversational-trash-consent.md)
 
 Chat keeps the conversation and bottom composer visible, showing actual preparation, waiting, app-query, and analysis stages with elapsed time. Results normally accompany their answer; returning to chat can still place an earlier file result below the latest reply, a known provenance issue. Failures, permission problems, and final review remain expanded. This is not token streaming or an estimated completion percentage. [Chat verification](docs/qa/2026-10-05-chat-workbench.md) · [Latest installed audit](docs/qa/2026-10-21-installed-chat-audit.md)
 
-**Cleanup candidates → Folder tree** supports expanding folders and selecting all or individual items. Parent selection includes descendants; excluding a child prevents moving the parent itself. Enter from the storage map or a measured AI file list, then review exact targets before moving them to Trash. Whole-folder review on this new page strictly checks hidden protected items, links, clouds, and device boundaries. State is capped at 2,048 nodes and rendering at 200 rows; unmeasured, partial, and expired results remain explicit. This Mac's new installation passed three temporary targets/209B moved to Trash, child preservation, cancellation, rescan, local AI-card entry, and history after restart. Windows, external-model investigation end-to-end, and long-duration memory tests remain pending. [Tree QA](docs/qa/2026-10-05-cleanup-tree.md) · [Native Mac QA](docs/qa/2026-10-05-cleanup-tree-native.md)
+**Cleanup candidates → Folder tree** supports expanding folders and selecting all or individual items. Parent selection includes descendants; excluding a child prevents moving the parent itself. Enter from the storage map or a measured AI file list, then review exact targets before moving them to Trash. Whole-folder review on this new page strictly checks hidden protected items, links, clouds, and device boundaries. State is capped at 2,048 nodes and rendering at 200 rows; unmeasured, partial, and expired results remain explicit. Checks on the Mac development installation displaying 1.7.0 on October 5, 2026 covered three temporary targets/209B moved to Trash, child preservation, cancellation, rescan, local AI-card entry, and history after restart. Windows, external-model investigation end-to-end, and long-duration memory tests remain pending. [Tree QA](docs/qa/2026-10-05-cleanup-tree.md) · [Native Mac QA](docs/qa/2026-10-05-cleanup-tree-native.md)
 
 Ask “What is the largest folder or data here? Can I delete it?” to freshly measure and rank direct items in the current folder. Folder sizes include descendants; size alone does not establish deletion safety. **View the same results on the storage map** reuses that scan in the treemap. Name-only folder matches remain unmeasured until inspected. Partial results, read failures, and expired snapshots are distinguished. This question neither selects deletion targets nor deletes anything.
 
@@ -44,7 +48,7 @@ Ask the assistant to scan files, find a name, or delete a named folder such as `
 
 Search retains at most 200 results, model/UI pages contain 24, and a trash review allows 100 selected items. Search-only folder sizes are unmeasured, not zero. Ambiguous names or incomplete searches never auto-select a target. Review exact local paths, contents, and logical sizes; the affirmative button explicitly includes descendants. Chat plans are single-use without a timer deadline, and revalidate changes, links, clouds, and protected paths before OS Trash. Permanent deletion, arbitrary shell commands, conversational renaming, ordinary moves, and folder creation are not provided.
 
-These source/development additions are not in the existing GitHub v1.7.0 downloads. Real Codex scan/nonempty-folder review requests and native macOS Trash moves of synthetic items have been tested. Windows runtime and long-duration resource validation remain pending.
+These v1.8.0 additions are not in the existing GitHub v1.7.0 downloads. Real Codex scan/nonempty-folder review requests and native macOS Trash moves of synthetic items have been tested. Windows runtime and long-duration resource validation remain pending.
 
 On macOS, symlinks inside a real folder (such as `node_modules/.bin`) move only as links; targets are never followed. Review displays a separate link count and detects retargeting. Linked targets/ancestors, clouds, mount boundaries, and special files remain protected; Windows reparse points/junctions remain blocked. [Development QA](docs/qa/2026-10-04-conversational-files.md)
 
