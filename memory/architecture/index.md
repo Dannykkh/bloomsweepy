@@ -21,3 +21,4 @@
 - [017 — 작업 중심 메뉴·설정](017-workspace-navigation.md): 상위 현재 위치, 6분류 mount 보존, 시스템 정리 명시 진입, compact dashboard.
 - [018 — Windows 설정 조회·연결](018-windows-management.md): 고정10행 저장값·8개 로컬 진입, 공통 읽기 전용 AI, 실효/지원 미확인, OS 메뉴 분리.
 - [019 — Mac A형 그룹 설정](019-mac-control-a.md): 파일표시3/경로정보2, 초안·적용·기록 직접조작, 단일제목·nonsticky·중복메뉴 제거.
+- [020 — 시스템 후보 폭 경계](020-system-candidate-width.md): 중첩 grid/inline-size 폭 고정, 단일 검사·부분 경고·OS별 필터, 실행 정책 보존.

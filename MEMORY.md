@@ -52,6 +52,7 @@
 | application-management, windows-uninstall, related-data, file-open | [memory/architecture.md](memory/architecture.md) |
 | release-allocator-probe, allocation-elision, heap-budget | [memory/gotchas.md](memory/gotchas.md) |
 | navigation, settings, system-cleanup | [017](memory/architecture/017-workspace-navigation.md) |
+| system-candidates, inline-size, grid-width | [020](memory/architecture/020-system-candidate-width.md) |
 | macos-menu-bar, native-popover, resident-window, aggregate-sampler | [memory/architecture.md](memory/architecture.md) |
 
 ---

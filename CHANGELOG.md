@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - **desktop**: Recover failed chat replies and anchor result cards while preserving explicit retry and permission boundaries. Known result-provenance usability gaps remain. ([85620ca](https://github.com/Dannykkh/bloomsweepy/commit/85620ca))
 - **desktop**: Repair full-width system candidates inside nested size containers, remove duplicate scan actions, wrap long paths, place partial warnings before selection and separate platform-specific filters/copy. ([03b644c](https://github.com/Dannykkh/bloomsweepy/commit/03b644c))
 - **build**: Resolve current Rust lint failures without changing permission boundaries; preserve the document worker's 128 MiB live-allocation accounting with a compatible atomic retry loop and boundary/concurrency tests. ([f725d65](https://github.com/Dannykkh/bloomsweepy/commit/f725d65))
+- **build**: Keep permission tests after production items and use equivalent bounded UTF-16 decoding primitives so all-target Rust checks pass without relaxing registry validation. ([85edfb3](https://github.com/Dannykkh/bloomsweepy/commit/85edfb3))
 
 ### Documentation
 
