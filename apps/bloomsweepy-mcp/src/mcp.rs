@@ -195,7 +195,7 @@ impl BroomSweepyMcp {
 
 #[tool_handler(
     name = "bloomsweepy",
-    version = "1.7.0",
+    version = "1.8.0",
     instructions = "Operate the running app through app_capabilities and app_action. Read capability_details for the exact discovered ID before use or interpretation. Files.workspace supports app-selected-root inspection, navigation, selection and review with current app-issued IDs, never raw paths. External heavy actions return running + operationId. Only that exact ID may be observed through operation_status or cooperatively cancelled; allow at most four spaced status observations per turn, no busy loop or unrelated new work. If still running, report pending. After confirmed completion, request file_workspace/status for actual rows. Native in-app chat instead uses synchronous file actions and one analysis-only terminal response, action:null with no polling. Partial, stale and unknown results are not complete or zero; an ID is not completion. Provider shell/file tools must not substitute for the app. Permission-required, review-required, unsupported and failed states stop new actions. Final approval remains local; no approval, automatic-trash permission or direct execution tool is exposed. Legacy tools remain compatible."
 )]
 impl ServerHandler for BroomSweepyMcp {}

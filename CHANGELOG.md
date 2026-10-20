@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-10-21
+
+### Features
+
+- **ai**: Connect app-owned file searches, measured folder inspection, shared treemaps and a bounded cleanup-candidate tree to conversation and local review. ([d8b4fc8](https://github.com/Dannykkh/bloomsweepy/commit/d8b4fc8))
+- **desktop**: Add a persistent bottom composer, visible work stages, scoped connection permissions and a simpler chat workbench. ([17ae082](https://github.com/Dannykkh/bloomsweepy/commit/17ae082))
+- **desktop**: Add provider/model/reasoning controls and single inline Trash consent, with automatic handling limited to exact direct requests under explicitly chosen Full access. ([9e9d775](https://github.com/Dannykkh/bloomsweepy/commit/9e9d775))
+- **desktop**: Unify app-owned MCP/result contracts and actual CLI model/effort metadata without granting models shell or final-approval authority. ([f1feac1](https://github.com/Dannykkh/bloomsweepy/commit/f1feac1))
+- **desktop**: Add scoped local-volume chat access and opt-in bounded metadata change review; this is not antivirus, real-time whole-disk monitoring or scheduled automatic cleanup. ([a4759b1](https://github.com/Dannykkh/bloomsweepy/commit/a4759b1))
+- **desktop**: Add five journaled Mac Finder preferences and reviewed Xcode cache candidates, dedicated read-only Windows settings/official links, task-based navigation, six settings categories and grouped Mac controls. ([e1ddb59](https://github.com/Dannykkh/bloomsweepy/commit/e1ddb59))
+
+### Bug Fixes
+
+- **macos**: Restore native titlebar and refine the native glass material. ([b6a66ec](https://github.com/Dannykkh/bloomsweepy/commit/b6a66ec))
+- **desktop**: Recover failed chat replies and anchor result cards while preserving explicit retry and permission boundaries. Known result-provenance usability gaps remain. ([85620ca](https://github.com/Dannykkh/bloomsweepy/commit/85620ca))
+- **desktop**: Repair full-width system candidates inside nested size containers, remove duplicate scan actions, wrap long paths, place partial warnings before selection and separate platform-specific filters/copy. ([03b644c](https://github.com/Dannykkh/bloomsweepy/commit/03b644c))
+- **build**: Resolve current Rust lint failures without changing permission boundaries; preserve the document worker's 128 MiB live-allocation accounting with a compatible atomic retry loop and boundary/concurrency tests. ([f725d65](https://github.com/Dannykkh/bloomsweepy/commit/f725d65))
+
+### Documentation
+
+- Add the 15-second brand film, share focused architecture/conversation records and synchronize four README languages with actual installed Mac captures and verification limits. ([842d916](https://github.com/Dannykkh/bloomsweepy/commit/842d916), [7b135a1](https://github.com/Dannykkh/bloomsweepy/commit/7b135a1), [0b5b555](https://github.com/Dannykkh/bloomsweepy/commit/0b5b555), [8080d31](https://github.com/Dannykkh/bloomsweepy/commit/8080d31))
+
+### Verification and limitations
+
+- 192 frontend tests and TypeScript checking passed. Current-run synthetic screens cover full-width layouts, responsive rows, incomplete reports and developer-cache confirmation without native deletion. Earlier installed Mac/Codex observations used the local development build while it still displayed 1.7.0; see the release notes for separate new-package checks.
+- Real Finder writes/restores, successful document-body search, native Windows runtime/installation and long-duration whole-process memory stability remain unverified. Mac builds are ARM64/ad-hoc signed and not Apple-notarized; Windows installers are unsigned.
+- See [v1.8.0 scope, package checks and known issues](docs/releases/v1.8.0.md).
+
 ## [1.7.0] - 2026-09-07
 
 ### Features
