@@ -19,7 +19,10 @@ BroomSweepy is a project building a **conversational file management system** fo
 
 - **Mac menu bar**: Restores the top speech-bubble pointer and colored gauges. Only the background uses `alpha 0.82`; text and controls remain fully opaque and readable.
 - **Display language**: Fixes missing translations in app-generated warnings, evidence, and results. Notices stored as `key + params` update immediately when the language changes. User filenames, paths, existing conversation text, and the language of macOS-owned windows are not rewritten.
-- **Verification scope**: The 216 passing frontend checks, 12 native-component checks, and user-approved material preview apply to the local patched build displaying 1.8.0. At the time of this record, v1.8.1 CI and final installed-app visual checks are pending. These results do not establish completed distribution, native Windows behavior, or long-duration memory stability.
+- **Automated checks**: [Mac CI](https://github.com/Dannykkh/bloomsweepy/actions/runs/39556095853) and [Windows CI](https://github.com/Dannykkh/bloomsweepy/actions/runs/39556095857) each passed 218 frontend tests plus Rust, build, and package checks. Verified DMG, EXE, MSI, and checksum files are published as stable/latest v1.8.1.
+- **Installed on this Mac**: Replaced and launched the CI ARM64 DMG app, preserving three databases and the existing English, autostart, and memory-display settings. Checked English warnings/app-protection reasons, colored gauges, Esc, return to the main window, and MCP initialization version 1.8.1 with 12 tools. [Actual installation, screens, and hashes](docs/qa/release-1.8.1-verification.md)
+
+Direct status-icon/physical outside clicks, desktop glass appearance, older macOS, Japanese/Chinese screens, Windows GUI, and long-duration memory checks remain separate. The 12 native-component checks and accepted material preview are earlier local 1.8.0 pre-release evidence.
 
 [v1.8.1 release](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.1) · [Patch scope, distribution, and verification status](docs/releases/v1.8.1.md)
 

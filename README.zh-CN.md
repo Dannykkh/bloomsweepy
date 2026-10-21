@@ -19,7 +19,10 @@ BroomSweepy 是一个面向 Windows 和 macOS 的**对话式文件管理系统**
 
 - **Mac 菜单栏**：恢复顶部气泡尖角和彩色仪表。仅背景使用 `alpha 0.82`，文字和控件保持不透明，确保清晰可读。
 - **显示语言**：修复应用生成的警告、依据和结果中的翻译遗漏。以 `key + params` 保存的提示会在切换语言时立即重新显示；不会改写用户文件名、路径、已有对话原文或 macOS 自身窗口的语言。
-- **验证范围**：216 项前端检查、12 项原生组件检查通过，以及用户认可的材质预览，均属于显示版本为 1.8.0 的本地修正版记录。编写本记录时，v1.8.1 CI 和新安装版的最终界面检查仍待完成。这些结果不代表发布已完成，也不保证 Windows 实机表现或长时间内存稳定性。
+- **自动验证**：[Mac CI](https://github.com/Dannykkh/bloomsweepy/actions/runs/39556095853) 和 [Windows CI](https://github.com/Dannykkh/bloomsweepy/actions/runs/39556095857) 均通过各自的218项前端测试及Rust、构建和打包检查。已验证的DMG、EXE、MSI及校验和文件已作为v1.8.1正式/latest版本公开。
+- **此Mac的安装确认**：已替换并启动CI的ARM64 DMG应用，保留3个数据库及原有英语、自动启动和内存显示设置。已检查英文警告、应用保护原因、彩色仪表、Esc、返回主窗口，以及MCP初始化版本1.8.1和12个工具。[实际安装、界面与哈希记录](docs/qa/release-1.8.1-verification.md)
+
+直接点击状态图标、物理点击窗口外、桌面玻璃质感、旧版macOS、日语/中文实机界面、Windows GUI和长时间内存检查仍需分别验证。12项原生组件检查及用户认可的材质预览属于此前本地1.8.0的事前验证。
 
 [v1.8.1 发布页](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.1) · [修复范围及发布、验证状态](docs/releases/v1.8.1.md)
 

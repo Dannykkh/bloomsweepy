@@ -10,7 +10,7 @@ depends-on: none — 기존4언어 LanguageProvider 계약의 표시 경계 보�
 sources: docs/qa/i18n-2026-10-21/review.md
 files: apps/desktop/src/i18n/index.tsx, apps/desktop/src/lib/localizeAppText.ts, apps/desktop/src/App.tsx, apps/desktop/tests/appLanguageSwitch.test.ts, apps/desktop/tests/localizeAppText.test.ts
 reopen-when: 미등록 앱 진단이 실제 화면에 남거나 backend가 typed message code+params/provenance를 도입하면 allowlist와 표시 경계를 재검토한다.
-last_verified: 2026-10-21 (실제 영어 메뉴/설정6분류 baseline·최종full frontend216tests·실제Provider4언어전환 포함·tsc/build PASS; 최종 설치 결과는 QA에서 별도 추적)
+last_verified: 2026-10-21 (v1.8.1 Mac/Windows CI 각각frontend218tests·tsc/build/Rust PASS; 실제 Mac 설치/영어 경고·앱 보호 사유·native/HTML/MCP1.8.1 확인, DB3개보존. JA/ZH실화면·모든오류분기는 별도; docs/qa/release-1.8.1-verification.md)
 
 고정 카탈로그1597개의 번역만 정상이어도 backend warning/evidence/message를 그대로 렌더하면 한국어가 남는다. 앱 소유 진단은 useLanguage().appText로 표시한다. 기존 카탈로그의 정확한 문구는 키로 복원해 현재 t를 쓰고, legacy backend는222exact/55anchored template의 순수4언어 adapter(입력16KiB상한)로 처리한다. 미확인 문자열과 캡처한 원문 파라미터는 보존한다.
 

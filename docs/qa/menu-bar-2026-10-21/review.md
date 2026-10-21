@@ -2,6 +2,12 @@
 
 Date: 2026-10-21 (KST). Host: macOS26.4, 8GiB Apple Silicon. Scope: the existing status-summary surface, its native host/material and dismissal, not new functionality/layout/WebView. Requests: dismiss on outside interaction; restore consistency with the main window's glass appearance.
 
+## v1.8.1 installed follow-up
+
+The approved patch is now [published](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.1) from exact-source Mac/Windows CI. The Mac was normally quit and replaced with the verified CI DMG app; all3closed conversation/permission/developer-tool DBs stayed identical, and the previous app remains recoverable. [Actual installed bubble](09-installed-1.8.1-bubble.png) shows the14pt beak, blue/cyan memory, violet/blue CPU and teal disk bars, English controls and v1.8.1. Native AX exposes live0–100progress values. Settings-open, reopen, Esc-close and Open-main return PASS; English/memory-title preference remains unchanged.
+
+This is an actual installed-app capture, not the earlier fixed-value preview. Its gray/white window-only backdrop is still not proof of actual desktop-composited glass. Direct status-icon/reclick and physical outside-click acceptance on this final revision remain unverified; earlier Clear/intermediate results are not copied forward. [Exact-source package and installation evidence](../release-1.8.1-verification.md). The timestamped trial history below is retained, including superseded pending/failure states.
+
 ## First panel acceptance — rejected, rolled back
 
 The user answered the replacement-panel check: **“바깥클릭 안닫힘 여전히 회색판”**. Therefore the UnderWindowBackground/local-only NSPanel does **not** pass either requested acceptance criterion, regardless of source/Clippy/Esc/Open tests. It was normally quit and recoverably moved to `Rejected-Panel-BroomSweepy.app`. The known-outside-dismissal intermediate NSPopover was restored to /Applications; signatures and all3closed databases were verified unchanged across rollback. The acceptance table below records partial checks of the rejected panel, not completion.

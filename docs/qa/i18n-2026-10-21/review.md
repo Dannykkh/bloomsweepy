@@ -1,5 +1,11 @@
 # English-language audit and correction
 
+## v1.8.1 installed follow-up
+
+The exact-source Mac/Windows CI each passed218frontend tests, Rust checks and package validation; the original CI DMG was installed and launched on this Mac. [Actual English Mac preferences after](02-installed-1.8.1-english-mac.png) now renders the previously Korean warning in English. Actual app list protected/system/helper reasons are English too. Native and HTML titles, menu-bar labels and MCP initialize metadata now show1.8.1. Existing English/autostart/memory settings were preserved, not changed;3closed user DBs were byte-identical across replacement.
+
+No real Finder setting, permission, scan, chat request or deletion was used for this language recheck. Unknown/user/OS text boundaries remain unchanged. This focused installed verification supersedes the installation-pending snapshot below, not the limits on rare branches, other locale layouts, Windows runtime or memory soak. [Release evidence](../release-1.8.1-verification.md)
+
 ## Request and boundary
 
 On2026-10-21 the user reported Korean remaining after selecting English and requested a full language audit, then explicitly approved fixing confirmed omissions. Source audit covered production TS/TSX views/components, catalogs, native language propagation and Rust producers of user-facing diagnostics. Test/fixture text, Korean formatter/parser branches, language autonyms and user-owned names/content were classified separately.

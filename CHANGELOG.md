@@ -18,7 +18,7 @@ All notable changes to this project will be documented in this file.
 ### Verification and limitations
 
 - v1.8.1 local source: 218 frontend tests, TypeScript, production frontend build, Rust formatting and ARM64 locked metadata checks passed. Earlier 12 native-component tests and accepted material preview apply to the local patched build displaying 1.8.0, not an unperformed v1.8.1 installation.
-- Exact-commit Mac/Windows CI, installer validation and publication evidence are tracked in [v1.8.1 verification](docs/qa/release-1.8.1-verification.md). This Mac's final installation/visual check remains separate while locked. Native Windows runtime, older macOS, Japanese/Chinese visual runtime and long-duration whole-process memory checks remain unverified.
+- Exact-commit Mac/Windows CI passed, including 218 frontend tests per platform. Verified DMG/EXE/MSI/checksums are published as stable/latest v1.8.1. This Mac's CI-app installation, three-database preservation, focused English/menu-bar checks and MCP initialization version passed; see [v1.8.1 verification](docs/qa/release-1.8.1-verification.md). Final physical outside-click/desktop material, native Windows runtime, older macOS, Japanese/Chinese visual runtime and long-duration whole-process memory checks remain separate.
 - Mac installers are Apple Silicon ARM64/ad-hoc signed, not Apple-notarized; Windows installers are unsigned. File, deletion and permission policies are unchanged. See [v1.8.1 scope](docs/releases/v1.8.1.md).
 
 ## [1.8.0] - 2026-10-21

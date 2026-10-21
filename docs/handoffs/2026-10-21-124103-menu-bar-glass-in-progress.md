@@ -2,6 +2,8 @@
 
 ## Release continuation — 2026-10-21
 
+FINAL17:00KST+: [v1.8.1 정식/latest 공개](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.1) 완료. 태그는 CI성공 커밋96e1202b43ea36f3364c23d306e6ea84fe44ff5a에 고정했다. 양쪽218frontend/Rust/패키지와 원본ZIP/설치파일4개해시 확인. 이Mac 정상CmdQ 후 검증DMG로1.8.1교체·서명/DB3개보존·실행/영어경고/보호사유/컬러게이지/Esc/Openmain/MCP초기버전 확인. 이전설치본은 `/private/tmp/broomsweepy-release-1.8.1.UFtVYX/Previous-Installed-BroomSweepy.app`에 복구가능하게 보존. 최신근거는 [릴리스 검증](../qa/release-1.8.1-verification.md)이며 아래 대기/권한없음 기록은 당시 이력이다. 직접아이콘·물리적외부클릭·desktop재질/Windows실기/soak은 별도.
+
 사용자가 메뉴바·다국어 수정본의 **v1.8.1 정식 공개, 커밋·푸시와 GitHub Release 게시**를 명시적으로 승인했다. 아래의 시간순 기록에 남은 “공개 권한 없음”은 당시 상황이며 현재 공개 승인에 적용하지 않는다. 현재 소스는 본체·보조 도구·MCP 버전1.8.1로 통일했고, 새 버전 회귀검사 포함 frontend218/218·TypeScript·production frontend build·Rust fmt·ARM64 locked metadata 검사를 통과했다. 최종 커밋의 양쪽 CI와 설치 파일 검증은 [릴리스 검증 기록](../qa/release-1.8.1-verification.md)에서 이어간다.
 
 **기존 `/private/tmp/broomsweepy-popover-fix.0zALJg/Final-Colored-BroomSweepy.app`은 표시1.8.0 로컬 수정본**이다. 이를1.8.1로 설치하거나 공개하지 않는다. 이 Mac 설치 교체는 잠금 상태와 정상 종료를 다시 확인한 뒤, 최종1.8.1 CI DMG의 검증된 앱으로만 진행한다. v1.8.0 공개 태그·설치 파일은 보존한다. 실제 설치 검증이 남았음을 알고도 공개하겠다는 사용자 승인으로 배포와 설치 완료를 구분한다. 사용자 제외 경로와 정상 종료·DB 보존·잠금 우회 금지 경계는 그대로 유지한다.
