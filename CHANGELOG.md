@@ -9,6 +9,7 @@ All notable changes to this project will be documented in this file.
 - **macos**: Restore the menu-bar speech-bubble pointer, background-only translucent glass and persistent RAM/CPU/disk gauge colors. Preserve full-opacity controls and bound outside-click monitors to the visible panel lifetime. ([8f14c6d](https://github.com/Dannykkh/bloomsweepy/commit/8f14c6d))
 - **i18n**: Localize app-owned diagnostics, warnings and evidence in four languages. Retranslate existing key/parameter notices when the language changes without repeating scans or rewriting user filenames, paths, conversations or model responses. ([4f4d9ac](https://github.com/Dannykkh/bloomsweepy/commit/4f4d9ac))
 - **build**: Synchronize app/helper/MCP versions, lockfiles and native/HTML titles; add release-version regression checks, including the formerly stale HTML title. ([b464e59](https://github.com/Dannykkh/bloomsweepy/commit/b464e59))
+- **test**: Validate Cargo lock versions with both LF and Windows CRLF line endings so the release guard works on either platform. ([c4dd41f](https://github.com/Dannykkh/bloomsweepy/commit/c4dd41f))
 
 ### Documentation
 
