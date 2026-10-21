@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.1] - 2026-10-21
+
+### Bug Fixes
+
+- **macos**: Restore the menu-bar speech-bubble pointer, background-only translucent glass and persistent RAM/CPU/disk gauge colors. Preserve full-opacity controls and bound outside-click monitors to the visible panel lifetime. ([8f14c6d](https://github.com/Dannykkh/bloomsweepy/commit/8f14c6d))
+- **i18n**: Localize app-owned diagnostics, warnings and evidence in four languages. Retranslate existing key/parameter notices when the language changes without repeating scans or rewriting user filenames, paths, conversations or model responses. ([4f4d9ac](https://github.com/Dannykkh/bloomsweepy/commit/4f4d9ac))
+- **build**: Synchronize app/helper/MCP versions, lockfiles and native/HTML titles; add release-version regression checks, including the formerly stale HTML title. ([b464e59](https://github.com/Dannykkh/bloomsweepy/commit/b464e59))
+
+### Documentation
+
+- Update four README languages and preserve actual menu-bar visual trials, user acceptance, localization checks and their installation limits. Record prior v1.8.0 publication and installed UI evidence separately. ([133093d](https://github.com/Dannykkh/bloomsweepy/commit/133093d), [29a5530](https://github.com/Dannykkh/bloomsweepy/commit/29a5530))
+
+### Verification and limitations
+
+- v1.8.1 local source: 218 frontend tests, TypeScript, production frontend build, Rust formatting and ARM64 locked metadata checks passed. Earlier 12 native-component tests and accepted material preview apply to the local patched build displaying 1.8.0, not an unperformed v1.8.1 installation.
+- Exact-commit Mac/Windows CI, installer validation and publication evidence are tracked in [v1.8.1 verification](docs/qa/release-1.8.1-verification.md). This Mac's final installation/visual check remains separate while locked. Native Windows runtime, older macOS, Japanese/Chinese visual runtime and long-duration whole-process memory checks remain unverified.
+- Mac installers are Apple Silicon ARM64/ad-hoc signed, not Apple-notarized; Windows installers are unsigned. File, deletion and permission policies are unchanged. See [v1.8.1 scope](docs/releases/v1.8.1.md).
+
 ## [1.8.0] - 2026-10-21
 
 ### Features
