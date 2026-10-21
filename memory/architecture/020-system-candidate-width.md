@@ -10,8 +10,10 @@ depends-on: [[016-macos-management]], [[017-workspace-navigation]]
 sources: DESIGN.md; docs/qa/system-candidates-2026-10-21/review.md
 files: apps/desktop/src/App.tsx, apps/desktop/src/App.css, apps/desktop/src/views/CleanupView.tsx, apps/desktop/src/views/CleanupView.css, apps/desktop/src/system-cleanup-fixture.tsx
 reopen-when: 새 cleanup source·행 액션 추가나 실제 native 폭/가로넘침 회귀가 관찰되면 동일 조합과 container breakpoint에서 재검토한다.
-last_verified: 2026-10-21 (설치 전 읽기 전용 결함 재현; 수정 후 합성12상태·frontend192/192·TypeScript·production build PASS. 새 native 화면/Windows 실기/삭제 NOT RUN)
+last_verified: 2026-10-21 (합성12상태·frontend192/192·TypeScript·build에 더해, 검증된1.8.0 DMG로 실제교체·native 빈화면/완료요약/행wrap PASS. 실제scan4.6s·67,157항목·38후보·부분경고·선택0. Windows 실기/삭제 NOT RUN)
 
 중첩 grid 안에서 inline-size query container의 intrinsic 폭에 의존하지 않는다. cleanup workspace와 CleanupView에 width100%·min-width0·단일 minmax track을 명시하고 전역 view-stack은 바꾸지 않는다. 실제 AppShell 조합으로 전체 폭과 행 경계를 검사한다. 시작 검사는 하나만, 긴 경로와 근거는 wrap하고 부분 검사 경고는 선택 전에 표시한다.
 
 Mac 개발 캐시와 Windows 설치 기록 조회를 같은 기능으로 보이게 하지 않는다. 필터·설명을 OS별로 분리하되 기존 선택 payload·개발 캐시 acknowledgement·최종 확인·앱 재검증과 Trash 실행은 유지한다. 합성 fixture는 허용된 가짜 경로 외 IPC를 거부하며 native 삭제 근거가 아니다.
+
+사용자 재캡처의 설치본은 실제로 1.7.0이었다. 소스/fixture PASS를 설치본 해결로 대신하지 않는다. 같은 bundle ID의 빌드·백업본이 여러 개라 실행은 정확한 `/Applications/BroomSweepy.app` 경로로 확인했다. 정상 종료→복구 가능한 이전 앱 보관→1.8 교체→실제 WK 화면 검증을 거쳤고, 닫힌 DB 3개는 교체 전후 바이트 동일했다. 근거는 QA의 17/18과 후속 실측이다.
