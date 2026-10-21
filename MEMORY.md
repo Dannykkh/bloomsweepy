@@ -24,9 +24,7 @@
 | cleanup-tree, child-exclusion, inherited-selection | [005](memory/architecture/005-cleanup-candidate-tree.md) |
 | claude-arm64, rosetta, startup-latency, macos-soak | [memory/gotchas.md](memory/gotchas.md) |
 | cloud-exclusion, jwalk, codex-common-flow, scan-safety | [memory/gotchas.md](memory/gotchas.md) |
-| release-1.6.0, screenshots, https-push, adhoc-dmg | [memory/gotchas.md](memory/gotchas.md) |
-| release-1.6.1, tauri-config, windows-ci, private-api | [memory/gotchas.md](memory/gotchas.md) |
-| release-1.7.0, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
+| release-1.6.0, release-1.6.1, release-1.7.0, screenshots, https-push, adhoc-dmg, tauri-config, windows-ci, private-api, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
 | native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
 | chat-workbench, timeline, retry | [008](memory/architecture/008-conversation-workbench.md) |
 | permissions, chat-access, webkit-popup | [009·010·015](memory/architecture/index.md) |
@@ -53,7 +51,8 @@
 | release-allocator-probe, allocation-elision, heap-budget | [memory/gotchas.md](memory/gotchas.md) |
 | navigation, settings, system-cleanup | [017](memory/architecture/017-workspace-navigation.md) |
 | system-candidates, inline-size | [020](memory/architecture/020-system-candidate-width.md) |
-| macos-menu-bar, native-popover, resident-window, aggregate-sampler | [memory/architecture.md](memory/architecture.md) |
+| macos-menu-bar, glass | [025](memory/architecture/025-colored-glass-bubble.md) |
+| i18n, app-text | [026](memory/architecture/026-render-time-app-localization.md) |
 
 ---
 

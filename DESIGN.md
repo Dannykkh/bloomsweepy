@@ -172,7 +172,8 @@ BroomSweepy는 저장공간 상태를 한눈에 보여 주고 한 번의 클릭�
 
 ## Platform Adaptation
 
-- macOS 메뉴 막대: Swift 기준의 상주 아이콘과 선택적 RAM % 제목, CPU·RAM·시스템 디스크 팝오버. Rust에서 AppKit 네이티브 폰트·의미색·팝오버 재질을 사용하며 웹 폰트/카드 규칙을 기계적으로 적용하지 않는다. 별도 WebView 없이 10초 집계 측정, 창 닫기는 숨김·종료는 별도, 표시 끔은 숫자만 숨긴다.
+- macOS 메뉴 막대: Swift 기준의 상주 아이콘과 선택적 RAM % 제목, CPU·RAM·시스템 디스크 요약. Rust에서 AppKit 네이티브 폰트·의미색·컨트롤을 사용하며 웹 폰트/카드 규칙을 기계적으로 적용하지 않는다. 별도 WebView 없이 10초 집계 측정, 창 닫기는 숨김·종료는 별도, 표시 끔은 숫자만 숨긴다.
+- 메뉴 막대 요약은 투명 NSPanel 안의 단일 재질 말풍선이다. macOS26+는 empty contentView의 `NSGlassEffectView.Regular`를 배경으로, 기존 컨트롤은 full-opacity sibling으로 분리한다. 배경 alpha만0.82이며 투명도 감소 요청은 열 때 재조회해1.0으로 준수한다(열린 동안 외부 변경의 실시간 감지는 아님). 창 전체 alpha·추가 틴트·중첩 블러는 없다. Clear의 글자 흐림과 Regular 직사각형의 회색/무색 표현은 사용자 피드백으로 기각했고, 2026-10-21 사용자가 실제 네이티브 미리보기의 새 재질을 수락했다. 구버전은 `UnderWindowBackground`/`BehindWindow`/`Active` 하나로 fallback하며 동일 투명도를 약속하지 않는다. DarkAqua·제목16pt medium·수치15pt regular·보조 라벨14pt와320×370 본문을 유지하고 상단14pt 꼭짓점을 더한다.16pt 둥근 말풍선 mask와 미세한 테두리, 아이콘 중심을 따르는 꼭짓점(화면 끝에서는 모서리 안으로 제한), 아이콘 아래 간격8pt다. RAM은 blue-cyan, CPU는 violet-blue, 디스크는 teal의6pt 게이지로 비활성화 때도 색이 유지되며 정확한 숫자·AX 값을 함께 제공한다. Esc·자기 앱 바깥 클릭·앱 비활성화 때 닫으며, 처음부터 inactive인 경우를 위해 표시 중에만 전역 mouse-down의 close-only callback을 둔다. 키·좌표·앱정보·이력은 읽거나 저장하지 않는다. local 이벤트는 원본을 전달하고 두 monitor는 닫을 때 해제·세대를 무효화한다. 등록 실패는 열기 성공으로 표시하지 않는다. OS 접근성 설정은 바꾸지 않고 실제 desktop합성/물리적클릭은 부분 자동검사와 구별해 확인한다.
 - macOS 직접 배포 빌드: 투명 WKWebView와 `underWindowBackground` native vibrancy를 사용한다. 이 경로는 Tauri의 macOS private API를 요구하므로 Mac App Store용 빌드에는 사용하지 않고 불투명 CSS 폴백을 둔다.
 - Windows: WebView2 CSS 블러를 기본으로 하고, 창 재질은 지원되는 경우에만 적용한다.
 - OS별 제목 표시줄과 창 버튼 위치는 네이티브 관례를 따른다. macOS 신호등 버튼을 Windows에 복제하지 않는다.
@@ -190,6 +191,8 @@ BroomSweepy는 저장공간 상태를 한눈에 보여 주고 한 번의 클릭�
 - 운영체제 이름은 하드코딩된 마케팅 카피가 아니라 capability 설명에만 사용한다.
 
 ## Accessibility
+
+- 표시 언어 변경은 기존 결과의 표시만 갱신한다. 앱 소유 진단·경고·근거는 공통 `appText` 경계를 쓰고 동적 알림은 key+params로 보관한다. 사용자 경로·문서·대화와 macOS 자체 앱/프로세스 이름은 원문을 유지한다. 번역을 위해 스캔/CLI/listener를 다시 실행하지 않는다. 검증과 미등록 진단의 한계는 docs/qa/i18n-2026-10-21/review.md에 기록한다.
 
 - 모든 아이콘 버튼에 접근 가능한 이름을 제공한다.
 - 키보드 포커스는 인지 가능한 2px 상당의 한 겹 선으로 표시하고 색 대비만으로 상태를 구분하지 않는다. 입력 묶음의 컨테이너와 내부 입력에 포커스 선을 중복해서 그리지 않는다.

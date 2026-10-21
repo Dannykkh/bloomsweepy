@@ -63,8 +63,9 @@
 | Settings icon | existing lucide-react | package dependency | existing package license | yes | existing icon system |
 
 ## Desktop Structure
-- Native NSPopover 320×370pt, 16pt margins, no separate WebView. Native adaptive glass/text; 14pt body and compact system menu title.
-- Three measured rows; RAM first, exact value right, thin native bars. One-level surface, no nested cards, no scroll at ordinary system font sizes.
+- Native clear, nonopaque NSPanel320×384pt: the original320×370pt body plus14pt top beak,16pt margins, no separate WebView. On macOS26+ one NSGlassEffectView.Regular has an empty contentView as the background; existing full-opacity controls are a sibling above it. Only the background uses alpha0.82 (1.0 when Reduce Transparency is enabled, checked each opening). Earlier OS versions use one UnderWindowBackground/BehindWindow/Active effect, not a promise of identical translucency. No added tint, nested blur or whole-window alpha. One rounded bubble mask clips both layers, with a hairline rim. No OS preference changes.
+- 2026-10-21 approved visual delta: Clear lost legibility, while plain Regular lost the beak and dimmed all native bars to gray. The user requested the beak, color and more translucency, then accepted the actual native component preview: “이 정도면 괜찮아”. Preserve task order/body geometry with DarkAqua, heading16pt medium, metrics15pt regular and labels14pt. The16pt rounded bubble sits8pt below the icon; its beak follows the actual icon center after screen clamping, bounded away from the rounded corners. Preview acceptance is not installation or full outside-click verification.
+- Three measured rows; RAM first, exact value right,6pt persistent-color custom native gauges: RAM blue–cyan, CPU violet–blue, disk teal. Their values/0–100bounds/read-only progress roles remain accessible; unavailable readings hide the bar rather than implying zero. One-level surface, no nested cards, no scroll at ordinary system font sizes.
 - Main settings panel reuses existing setting-row styles.
 - Settings includes Open panel as a direct, keyboard-reachable way to discover the status panel.
 
@@ -87,13 +88,14 @@
 ## Performance Budget
 - One reusable sysinfo System with CPU+RAM only; one worker; one latest snapshot, no history.
 - Root statvfs only; no process enumeration, no per-file scan, no AI calls.
-- No extra WebView, font download, image generation, or JS timer in the popover. Native controls are allocated once and reused.
+- No extra WebView, font download, image generation, or JS timer in the panel. Native controls/window are allocated once and reused. Local/global mouse-down monitors exist only while visible. The global callback ignores its event payload entirely and only dismisses; no keys/positions/app identities/history are read or retained.
 - Stop channel interrupts the 10s wait on exit. UI work stays on main thread; sampling stays off it.
 
 ## Accessibility Contract
 - Native labels/buttons/check states in logical reading order; exact text supplements bars.
-- Escape/outside click closes transient popover. Keyboard navigation to checkbox/open/quit; visible native focus.
-- System semantic colors/fonts adapt to appearance; panel animation disabled (also reduced-motion safe). No repeated live announcements.
+- Escape dismisses the key panel. While shown, local left/right/other mouse-down outside the panel closes it, excluding the status button's window so its toggle cannot close then reopen. Original clicks are always delivered. Global mouse-down close-only covers clicks while our app is already inactive (the local+resign-only candidate physically failed). Own-app did-resign-active remains for app switching. No global key monitoring. Monitoring failure closes the panel and returns an error to Settings-open rather than a false success; callbacks are generation-gated to prevent a stale callback dismissing a reopened panel.
+- Showing requests app activation and makes only this panel key without explicitly restoring the hidden main window. The own-app observer is removed before teardown, and its callback uses the retained panel without re-borrowing shared UI. Close invalidates the generation, takes both monitor tokens and releases all RefCell borrows before native unregistering. Native controls retain keyboard/AX semantics; actual keyboard and outside-click checks stay separate from source inspection.
+- System semantic colors/fonts and native Glass accessibility behavior follow the OS. No custom entrance animation/timer or repeated live announcements. Actual reduced-motion/transparency/contrast modes were not changed or certified during this check.
 
 ## Adopt
 - Swift resident icon, optional RAM title, 10s aggregate update, popup order, open/quit separation.

@@ -22,3 +22,9 @@
 - [018 — Windows 설정 조회·연결](018-windows-management.md): 고정10행 저장값·8개 로컬 진입, 공통 읽기 전용 AI, 실효/지원 미확인, OS 메뉴 분리.
 - [019 — Mac A형 그룹 설정](019-mac-control-a.md): 파일표시3/경로정보2, 초안·적용·기록 직접조작, 단일제목·nonsticky·중복메뉴 제거.
 - [020 — 시스템 후보 폭 경계](020-system-candidate-width.md): 중첩 grid/inline-size 폭 고정, 단일 검사·부분 경고·OS별 필터, 실행 정책 보존.
+- [021 — 네이티브 팝오버](021-native-popover.md): SUPERSEDED by022; 중간본 실제 화면의 진한 재질로44%tint 기각, 활성화·관찰자 원칙 계승.
+- [022 — 단일 유리 상태 패널](022-native-status-panel.md): SUPERSEDED by023; 실제외부클릭/재질 모두실패해복원, 정적·부분검사와실제수락구분.
+- [023 — Clear·외부클릭](023-clear-panel-dismissal.md): SUPERSEDED by024; 외부클릭실측통과하나Clear가독성실패, 닫힘처리는계승.
+- [024 — 읽을 수 있는 Glass](024-legible-status-glass.md): SUPERSEDED by025; Regular의 회색·무색·꼭짓점 소실을 사용자 지적으로 대체.
+- [025 — 컬러 유리 말풍선](025-colored-glass-bubble.md): background-only alpha0.82·full-opacity foreground·상단14pt beak·inactive 컬러 게이지, 실제 네이티브 미리보기 수락.
+- [026 — 렌더 시점 현지화](026-render-time-app-localization.md): 앱 소유 진단 appText·key+params 알림, 재조회 없는 언어 변경과 사용자 원문 보존.

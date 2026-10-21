@@ -15,6 +15,14 @@ BroomSweepy is a project building a **conversational file management system** fo
 
 **Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
+## v1.8.1 — menu-bar and language patch · 2026-10-21
+
+- **Mac menu bar**: Restores the top speech-bubble pointer and colored gauges. Only the background uses `alpha 0.82`; text and controls remain fully opaque and readable.
+- **Display language**: Fixes missing translations in app-generated warnings, evidence, and results. Notices stored as `key + params` update immediately when the language changes. User filenames, paths, existing conversation text, and the language of macOS-owned windows are not rewritten.
+- **Verification scope**: The 216 passing frontend checks, 12 native-component checks, and user-approved material preview apply to the local patched build displaying 1.8.0. At the time of this record, v1.8.1 CI and final installed-app visual checks are pending. These results do not establish completed distribution, native Windows behavior, or long-duration memory stability.
+
+[v1.8.1 release](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.1) · [Patch scope, distribution, and verification status](docs/releases/v1.8.1.md)
+
 ## v1.8.0 — features and verification scope · 2026-10-21
 
 The changes below are **the intended scope of v1.8.0 source and new installers**. The existing v1.7.0 tag and assets remain unchanged. Some installed-app/Codex checks on October 21 used the local development build while it still displayed 1.7.0; those observations are not relabeled as end-to-end verification of the new 1.8.0 installer.
