@@ -22,9 +22,11 @@ test("app, workspace packages and lockfiles share one release version", () => {
   const cargoLock = read("../../../Cargo.lock");
   for (const [name, manifest] of packages) {
     assert.equal(read(manifest).match(/^version\s*=\s*"([^"]+)"/m)?.[1], version, manifest);
-    const entry = cargoLock.split("[[package]]").find((block) => block.includes(`name = "${name}"\n`));
-    assert.ok(entry, `missing ${name} in Cargo.lock`);
-    assert.equal(entry.match(/^version\s*=\s*"([^"]+)"/m)?.[1], version, name);
+    for (const content of [cargoLock, cargoLock.replace(/\r?\n/g, "\r\n")]) {
+      const entry = content.split("[[package]]").find((block) => block.split(/\r?\n/).includes(`name = "${name}"`));
+      assert.ok(entry, `missing ${name} in Cargo.lock`);
+      assert.equal(entry.match(/^version\s*=\s*"([^"]+)"/m)?.[1], version, name);
+    }
   }
 });
 
