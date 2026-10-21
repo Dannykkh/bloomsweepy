@@ -55,17 +55,22 @@ winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+block2 = "0.6"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSUserDefaults"] }
+objc2-foundation = { version = "0.3", features = ["NSUserDefaults", "NSNotification"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "CGPath"] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAShapeLayer", "objc2-core-foundation", "objc2-core-graphics"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "libc",
-    "NSRunningApplication",
+    "NSApplication", "NSWindow", "NSRunningApplication", "NSAppearance", "NSPanel",
+    "NSScreen", "NSGraphics", "NSEvent", "block2", "NSVisualEffectView", "objc2-quartz-core",
+    "NSGlassEffectView", "objc2-core-foundation", "objc2-core-graphics",
     "NSWorkspace",
-    "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSPopover",
+    "NSStatusBar", "NSStatusItem", "NSStatusBarButton",
     "NSView", "NSViewController", "NSButton", "NSControl", "NSResponder",
     "NSTextField", "NSText", "NSFont", "NSFontDescriptor", "NSColor", "NSImage", "NSCell", "NSButtonCell",
-    "NSProgressIndicator", "NSAccessibility", "NSAccessibilityProtocols",
+    "NSBezierPath", "NSGradient", "NSAccessibilityConstants", "NSAccessibility", "NSAccessibilityProtocols",
 ] }
 plist = "1.10.0"
 tauri-plugin-single-instance = "2"

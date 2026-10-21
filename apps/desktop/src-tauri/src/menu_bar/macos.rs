@@ -1,23 +1,32 @@
 //! All AppKit objects live only on the main thread. The worker owns aggregate
 //! counters, never a WebView, process list, file list, or growing sample history.
 use super::{MenuBarSettings, stale, title_percent, usage_percent, valid_cpu};
+#[path = "gauge.rs"]
+mod gauge;
+#[path = "status_panel.rs"]
+mod status_panel;
+#[path = "surface.rs"]
+mod surface;
+use gauge::NativeGauge;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAccessibility, NSButton, NSButtonType, NSCellImagePosition, NSColor, NSFont, NSImage,
-    NSPopover, NSPopoverBehavior, NSProgressIndicator, NSProgressIndicatorStyle, NSStatusBar,
-    NSStatusItem, NSTextAlignment, NSTextField, NSVariableStatusItemLength, NSView,
-    NSViewController,
+    NSAccessibility, NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua,
+    NSApplication, NSApplicationDidResignActiveNotification, NSButton, NSButtonType,
+    NSCellImagePosition, NSColor, NSFont, NSImage, NSStatusBar, NSStatusItem, NSTextAlignment,
+    NSTextField, NSVariableStatusItemLength, NSView, NSViewController,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSObject, NSObjectProtocol, NSPoint, NSRect, NSRectEdge, NSSize, NSString,
-    NSUserDefaults, ns_string,
+    MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol, NSPoint,
+    NSRect, NSSize, NSString, NSUserDefaults, ns_string,
 };
+use status_panel::StatusPanel;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use surface::BubbleSurface;
 use sysinfo::{CpuRefreshKind, System};
 use tauri::{App, AppHandle, Emitter, Manager, WindowEvent};
 
@@ -44,6 +53,7 @@ struct Metrics {
 
 struct ActionContext {
     app: AppHandle,
+    panel: Retained<StatusPanel>,
 }
 
 define_class!(
@@ -54,13 +64,21 @@ define_class!(
     struct MenuBarActions;
     unsafe impl NSObjectProtocol for MenuBarActions {}
     impl MenuBarActions {
+        #[unsafe(method(applicationDidResignActive:))]
+        fn application_did_resign_active(&self, _notification: &NSNotification) {
+            // Notification delivery can be synchronous during an AppKit action.
+            // Do not re-borrow UI; the retained panel has the same owner thread.
+            self.ivars().panel.close();
+        }
         #[unsafe(method(togglePanel:))]
         fn toggle_panel(&self, _sender: Option<&AnyObject>) {
             UI.with_borrow_mut(|slot| {
                 if let Some(ui) = slot {
-                    if ui.popover.isShown() { ui.popover.close(); }
+                    if ui.panel.isShown() { ui.panel.close(); }
                     else {
-                        ui.show();
+                        if let Err(error) = ui.show() {
+                            eprintln!("Menu bar status: {error}");
+                        }
                     }
                 }
             });
@@ -73,12 +91,12 @@ define_class!(
         }
         #[unsafe(method(openMain:))]
         fn open_main(&self, _sender: Option<&AnyObject>) {
-            UI.with_borrow(|slot| { if let Some(ui) = slot { ui.popover.close(); } });
+            self.ivars().panel.close();
             crate::queue_main_window_restore(self.ivars().app.clone());
         }
         #[unsafe(method(quitApp:))]
         fn quit_app(&self, _sender: Option<&AnyObject>) {
-            UI.with_borrow(|slot| { if let Some(ui) = slot { ui.popover.close(); } });
+            self.ivars().panel.close();
             let app = self.ivars().app.clone();
             // Tauri exit dispatch must not wait on its own main-thread event loop.
             let _ = std::thread::Builder::new().name("menu-bar-exit".into()).spawn(move || app.exit(0));
@@ -87,8 +105,8 @@ define_class!(
 );
 
 impl MenuBarActions {
-    fn new(mtm: MainThreadMarker, app: AppHandle) -> Retained<Self> {
-        let object = Self::alloc(mtm).set_ivars(ActionContext { app });
+    fn new(mtm: MainThreadMarker, app: AppHandle, panel: Retained<StatusPanel>) -> Retained<Self> {
+        let object = Self::alloc(mtm).set_ivars(ActionContext { app, panel });
         // SAFETY: initialize the allocated NSObject subclass exactly once.
         unsafe { msg_send![super(object), init] }
     }
@@ -98,12 +116,13 @@ struct MetricRow {
     label: Retained<NSTextField>,
     value: Retained<NSTextField>,
     detail: Retained<NSTextField>,
-    bar: Retained<NSProgressIndicator>,
+    bar: Retained<NativeGauge>,
 }
 
 struct NativeMenuBar {
     status: Retained<NSStatusItem>,
-    popover: Retained<NSPopover>,
+    panel: Retained<StatusPanel>,
+    surface: BubbleSurface,
     actions: Retained<MenuBarActions>,
     rows: [MetricRow; 3],
     freshness: Retained<NSTextField>,
@@ -154,7 +173,8 @@ fn button(
 
 impl NativeMenuBar {
     fn new(mtm: MainThreadMarker, app: AppHandle) -> Result<Self, String> {
-        let actions = MenuBarActions::new(mtm, app);
+        let panel = StatusPanel::new(mtm);
+        let actions = MenuBarActions::new(mtm, app, panel.clone());
         let status =
             NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
         let Some(status_button) = status.button(mtm) else {
@@ -180,15 +200,16 @@ impl NativeMenuBar {
             status_button.setTarget(Some(&actions));
             status_button.setAction(Some(sel!(togglePanel:)));
         }
+        // Keep content plain: the root below owns exactly one material.
         let view = NSView::initWithFrame(NSView::alloc(mtm), frame(0.0, 0.0, 320.0, 370.0));
         let heading = label(
             mtm,
             &view,
             "BroomSweepy",
             frame(16.0, 334.0, 206.0, 24.0),
-            17.0,
+            16.0,
         );
-        heading.setFont(Some(&NSFont::boldSystemFontOfSize(17.0)));
+        heading.setFont(Some(&NSFont::systemFontOfSize_weight(16.0, 0.3)));
         let version = label(
             mtm,
             &view,
@@ -198,23 +219,24 @@ impl NativeMenuBar {
         );
         version.setTextColor(Some(&NSColor::secondaryLabelColor()));
         version.setAlignment(NSTextAlignment::Right);
-        let rows = [278.0, 214.0, 150.0].map(|y| {
+        // Same category identities as the main performance instruments.
+        let colors = [
+            [(0.08, 0.47, 1.0), (0.20, 0.75, 1.0)],
+            [(0.55, 0.38, 0.97), (0.33, 0.58, 1.0)],
+            [(0.12, 0.65, 0.61), (0.23, 0.81, 0.73)],
+        ];
+        let rows = std::array::from_fn(|index| {
+            let y = [278.0, 214.0, 150.0][index];
             let name = label(mtm, &view, "", frame(16.0, y + 20.0, 148.0, 22.0), 14.0);
+            name.setTextColor(Some(&NSColor::secondaryLabelColor()));
             let value = label(mtm, &view, "—", frame(165.0, y + 20.0, 139.0, 22.0), 15.0);
             value.setAlignment(NSTextAlignment::Right);
             value.setFont(Some(&NSFont::monospacedDigitSystemFontOfSize_weight(
-                15.0, 0.3,
+                15.0, 0.0,
             )));
             let detail = label(mtm, &view, "", frame(16.0, y - 10.0, 288.0, 20.0), 14.0);
             detail.setTextColor(Some(&NSColor::secondaryLabelColor()));
-            let bar = NSProgressIndicator::initWithFrame(
-                NSProgressIndicator::alloc(mtm),
-                frame(16.0, y + 11.0, 288.0, 6.0),
-            );
-            bar.setStyle(NSProgressIndicatorStyle::Bar);
-            bar.setIndeterminate(false);
-            bar.setMinValue(0.0);
-            bar.setMaxValue(100.0);
+            let bar = NativeGauge::new(mtm, frame(16.0, y + 11.0, 288.0, 6.0), colors[index]);
             view.addSubview(&bar);
             MetricRow {
                 label: name,
@@ -248,12 +270,17 @@ impl NativeMenuBar {
             frame(226.0, 24.0, 82.0, 40.0),
         );
         let controller = NSViewController::new(mtm);
-        controller.setView(&view);
-        let popover = NSPopover::new(mtm);
-        popover.setContentViewController(Some(&controller));
-        popover.setContentSize(NSSize::new(320.0, 370.0));
-        popover.setBehavior(NSPopoverBehavior::Transient);
-        popover.setAnimates(false);
+        let surface = BubbleSurface::new(mtm, &view);
+        controller.setView(&surface.view);
+        // Match the main window's dark appearance. Material/accessibility
+        // fallbacks remain native; no tint or second blur is added.
+        // SAFETY: this is AppKit's immutable, process-lifetime appearance name.
+        if let Some(appearance) = NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua })
+        {
+            panel.setAppearance(Some(&appearance));
+        }
+        panel.setContentViewController(Some(&controller));
+        panel.setContentSize(surface::SIZE);
         let defaults = NSUserDefaults::standardUserDefaults();
         let key = NSString::from_str(PERCENT_KEY);
         let show_percent = defaults.objectForKey(&key).is_none() || defaults.boolForKey(&key);
@@ -263,7 +290,8 @@ impl NativeMenuBar {
             .unwrap_or_else(|| "en".into());
         let ui = Self {
             status,
-            popover,
+            panel,
+            surface,
             actions,
             rows,
             freshness,
@@ -275,6 +303,18 @@ impl NativeMenuBar {
             metrics: Metrics::default(),
         };
         ui.render();
+        // Explicit close also handles app switching (including Cmd-Tab), where
+        // local mouse monitoring does not receive other applications' clicks.
+        // SAFETY: the retained target implements this notification selector;
+        // the observer is restricted to our NSApplication and removed in Drop.
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &ui.actions,
+                sel!(applicationDidResignActive:),
+                Some(NSApplicationDidResignActiveNotification),
+                Some(&NSApplication::sharedApplication(mtm)),
+            );
+        }
         Ok(ui)
     }
 
@@ -286,15 +326,15 @@ impl NativeMenuBar {
         }
     }
 
-    fn show(&self) {
+    fn show(&self) -> Result<(), String> {
         self.render();
-        if let Some(button) = self.status.button(self.actions.mtm()) {
-            self.popover.showRelativeToRect_ofView_preferredEdge(
-                button.bounds(),
-                &button,
-                NSRectEdge::MinY,
-            );
+        let mtm = self.actions.mtm();
+        if let Some(button) = self.status.button(mtm) {
+            return self
+                .panel
+                .show_relative(&button, |x| self.surface.set_arrow_x(x));
         }
+        Err("Menu bar button unavailable".into())
     }
 
     fn set_percent(&mut self, enabled: bool) {
@@ -387,7 +427,7 @@ impl NativeMenuBar {
                 .map(|p| format!("{p:.0}%"))
                 .unwrap_or_else(|| "—".into());
             row.value.setStringValue(&NSString::from_str(&text));
-            row.bar.setDoubleValue(percent.unwrap_or(0.0));
+            row.bar.set_value(percent.unwrap_or(0.0));
             row.bar.setHidden(percent.is_none());
             row.bar
                 .setAccessibilityLabel(Some(&NSString::from_str(words[index])));
@@ -428,7 +468,11 @@ impl NativeMenuBar {
 
 impl Drop for NativeMenuBar {
     fn drop(&mut self) {
-        self.popover.close();
+        // SAFETY: unregister this owned target before releasing it or the panel.
+        unsafe {
+            NSNotificationCenter::defaultCenter().removeObserver(&self.actions);
+        }
+        self.panel.close();
         NSStatusBar::systemStatusBar().removeStatusItem(&self.status);
     }
 }
@@ -584,15 +628,23 @@ pub(crate) fn set_language(app: &AppHandle, language: String) -> Result<(), Stri
     .map_err(|error| error.to_string())
 }
 
-pub(super) fn show_panel(app: &AppHandle) -> Result<(), String> {
-    app.run_on_main_thread(|| {
-        UI.with_borrow(|slot| {
-            if let Some(ui) = slot {
-                ui.show();
-            }
+pub(super) async fn show_panel(app: AppHandle) -> Result<(), String> {
+    let (sender, receiver) = mpsc::channel();
+    app.run_on_main_thread(move || {
+        let result = UI.with_borrow(|slot| match slot {
+            Some(ui) => ui.show(),
+            None => Err("Menu bar status is unavailable; restart the app".into()),
         });
+        let _ = sender.send(result);
     })
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        receiver
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "Menu bar panel timed out".to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())??
 }
 
 pub(super) async fn settings(

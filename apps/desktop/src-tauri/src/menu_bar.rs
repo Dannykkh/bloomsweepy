@@ -30,9 +30,9 @@ pub(crate) async fn get_menu_bar_settings(app: AppHandle) -> Result<MenuBarSetti
 }
 
 #[tauri::command]
-pub(crate) fn open_menu_bar_panel(app: AppHandle) -> Result<(), String> {
+pub(crate) async fn open_menu_bar_panel(app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
-    return macos::show_panel(&app);
+    return macos::show_panel(app).await;
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
