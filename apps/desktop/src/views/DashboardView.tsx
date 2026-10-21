@@ -114,7 +114,7 @@ export function DashboardView({
   onOpenFileSearch,
   onRevealFile,
 }: DashboardViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [selectedMountPoint, setSelectedMountPoint] = useState<string | null>(null);
   const driveDeckRef = useRef<HTMLDivElement>(null);
   const activeDriveRef = useRef<HTMLDivElement>(null);
@@ -297,7 +297,7 @@ export function DashboardView({
       {error ? (
         <div className="dashboard-inline-error" role="alert">
           <AlertTriangle size={18} aria-hidden="true" />
-          <span>{error}</span>
+          <span>{appText(error)}</span>
           <button
             className="secondary-button dashboard-inline-error__action"
             type="button"
@@ -488,7 +488,7 @@ export function DashboardView({
                 <AlertTriangle size={17} aria-hidden="true" />
                 <span>
                   <strong>{t("전체 검사를 완료하지 못했습니다")}</strong>
-                  <small>{scanError}</small>
+                  <small>{appText(scanError)}</small>
                 </span>
                 <button
                   type="button"
@@ -506,7 +506,7 @@ export function DashboardView({
                 <AlertTriangle size={17} aria-hidden="true" />
                 <span>
                   <strong>{t("정리 후보 스캔을 완료하지 못했습니다")}</strong>
-                  <small>{cleanupError}</small>
+                  <small>{appText(cleanupError)}</small>
                 </span>
                 <button type="button" disabled={blocked} onClick={onStartCleanupScan}>
                   {t("다시 시도")}

@@ -137,7 +137,7 @@ export function DriveStoragePanel({
   onCancel,
   onExplorePath,
 }: DriveStoragePanelProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const scanning = state === "scanning";
   const categories = mergeCategories(
     scanning ? progress?.categories : report?.categories,
@@ -197,7 +197,7 @@ export function DriveStoragePanel({
 
       {error ? (
         <div className="drive-inventory__error" role="alert">
-          {error}
+          {appText(error)}
         </div>
       ) : null}
 

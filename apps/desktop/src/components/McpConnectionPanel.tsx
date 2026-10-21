@@ -24,7 +24,7 @@ const stateLabels: Record<McpRegistrationState, MessageKey> = {
 };
 
 export function McpConnectionPanel() {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [statuses, setStatuses] = useState<McpClientRegistrationStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyClient, setBusyClient] = useState<McpClientKind | null>(null);
@@ -134,7 +134,7 @@ export function McpConnectionPanel() {
                     <strong>{status.label}</strong>
                     <b data-state={status.state}>{t(stateLabels[status.state])}</b>
                   </span>
-                  <small>{status.detail}</small>
+                  <small>{appText(status.detail)}</small>
                   {status.helperPath ? (
                     <code title={status.helperPath}>{status.helperPath}</code>
                   ) : null}
@@ -164,7 +164,7 @@ export function McpConnectionPanel() {
         </div>
       )}
 
-      {error ? <p className="mcp-connection-panel__error" role="alert">{error}</p> : null}
+      {error ? <p className="mcp-connection-panel__error" role="alert">{appText(error)}</p> : null}
       <p className="mcp-connection-panel__footnote">
         {t("Claude Desktop 확장과 Claude Code 연결은 서로 다릅니다. 현재 자동 연결은 Codex와 Claude Code만 지원합니다.")}
       </p>

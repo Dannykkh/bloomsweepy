@@ -43,7 +43,7 @@ export function RecoveryNotice({
   onOpenTrash,
   onDismiss,
 }: RecoveryNoticeProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const operations = report.incompleteOperations;
   const totalItems = operations.reduce(
     (total, operation) => total + operation.items.length,
@@ -151,7 +151,7 @@ export function RecoveryNotice({
                       </span>
                       <span>
                         <code title={item.path}>{item.path}</code>
-                        <small>{item.message}</small>
+                        <small>{appText(item.message)}</small>
                       </span>
                     </div>
                   ))}
@@ -176,14 +176,14 @@ export function RecoveryNotice({
         <div className="recovery-notice__issues" role="alert">
           <strong>{t("대조 중 확인하지 못한 내용")}</strong>
           {report.issues.slice(0, 6).map((issue) => (
-            <p key={issue}>{issue}</p>
+            <p key={issue}>{appText(issue)}</p>
           ))}
         </div>
       ) : null}
 
       {actionError ? (
         <p className="recovery-notice__action-error" role="alert">
-          {actionError}
+          {appText(actionError)}
         </p>
       ) : null}
 
@@ -221,7 +221,7 @@ export function RecoveryCheckNotice({
   onRetry,
   onDismiss,
 }: RecoveryCheckNoticeProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   return (
     <section className={`recovery-check ${error ? "has-warning" : ""}`} aria-live="polite">
       <span className="recovery-check__icon" aria-hidden="true">
@@ -230,7 +230,7 @@ export function RecoveryCheckNotice({
       <span>
         <strong>{error ? t("이전 휴지통 작업을 확인하지 못했습니다") : t("이전 작업 기록을 확인하고 있습니다")}</strong>
         <small>
-          {error ?? t("원본 경로와 운영체제 휴지통을 대조하는 중입니다. 파일은 변경하지 않습니다.")}
+          {error ? appText(error) : t("원본 경로와 운영체제 휴지통을 대조하는 중입니다. 파일은 변경하지 않습니다.")}
         </small>
       </span>
       {error ? (

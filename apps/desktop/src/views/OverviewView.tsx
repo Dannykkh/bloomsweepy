@@ -102,7 +102,7 @@ export function OverviewView({
   onOpenCleanup,
   onOpenCleanupTree,
 }: OverviewViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const scanning = state === "scanning";
   const mapScanning = directoryState === "scanning";
   const driveScanning = driveState === "scanning";
@@ -168,7 +168,7 @@ export function OverviewView({
           {error ? (
             <p className="storage-detail-action__error" role="alert">
               <AlertTriangle size={16} aria-hidden="true" />
-              {error}
+              {appText(error)}
             </p>
           ) : state === "cancelled" ? (
             <p className="storage-detail-action__notice" role="status">{t("검사를 취소했습니다.")}</p>

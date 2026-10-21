@@ -62,7 +62,7 @@ export function AssistantEmptyFolderCard({ workspace, busy, readOnly = false, on
 }
 
 export function AssistantTrashResultCard({ result }: { result: TrashOperationResult }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   return <section className="assistant-empty-review" aria-label={t("휴지통 이동 결과")}>
     <strong>{t("휴지통 이동 결과")}</strong>
     <p>{t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: result.requestedCount, moved: result.movedCount })}</p>
@@ -71,7 +71,7 @@ export function AssistantTrashResultCard({ result }: { result: TrashOperationRes
     <details><summary>{t("항목별 결과 보기")}</summary>
       <ul className="assistant-empty-review__list">{result.items.map((item) => <li key={item.path}>
         <strong>{item.status === "moved" ? t("이동 완료") : item.status === "failed" ? t("실패") : t("건너뜀")}</strong>
-        <small dir="auto">{item.path}</small>{item.message ? <p>{item.message}</p> : null}
+        <small dir="auto">{item.path}</small>{item.message ? <p>{appText(item.message)}</p> : null}
       </li>)}</ul>
     </details>
     <small>{t("필요하면 운영체제 휴지통에서 복원을 시도할 수 있습니다. 추가 정리 전 다시 검사하세요.")}</small>

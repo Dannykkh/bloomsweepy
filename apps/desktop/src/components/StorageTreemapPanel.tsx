@@ -90,7 +90,7 @@ export function StorageTreemapPanel({
   onCancelTrash,
   trashProgress = null,
 }: StorageTreemapPanelProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const scanning = state === "scanning";
   const inspection = useFileInspectionActions({ reveal: onReveal, scopeKey: report ?? root });
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
@@ -343,7 +343,7 @@ export function StorageTreemapPanel({
       {error ? (
         <div className="storage-map__error" role="alert">
           <AlertTriangle size={16} aria-hidden="true" />
-          {error}
+          {appText(error)}
         </div>
       ) : null}
 
@@ -565,7 +565,7 @@ export function StorageTreemapPanel({
       )}
       {actionNotice ? <p className="storage-map__action-notice" role="status">{actionNotice}</p> : null}
       <FileInspectionStatus message={inspection.message} error={inspection.error} />
-      {actionError && !pendingTrash ? <p className="storage-map__error" role="alert">{actionError}</p> : null}
+      {actionError && !pendingTrash ? <p className="storage-map__error" role="alert">{appText(actionError)}</p> : null}
     </section>
     {menu ? <TreemapItemMenu target={menu} canTrash={Boolean((menu.node.isDirectory ? onPrepareFolder && onConfirmFolder : onTrash) && report?.generation)}
       onClose={closeMenu}

@@ -32,7 +32,7 @@ export function DockerCleanupDialog({
   onClose,
   onCompleted,
 }: DockerCleanupDialogProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [selectedKinds, setSelectedKinds] = useState<DockerCleanupKind[]>([]);
@@ -274,7 +274,7 @@ export function DockerCleanupDialog({
           </>
         )}
 
-        {error ? <p className="safety-dialog__error" role="alert">{error}</p> : null}
+        {error ? <p className="safety-dialog__error" role="alert">{appText(error)}</p> : null}
 
         <footer>
           {result ? (

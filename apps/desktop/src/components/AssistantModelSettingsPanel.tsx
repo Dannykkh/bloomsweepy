@@ -9,7 +9,7 @@ import type { AssistantProviderKind, AssistantProviderStatus } from "../types";
 import "./AssistantModelSettingsPanel.css";
 
 export function AssistantModelSettingsPanel() {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const preference = useAssistantModelPreference();
   const [providers, setProviders] = useState<AssistantProviderStatus[]>([]);
   const [loading, setLoading] = useState(true);
@@ -58,7 +58,7 @@ export function AssistantModelSettingsPanel() {
     </div>
     <p className="settings-inline-state">{t("선택은 이 컴퓨터에만 저장됩니다. CLI의 전역 설정은 바꾸지 않습니다.")}</p>
     {loading ? <p className="settings-inline-state" role="status">{t("AI CLI 확인 중")}</p> : null}
-    {error ? <p className="settings-inline-error" role="alert">{error}</p> : null}
+    {error ? <p className="settings-inline-error" role="alert">{appText(error)}</p> : null}
     {preference.storageError ? <p className="settings-inline-error" role="alert">
       {t("모델 선택을 저장하지 못했습니다. 현재 실행 중에는 선택한 모델을 사용합니다.")}
     </p> : null}

@@ -63,7 +63,7 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
   onReview?: (result: AppToolResult) => void;
   onFileAccessAction?: (action: AssistantFileAccessAction) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const data = object(result.data);
   const memory = object(data.memory);
   const accessSearch = data.accessKind === "search";
@@ -102,11 +102,11 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
       const storedValue = number(item.value);
       const hasStoredValue = (item.state === "value" || item.state === "unsupportedValue") && storedValue !== null && Number.isInteger(storedValue) && storedValue >= 0 && storedValue <= 0xffff_ffff;
       return <li key={`${text(item.id ?? item.targetId)}-${i}`}>
-        <div><strong>{windowsTitle ? t(windowsTitle) : text(item.displayName ?? item.name ?? item.label ?? item.title ?? item.kind) || t("요청한 작업")}</strong>
+        <div><strong>{windowsTitle ? t(windowsTitle) : macSettings || Array.isArray(data.categories) ? appText(text(item.title ?? item.label ?? item.kind)) || t("요청한 작업") : text(item.displayName ?? item.name ?? item.label ?? item.title ?? item.kind) || t("요청한 작업")}</strong>
           {windowsSettings ? <span>{item.scope === "machine" ? t("컴퓨터 전체 정책") : t("현재 사용자")} · {t(item.support === "deprecated" ? "폐기된 정책" : item.support === "requiresVerification" ? "지원 확인 필요" : "저장값만 확인")}</span> : null}
           {text(item.displayVersion) ? <span>{t("버전 {{version}}", { version: text(item.displayVersion) })}</span> : null}
           {text(item.snippet) ? <p>{text(item.snippet)}</p> : null}
-          {text(item.protectionReason) ? <span>{text(item.protectionReason)}</span> : null}
+          {text(item.protectionReason) ? <span>{appText(text(item.protectionReason))}</span> : null}
           {text(item.volumeName) ? <span>{text(item.volumeName)}</span> : null}
           {result.capability === "files.changes" ? <>
             <span>{t(fileChangeReviewKind(text(item.kind) as FileChangeReviewEntry["kind"]) as MessageKey)} · {t(fileChangeReviewDisposition({ reviewState: item.reviewState === "review_needed" ? "review_needed" : "skipped", decisionSource: item.decisionSource === "manual" ? "manual" : "rule" }) as MessageKey)}</span>
@@ -129,9 +129,9 @@ export function AssistantAppToolCard({ result, busy = false, onView, onReview, o
     })}</ol> : null}
     {number(data.returnedCount ?? data.matchedCount) !== null ? <p>{t("{{count}}개", { count: formatCount(number(data.returnedCount ?? data.matchedCount)!) })}</p> : null}
     {fileAccess && number(data.scannedVolumes) !== null ? <p>{t("{{count}}개 볼륨 확인", { count: formatCount(number(data.scannedVolumes)!) })}</p> : null}
-    {typeof data.message === "string" ? <p>{data.message}</p> : null}
-    {typeof data.reason === "string" ? <p>{data.reason}</p> : null}
-    {typeof data.state === "string" ? <p>{data.state}</p> : null}
+    {typeof data.message === "string" ? <p>{appText(data.message)}</p> : null}
+    {typeof data.reason === "string" ? <p>{appText(data.reason)}</p> : null}
+    {typeof data.state === "string" ? <p>{appText(data.state)}</p> : null}
     {incomplete ? <p className="assistant-app-tool-warning">{t("부분 결과입니다. 생략된 항목이나 읽지 못한 자료가 있을 수 있습니다.")}</p> : null}
     {data.contentExcerptsShared === true ? <p>{t("허용된 문서 이름과 일치 본문 일부를 AI에 전달했습니다.")}</p> : null}
     {result.status === "review_required" ? <p><ShieldCheck size={16} aria-hidden="true" /> {t("검토만 준비됐습니다. 실제 실행은 앱에서 최종 확인해야 합니다.")}</p> : null}
@@ -159,7 +159,7 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
   onClose: () => void;
   onCompleted: (completion: AppToolReviewCompletion) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const presentation = object(result.presentation);
   const reviewKind = text(presentation.reviewKind);
   const [running, setRunning] = useState(false);
@@ -235,7 +235,7 @@ export function AssistantAppToolReview({ result, busy = false, onBusyChange, onC
     : <ProcessTerminationDialog preview={presentation.preview as TerminationPreview} busy={running || busy} error={error} onClose={onClose} onConfirm={() => void confirmProcess()} />;
   if (reviewKind === "memory") return <dialog ref={memoryDialog} className="safety-dialog" aria-labelledby="app-tool-memory-title" onCancel={(event) => { event.preventDefault(); if (!running) onClose(); }}>
     <h2 id="app-tool-memory-title">{t("앱 메모리 정리")}</h2><p>{t("BroomSweepy 본체의 사용하지 않는 메모리만 반환합니다. 시스템 전체·다른 앱·WebKit·CLI 메모리나 CPU를 정리하지 않습니다.")}</p>
-    {notice ? <p role="status">{notice}</p> : null}{error ? <p role="alert">{error}</p> : null}
+    {notice ? <p role="status">{appText(notice)}</p> : null}{error ? <p role="alert">{appText(error)}</p> : null}
     <footer><button ref={cancelRef} type="button" className="secondary-button" disabled={running} onClick={onClose}>{t(consumed.current ? "닫기" : "취소")}</button>{!consumed.current ? <button type="button" className="primary-button" disabled={running || busy} onClick={() => void confirmMemory()}>{t("앱 메모리 정리")}</button> : null}</footer>
   </dialog>;
   return <AppToolNoticeDialog title={t("검토 열기")} message={t("검토 정보가 만료됐거나 지원되지 않습니다. 앱에서 다시 조회해 주세요.")} onClose={onClose} />;
@@ -245,7 +245,7 @@ function ExternalFileReviewDialog({ workspace, busy, onBusyChange, onClose, onCo
   workspace: AssistantFileWorkspace; busy: boolean; onBusyChange?: (busy: boolean) => void;
   onClose: () => void; onCompleted: (completion: AppToolReviewCompletion) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialog = useRef<HTMLDialogElement>(null);
   const [running, setRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -303,16 +303,16 @@ function ExternalFileReviewDialog({ workspace, busy, onBusyChange, onClose, onCo
       onAction={noAction} onSelect={() => void cancel()} onPrepare={noAction} onConfirm={(nestedAck) => void confirm(nestedAck)} onShowMap={noAction} />
     {running ? <p role="status">{t(cancelling ? "취소 요청 중…" : "휴지통 이동을 처리하고 있습니다. 완료할 때까지 기다려 주세요.")}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <p role="alert">{appText(error)}</p> : null}
     {actualResult ? <AssistantTrashResultCard result={actualResult} /> : null}
     <footer><button type="button" className="secondary-button" disabled={running || busy} onClick={() => void cancel()}>{t(settled ? "닫기" : "취소")}</button></footer>
   </dialog>;
 }
 
 function AppToolNoticeDialog({ title, message, onClose }: { title: string; message: string; onClose: () => void }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialog = useRef<HTMLDialogElement>(null);
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => { const node = dialog.current; node?.showModal(); close.current?.focus(); return () => node?.close(); }, []);
-  return <dialog ref={dialog} className="safety-dialog" aria-labelledby="app-tool-notice-title" onCancel={(event) => { event.preventDefault(); onClose(); }}><h2 id="app-tool-notice-title">{title}</h2><p role="status">{message}</p><button ref={close} type="button" className="secondary-button" onClick={onClose}>{t("닫기")}</button></dialog>;
+  return <dialog ref={dialog} className="safety-dialog" aria-labelledby="app-tool-notice-title" onCancel={(event) => { event.preventDefault(); onClose(); }}><h2 id="app-tool-notice-title">{appText(title)}</h2><p role="status">{appText(message)}</p><button ref={close} type="button" className="secondary-button" onClick={onClose}>{t("닫기")}</button></dialog>;
 }

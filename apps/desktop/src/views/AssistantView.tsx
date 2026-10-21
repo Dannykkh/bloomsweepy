@@ -41,7 +41,7 @@ import { applicationTrashQuestion, humanTrashDecision, solePendingTrash, namedTr
 import { confirmApplicationTrash, confirmApplicationDataTrash, dismissApplicationPlan } from "../lib/applicationBridge";
 import "./AssistantView.css";
 import { DockerCleanupDialog } from "../components/DockerCleanupDialog";
-import { useLanguage, type Translate } from "../i18n";
+import { useLanguage, type MessageKey, type Translate } from "../i18n";
 import {
   appendAssistantMessage,
   askAssistant,
@@ -98,6 +98,7 @@ import type {
 } from "../types";
 
 type AssistantDisplayTurn = AssistantTimelineTurn;
+type AssistantNotice = string | { key: MessageKey; detail: string };
 
 interface AssistantViewProps {
   controlSettings: ControlStatusPanelProps;
@@ -138,7 +139,10 @@ export function AssistantView({
   onAppTrashBusyChange,
   appToolCompletion,
 }: AssistantViewProps) {
-  const { language, t } = useLanguage();
+  const { language, t, appText } = useLanguage();
+  const noticeText = (notice: AssistantNotice): string => typeof notice === "string"
+    ? appText(notice)
+    : t(notice.key, { detail: appText(notice.detail) });
   const { cleanupAccessLocked } = controlSettings;
   const [connectionOpen, setConnectionOpen] = useState(false);
   const connectionDialog = useRef<HTMLDialogElement>(null);
@@ -159,12 +163,12 @@ export function AssistantView({
   const permissionRevision = useRef(0);
   const handledCompletion = useRef<number | null>(null);
   const [checkingProviders, setCheckingProviders] = useState(true);
-  const [providerError, setProviderError] = useState<string | null>(null);
+  const [providerError, setProviderError] = useState<AssistantNotice | null>(null);
   const [sessions, setSessions] = useState<AssistantSessionSummary[]>([]);
   const [activeSession, setActiveSession] = useState<AssistantSessionDetail | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [sessionBusy, setSessionBusy] = useState(false);
-  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<AssistantNotice | null>(null);
   const [turns, setTurnState] = useState<AssistantDisplayTurn[]>([]);
   const setTurns = (update: SetStateAction<AssistantDisplayTurn[]>) => setTurnState(current => boundedAssistantTurns(
     typeof update === "function" ? update(current) : update, () => crypto.randomUUID(),
@@ -188,7 +192,7 @@ export function AssistantView({
   const [dockerContext, setDockerContext] = useState<AssistantDockerContext | null>(null);
   const [dockerPreview, setDockerPreview] = useState<DockerCleanupPreview | null>(null);
   const [dockerReviewLoading, setDockerReviewLoading] = useState(false);
-  const [dockerReviewError, setDockerReviewError] = useState<string | null>(null);
+  const [dockerReviewError, setDockerReviewError] = useState<AssistantNotice | null>(null);
   const transcriptEnd = useRef<HTMLDivElement>(null);
   const transcript = useRef<HTMLDivElement>(null);
   const followLatest = useRef(true);
@@ -288,7 +292,7 @@ export function AssistantView({
     setTurns(current => [...current, { id: turnKey, role: "assistant", content: completion.message, providerLabel: "BroomSweepy" }]);
     if (completion.trashResult) { setTrashResult(completion.trashResult); setTrashResultTurnKey(turnKey); setFileWorkspace(null); setEmptyWorkspace(null); }
     await appendAssistantMessage({ sessionId, role: "assistant", content: completion.message, provider: null, model: null })
-      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantError(reason, t)));
+      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantNotice(reason)));
   }
 
   function answerTrash(confirmed: boolean, message?: string, applicationResult?: AppToolResult) {
@@ -301,7 +305,7 @@ export function AssistantView({
     followLatest.current = true;
     setTurns(current => [...current, { role: "user", content }]);
     void appendAssistantMessage({ sessionId, role: "user", content, provider: null, model: null })
-      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantError(reason, t)));
+      .then(mutation => updateSessionSummary(mutation.session)).catch(reason => setSessionError(normalizeAssistantNotice(reason)));
     if (pending.kind === "file") { void manageFiles(confirmed ? "confirm" : "select", confirmed ? undefined : [], true); return; }
     if (pending.kind === "empty") { void manageEmptyFolders(confirmed ? "confirm" : "select", confirmed ? undefined : []); return; }
     const question = applicationTrashQuestion(pending.result);
@@ -341,7 +345,7 @@ export function AssistantView({
     if (appToolCompletion.trashResult) { setTrashResult(appToolCompletion.trashResult); setTrashResultTurnKey(turnKey); setFileWorkspace(null); setEmptyWorkspace(null); }
     void appendAssistantMessage({ sessionId: appToolCompletion.sessionId!, role: "assistant", content: appToolCompletion.message, provider: null, model: null })
       .then((mutation) => updateSessionSummary(mutation.session))
-      .catch((reason) => setSessionError(t("AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(reason, t) })));
+      .catch((reason) => setSessionError({ key: "AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", detail: normalizeAssistantNotice(reason) }));
   }, [appToolCompletion, activeSession?.session.id]);
 
   useEffect(() => {
@@ -354,10 +358,10 @@ export function AssistantView({
     if (sessionId && activeSession.session.scopeKind === "folder") {
       void getAssistantEmptyWorkspace(sessionId).then((workspace) => {
         if (!disposed && revision === emptyStateRevision.current) setEmptyWorkspace(workspace);
-      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); });
+      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantNotice(reason)); });
       void getAssistantFileWorkspace(sessionId).then((workspace) => {
         if (!disposed && revision === emptyStateRevision.current) setFileWorkspace(workspace);
-      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); });
+      }).catch((reason) => { if (!disposed && revision === emptyStateRevision.current) setSessionError(normalizeAssistantNotice(reason)); });
     }
     return () => { disposed = true; };
   }, [activeSession?.session.id]);
@@ -411,7 +415,7 @@ export function AssistantView({
       attachToolResults(turnKey, workspace ? [] : [result]);
       const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
       updateSessionSummary(mutation.session);
-    } catch (reason) { if (revision === emptyStateRevision.current) setSessionError(normalizeAssistantError(reason, t)); }
+    } catch (reason) { if (revision === emptyStateRevision.current) setSessionError(normalizeAssistantNotice(reason)); }
     finally { requestInFlight.current = false; setSessionBusy(false); setEmptyActionBusy(false); }
   }
 
@@ -518,7 +522,7 @@ export function AssistantView({
       }
     } catch (reason) {
       if (revision !== emptyStateRevision.current) return;
-      setSessionError(normalizeAssistantError(reason, t));
+      setSessionError(normalizeAssistantNotice(reason));
       // A consumed plan stays consumed even if I/O or persistence failed.
       try { setEmptyWorkspace(await getAssistantEmptyWorkspace(sessionId)); } catch { setEmptyWorkspace(null); }
     } finally {
@@ -546,7 +550,7 @@ export function AssistantView({
         }
       })
       .catch((reason) => {
-        if (!disposed && revision === providerLoadRevision.current) setProviderError(normalizeAssistantError(reason, t));
+        if (!disposed && revision === providerLoadRevision.current) setProviderError(normalizeAssistantNotice(reason));
       })
       .finally(() => {
         if (!disposed && revision === providerLoadRevision.current) setCheckingProviders(false);
@@ -574,7 +578,7 @@ export function AssistantView({
         }
       } catch (reason) {
         if (!disposed && revision === sessionLoadRevision.current) {
-          setSessionError(normalizeAssistantError(reason, t));
+          setSessionError(normalizeAssistantNotice(reason));
         }
       } finally {
         if (!disposed && revision === sessionLoadRevision.current) {
@@ -601,7 +605,7 @@ export function AssistantView({
         modelPreference.setModel("ollama", chooseInitialOllamaModel(ollama.models));
       }
     } catch (reason) {
-      if (revision === providerLoadRevision.current) setProviderError(normalizeAssistantError(reason, t));
+      if (revision === providerLoadRevision.current) setProviderError(normalizeAssistantNotice(reason));
     } finally {
       if (revision === providerLoadRevision.current) setCheckingProviders(false);
     }
@@ -667,7 +671,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason, t));
+        setSessionError(normalizeAssistantNotice(reason));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -695,7 +699,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason, t));
+        setSessionError(normalizeAssistantNotice(reason));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -721,7 +725,7 @@ export function AssistantView({
       activateSessionDetail(detail);
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason, t));
+        setSessionError(normalizeAssistantNotice(reason));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -767,7 +771,7 @@ export function AssistantView({
       }
     } catch (reason) {
       if (revision === sessionLoadRevision.current) {
-        setSessionError(normalizeAssistantError(reason, t));
+        setSessionError(normalizeAssistantNotice(reason));
       }
     } finally {
       if (revision === sessionLoadRevision.current) setSessionBusy(false);
@@ -810,7 +814,7 @@ export function AssistantView({
     if (retry && !canRetryAssistantQuestion(retry, sessionId, permissionRevision.current, emptyStateRevision.current, turns)) return;
     const decision = humanTrashDecision(message);
     if (!retry && decision !== null && pendingTrash.length) {
-      if (!solePendingTrash(pendingTrash)) { setSessionError(t("확인할 대상이 여러 개입니다. 원하는 카드의 예 또는 아니오를 눌러 주세요.")); return; }
+      if (!solePendingTrash(pendingTrash)) { setSessionError("확인할 대상이 여러 개입니다. 원하는 카드의 예 또는 아니오를 눌러 주세요."); return; }
       answerTrash(decision, message);
       return;
     }
@@ -937,9 +941,7 @@ export function AssistantView({
         });
         updateSessionSummary(assistantMutation.session);
       } catch (reason) {
-        setSessionError(
-          t("AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(reason, t) }),
-        );
+        setSessionError({ key: "AI 응답은 받았지만 대화 기록에 저장하지 못했습니다. {{detail}}", detail: normalizeAssistantNotice(reason) });
       }
       setProviders((current) => current.map((candidate) => (
         candidate.provider === response.provider ? { ...candidate, busy: false } : candidate
@@ -970,7 +972,7 @@ export function AssistantView({
         if (activeSessionId.current !== sessionId) return;
         setTurns((current) => current.filter(turn => assistantTurnKey(turn) !== userTurnKey));
         setDraft((current) => current.trim() ? current : message);
-        setSessionError(normalizeAssistantError(reason, t));
+        setSessionError(normalizeAssistantNotice(reason));
       } else {
         const detail = boundedAssistantFailureDetail(normalizeAssistantError(reason, t));
         const errorTurnKey = crypto.randomUUID();
@@ -993,7 +995,7 @@ export function AssistantView({
           const mutation = await appendAssistantMessage({ sessionId, role: "assistant", content, provider: null, model: null });
           updateSessionSummary(mutation.session);
         } catch (saveReason) {
-          if (activeSessionId.current === sessionId) setSessionError(t("오류를 대화 기록에 저장하지 못했습니다. {{detail}}", { detail: normalizeAssistantError(saveReason, t) }));
+          if (activeSessionId.current === sessionId) setSessionError({ key: "오류를 대화 기록에 저장하지 못했습니다. {{detail}}", detail: normalizeAssistantNotice(saveReason) });
         }
         if (workspaceRevision === emptyStateRevision.current && requestPermissionRevision === permissionRevision.current
           && activeSessionId.current === sessionId && isAssistantAuthenticationFailure(reason)) {
@@ -1020,7 +1022,7 @@ export function AssistantView({
       const requested = await cancelAssistant();
       if (!requested) setCancelling(false);
     } catch (reason) {
-      setProviderError(normalizeAssistantError(reason, t));
+      setProviderError(normalizeAssistantNotice(reason));
       setCancelling(false);
     }
   }
@@ -1034,7 +1036,7 @@ export function AssistantView({
       const preview = await createDockerCleanupPreview();
       if (revision === emptyStateRevision.current && canReviewInMode(permissionModeRef.current)) setDockerPreview(preview);
     } catch (reason) {
-      setDockerReviewError(normalizeAssistantError(reason, t));
+      setDockerReviewError(normalizeAssistantNotice(reason));
     } finally {
       setDockerReviewLoading(false);
     }
@@ -1212,7 +1214,7 @@ export function AssistantView({
         </button>
         <div
           className={`assistant-provider-picker ${provider?.available ? "is-ready" : ""}`}
-          title={provider?.detail ?? t("설치된 AI CLI 상태 확인 중")}
+          title={provider?.detail ? appText(provider.detail) : t("설치된 AI CLI 상태 확인 중")}
         >
           <span className="assistant-provider-picker__dot" aria-hidden="true" />
           <span className="assistant-provider-picker__status" role="status">
@@ -1301,7 +1303,7 @@ export function AssistantView({
                 <small>
                   {dockerContext.available
                     ? t("볼륨 제외 참고 상한 {{size}} · 실제 디스크 사용량과 다를 수 있음", { size: formatDockerBytes(dockerContext.reclaimableBytes) })
-                    : dockerContext.detail}
+                    : appText(dockerContext.detail)}
                 </small>
               </span>
               {dockerContext.available ? (
@@ -1320,7 +1322,7 @@ export function AssistantView({
             </aside>
           ) : null}
           {dockerReviewError ? (
-            <p className="assistant-docker-error" role="alert">{dockerReviewError}</p>
+            <p className="assistant-docker-error" role="alert">{noticeText(dockerReviewError)}</p>
           ) : null}
           <div ref={transcriptEnd} />
           </div>
@@ -1331,8 +1333,8 @@ export function AssistantView({
           if (transcript.current) transcript.current.scrollTop = transcript.current.scrollHeight;
           setShowLatest(false);
         }}><ArrowDown size={16} aria-hidden="true" />{t("최신 메시지로")}</button> : null}
-        {sessionError ? <p className="assistant-session-error" role="alert">{sessionError}</p> : null}
-        {providerError ? <p className="assistant-chat__error" role="alert">{providerError}</p> : null}
+        {sessionError ? <p className="assistant-session-error" role="alert">{noticeText(sessionError)}</p> : null}
+        {providerError ? <p className="assistant-chat__error" role="alert">{noticeText(providerError)}</p> : null}
         {provider && !provider.available ? <button type="button" className="assistant-connection-warning" onClick={() => setConnectionOpen(true)}>
           {providerOptionLabel(provider, t)} · {t("연결과 권한")}
         </button> : null}
@@ -1350,7 +1352,7 @@ export function AssistantView({
         </div> : null}
         {emptyActionBusy ? <div className="assistant-working">
           <span role="status"><LoaderCircle className="is-spinning" size={16} aria-hidden="true" />{t("앱에서 후보 확인 또는 휴지통 이동을 처리하고 있습니다.")}</span>
-          <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantError(reason, t)))}>{t("작업 중단")}</button>
+          <button type="button" className="text-button" onClick={() => void cancelScan().catch((reason) => setSessionError(normalizeAssistantNotice(reason)))}>{t("작업 중단")}</button>
         </div> : null}
 
         <form className="assistant-composer" onSubmit={(event) => void submitQuestion(event)}>
@@ -1414,7 +1416,7 @@ export function AssistantView({
         </header>
         {connectionOpen ? <div className="assistant-connection-dialog__body">
         {provider ? <section className={`assistant-cli-diagnostics ${provider.available ? "is-ready" : ""}`} aria-label={t("CLI 연결 상태")}>
-          <strong>{providerOptionLabel(provider, t)}</strong><p>{provider.detail}</p>
+          <strong>{providerOptionLabel(provider, t)}</strong><p>{appText(provider.detail)}</p>
           {provider.executablePath ? <details><summary>{t("실행 경로와 버전")}</summary><code>{provider.executablePath}</code>
             <span>{t("CLI 버전: {{version}}", { version: provider.version ?? t("확인 불가") })}</span></details> : null}
         </section> : null}
@@ -1762,6 +1764,12 @@ function providerUnavailableMessage(provider: AssistantProviderStatus, t: Transl
 
 function normalizeAssistantError(reason: unknown, t: Translate): string {
   return assistantFailureMessage(reason) ?? t("AI CLI 응답을 받지 못했습니다");
+}
+
+function normalizeAssistantNotice(reason: unknown): string {
+  // App notices keep canonical copy until render. Transcript messages continue
+  // to use normalizeAssistantError and retain their original recorded text.
+  return assistantFailureMessage(reason) ?? "AI CLI 응답을 받지 못했습니다";
 }
 
 function fileWorkspaceMessage(workspace: AssistantFileWorkspace, t: Translate, readOnly = false): string {

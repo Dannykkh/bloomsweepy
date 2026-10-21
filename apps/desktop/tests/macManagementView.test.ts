@@ -87,7 +87,7 @@ function createViewHarness(options: {
     };
     if (id === "react/jsx-runtime") return require(id);
     if (id === "lucide-react") return new Proxy({}, { get: () => () => null });
-    if (id === "../i18n") return { useLanguage: () => ({ t: (key: string) => key }) };
+    if (id === "../i18n") return { useLanguage: () => ({ t: (key: string) => key, appText: (text: string) => text }) };
     if (id === "../lib/format") return { formatDate: String };
     if (id === "../lib/macSettings") return {
       ...settings,

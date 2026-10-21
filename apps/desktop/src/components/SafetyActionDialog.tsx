@@ -45,7 +45,7 @@ export function SafetyActionDialog({
   onCancel,
   onClose,
 }: SafetyActionDialogProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
@@ -137,7 +137,7 @@ export function SafetyActionDialog({
               <div className="safety-dialog__item" key={item.path}>
                 <span>
                   <strong title={item.path} style={{ whiteSpace: "normal", overflowWrap: "anywhere", overflow: "visible" }}>{item.path}</strong>
-                  {item.detail ? <small>{item.detail}</small> : null}
+                  {item.detail ? <small>{appText(item.detail)}</small> : null}
                 </span>
                 <b>{formatBytes(item.logicalBytes)}</b>
               </div>
@@ -175,7 +175,7 @@ export function SafetyActionDialog({
           </div>
         ) : null}
 
-        {error ? <p className="safety-dialog__error" role="alert">{error}</p> : null}
+        {error ? <p className="safety-dialog__error" role="alert">{appText(error)}</p> : null}
 
         <footer>
           <button

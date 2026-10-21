@@ -1,6 +1,6 @@
 import { AlertTriangle, AppWindow, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FolderOpen, LoaderCircle, RefreshCw, Search, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLanguage } from "../i18n";
+import { useLanguage, type MessageKey, type MessageValues, type Translate } from "../i18n";
 import { confirmApplicationDataTrash, confirmApplicationTrash, dismissApplicationPlan, getApplicationInventory, openApplicationUninstallSettings, prepareApplicationDataTrash, prepareApplicationTrash } from "../lib/applicationBridge";
 import type { ApplicationDataCandidate, ApplicationInventory, ApplicationInventoryEntry, ApplicationTrashPlan } from "../lib/applicationTypes";
 import { revealPath } from "../lib/bridge";
@@ -11,7 +11,7 @@ import "./ApplicationsView.css";
 interface ApplicationsViewProps {
   active?: boolean;
   busy: boolean;
-  onStatus: (message: string) => void;
+  onStatus: (message: ApplicationStatusNotice) => void;
   onMutated: () => void;
   onBusyChange?: (busy: boolean) => void;
 }
@@ -31,15 +31,22 @@ interface RelatedReview {
 
 const PAGE_SIZE = 50;
 const detail = (reason: unknown) => reason instanceof Error ? reason.message : String(reason);
+export type ApplicationStatusNotice = { key: MessageKey; values?: MessageValues };
+type LocalNotice = ApplicationStatusNotice;
+
+function localizeNotice(notice: LocalNotice, t: Translate, appText: (message: string) => string): string {
+  const values = notice.values;
+  return t(notice.key, values?.detail === undefined ? values : { ...values, detail: appText(String(values.detail)) });
+}
 
 export function ApplicationsView({ active = true, busy, onStatus, onMutated, onBusyChange }: ApplicationsViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [inventory, setInventory] = useState<ApplicationInventory | null>(null);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<LocalNotice | null>(null);
+  const [status, setStatus] = useState<LocalNotice | null>(null);
   const [review, setReview] = useState<ReviewTarget | null>(null);
   const [related, setRelated] = useState<RelatedReview | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -88,11 +95,11 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
       setMovedApps(new Set());
       setUncertain(false);
       setPage(0);
-      const message = t("설치된 앱 {{count}}개를 확인했습니다.", { count: formatCount(next.applications.length) });
+      const message: LocalNotice = { key: "설치된 앱 {{count}}개를 확인했습니다.", values: { count: formatCount(next.applications.length) } };
       setStatus(message);
       onStatus(message);
     } catch (reason) {
-      if (mounted.current) setError(t("앱 목록을 불러오지 못했습니다: {{detail}}", { detail: detail(reason) }));
+      if (mounted.current) setError({ key: "앱 목록을 불러오지 못했습니다: {{detail}}", values: { detail: detail(reason) } });
     } finally {
       loadingRef.current = false;
       if (mounted.current) setLoading(false);
@@ -106,9 +113,9 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
     setError(null);
     try {
       await revealPath(path);
-      if (mounted.current) setStatus(t("파일 탐색기에 위치를 표시했습니다."));
+      if (mounted.current) setStatus({ key: "파일 탐색기에 위치를 표시했습니다." });
     } catch (reason) {
-      if (mounted.current) setError(t("위치를 표시하지 못했습니다: {{detail}}", { detail: detail(reason) }));
+      if (mounted.current) setError({ key: "위치를 표시하지 못했습니다: {{detail}}", values: { detail: detail(reason) } });
     } finally {
       openingRef.current = false;
       if (mounted.current) setOpening(false);
@@ -123,12 +130,12 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
     try {
       await openApplicationUninstallSettings();
       if (mounted.current) {
-        const message = t("Windows 제거 화면을 열었습니다. 앱을 직접 선택해 제거한 뒤 목록을 새로 고치세요. 제거 완료를 확인한 것은 아닙니다.");
+        const message: LocalNotice = { key: "Windows 제거 화면을 열었습니다. 앱을 직접 선택해 제거한 뒤 목록을 새로 고치세요. 제거 완료를 확인한 것은 아닙니다." };
         setStatus(message);
         onStatus(message);
       }
     } catch (reason) {
-      if (mounted.current) setError(t("제거 화면을 열지 못했습니다: {{detail}}", { detail: detail(reason) }));
+      if (mounted.current) setError({ key: "제거 화면을 열지 못했습니다: {{detail}}", values: { detail: detail(reason) } });
     } finally {
       openingRef.current = false;
       if (mounted.current) setOpening(false);
@@ -176,7 +183,7 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
           candidates: current.candidates.filter((candidate) => !movedPaths.has(candidate.path)),
         } : null);
       }
-      const message = t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: formatCount(outcome.requestedCount), moved: formatCount(outcome.movedCount) });
+      const message: LocalNotice = { key: "요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", values: { requested: formatCount(outcome.requestedCount), moved: formatCount(outcome.movedCount) } };
       setStatus(message);
       onStatus(message);
     } else {
@@ -222,8 +229,8 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
       </label>
       <span>{t("{{count}}개", { count: formatCount(filtered.length) })}</span>
     </div>
-    {error ? <p className="applications-error" role="alert">{error}</p> : null}
-    {status ? <p className="applications-status" role="status">{status}</p> : null}
+    {error ? <p className="applications-error" role="alert">{localizeNotice(error, t, appText)}</p> : null}
+    {status ? <p className="applications-status" role="status">{localizeNotice(status, t, appText)}</p> : null}
     {uncertain ? <p className="applications-error" role="alert">{t("결과를 확인하지 못했습니다. 휴지통과 작업 기록을 먼저 확인한 뒤 목록을 새로 고치세요. 같은 요청을 자동으로 재시도하지 않습니다.")}</p> : null}
     {loading ? <p className="applications-empty" role="status"><LoaderCircle className="spin" size={21} aria-hidden="true" />{t("설치 정보를 불러오는 중입니다.")}</p> : null}
     {!loading && inventory?.platform === "unsupported" ? <p className="applications-empty">{t("이 운영체제에서는 앱 관리 기능을 지원하지 않습니다.")}</p> : null}
@@ -233,7 +240,7 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
         <span className="applications-icon"><AppWindow size={24} aria-hidden="true" /></span>
         <div className="applications-identity"><strong>{app.displayName}</strong><p>{app.displayVersion ? t("버전 {{version}}", { version: app.displayVersion }) : t("버전 미확인")}{app.publisher ? ` · ${app.publisher}` : ""}</p>
           {app.installLocation ? <code>{app.installLocation}</code> : <p>{t("설치 위치 미확인")}</p>}
-          {app.protectionReason ? <p className="applications-protection"><ShieldCheck size={14} aria-hidden="true" />{app.protectionReason}</p> : null}
+          {app.protectionReason ? <p className="applications-protection"><ShieldCheck size={14} aria-hidden="true" />{appText(app.protectionReason)}</p> : null}
         </div>
         <span className="applications-size">{app.estimatedBytes === null ? t("용량 미측정") : formatBytes(app.estimatedBytes)}</span>
         <div className="applications-row-actions">
@@ -253,7 +260,7 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
       <span>{t("{{current}} / {{total}} 페이지", { current: formatCount(currentPage + 1), total: formatCount(pageCount) })}</span>
       <button type="button" className="secondary-button" disabled={currentPage + 1 >= pageCount} onClick={() => setPage(currentPage + 1)}>{t("다음")}<ChevronRight size={17} aria-hidden="true" /></button>
     </nav> : null}
-    {inventory?.issues.length ? <details className="applications-issues"><summary>{t("일부 설치 정보를 확인하지 못했습니다.")}</summary><ul>{inventory.issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul></details> : null}
+    {inventory?.issues.length ? <details className="applications-issues"><summary>{t("일부 설치 정보를 확인하지 못했습니다.")}</summary><ul>{inventory.issues.map((issue, index) => <li key={index}>{appText(issue)}</li>)}</ul></details> : null}
     {result ? <ApplicationResult result={result} /> : null}
     {related ? <section ref={relatedRef} className="applications-related" tabIndex={-1} aria-labelledby="applications-related-title">
       <h2 id="applications-related-title">{t("{{name}}의 관련 데이터 검토", { name: related.application.displayName })}</h2>
@@ -281,19 +288,19 @@ export function ApplicationsView({ active = true, busy, onStatus, onMutated, onB
 }
 
 function CandidateDetails({ candidate }: { candidate: ApplicationDataCandidate }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   return <span className="applications-candidate-detail"><strong>{t(candidate.kind === "cache" ? "캐시" : "환경설정")} · {candidate.estimatedBytes === null ? t("용량 미측정") : formatBytes(candidate.estimatedBytes)}</strong>
-    <code>{candidate.path}</code><span>{candidate.evidence}</span></span>;
+    <code>{candidate.path}</code><span>{appText(candidate.evidence)}</span></span>;
 }
 
 function ApplicationResult({ result }: { result: TrashOperationResult }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   return <section className="applications-result" aria-label={t("휴지통 이동 결과")}>
     <h2>{t("휴지통 이동 결과")}</h2>
     <p>{t("요청 {{requested}}개 중 {{moved}}개를 휴지통으로 이동했습니다.", { requested: formatCount(result.requestedCount), moved: formatCount(result.movedCount) })}</p>
     <p>{t("휴지통 이동만으로는 디스크 공간이 확보되지 않을 수 있습니다.")}</p>
     {!result.journalComplete ? <p className="applications-error">{t("작업 기록 저장이 완전하지 않습니다. 실제 휴지통과 작업 기록을 확인하세요.")}</p> : null}
-    <details><summary>{t("항목별 결과 보기")}</summary><ul>{result.items.map((item, index) => <li key={index}><code>{item.path}</code><span>{t(item.status === "moved" ? "이동 완료" : item.status === "failed" ? "실패" : "건너뜀")}</span>{item.message ? <p>{item.message}</p> : null}</li>)}</ul></details>
+    <details><summary>{t("항목별 결과 보기")}</summary><ul>{result.items.map((item, index) => <li key={index}><code>{item.path}</code><span>{t(item.status === "moved" ? "이동 완료" : item.status === "failed" ? "실패" : "건너뜀")}</span>{item.message ? <p>{appText(item.message)}</p> : null}</li>)}</ul></details>
   </section>;
 }
 
@@ -305,7 +312,7 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
   onClose: () => void;
   onCompleted: (target: ReviewTarget, plan: ApplicationTrashPlan, result: TrashOperationResult | null) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const submitting = useRef(false);
@@ -316,7 +323,7 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
   const [consumed, setConsumed] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const [noUninstaller, setNoUninstaller] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LocalNotice | null>(null);
   const [result, setResult] = useState<TrashOperationResult | null>(null);
   const bundle = target.kind === "bundle";
 
@@ -342,7 +349,7 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
       if (disposed) void dismissApplicationPlan(next.planId).catch(() => {});
       else { setPlan(next); }
     }).catch((reason: unknown) => {
-      if (!disposed) setError(t("검토를 준비하지 못했습니다: {{detail}}", { detail: detail(reason) }));
+      if (!disposed) setError({ key: "검토를 준비하지 못했습니다: {{detail}}", values: { detail: detail(reason) } });
     }).finally(() => { if (!disposed) setPreparing(false); });
     return () => {
       disposed = true;
@@ -366,7 +373,7 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
       setResult(outcome);
       onCompleted(target, plan, outcome);
     } catch (reason) {
-      setError(t("결과를 확인하지 못했습니다. 휴지통과 작업 기록을 확인하세요: {{detail}}", { detail: detail(reason) }));
+      setError({ key: "결과를 확인하지 못했습니다. 휴지통과 작업 기록을 확인하세요: {{detail}}", values: { detail: detail(reason) } });
       onCompleted(target, plan, null);
     } finally {
       submitting.current = false;
@@ -385,14 +392,14 @@ export function ApplicationReview({ target, busy, preparedPlan, onBusyChange, on
       : t("아래에서 확인한 데이터만 휴지통으로 옮깁니다. 환경설정이 초기화될 수 있으며, 사용자 문서나 다른 앱의 공유 데이터는 선택하면 안 됩니다.")}</p></div>
     {preparing ? <p className="safety-dialog__intro" role="status"><LoaderCircle size={17} className="spin" aria-hidden="true" />{t("대상과 실행 중 여부를 확인하고 있습니다.")}</p> : null}
     {!bundle && plan ? <ul className="applications-candidates applications-review-candidates">{plan.relatedData.map((candidate) => <li key={candidate.id}><CandidateDetails candidate={candidate} /></li>)}</ul> : null}
-    {plan?.warnings.length ? <ul className="applications-review-warnings">{plan.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
+    {plan?.warnings.length ? <ul className="applications-review-warnings">{plan.warnings.map((warning, index) => <li key={index}>{appText(warning)}</li>)}</ul> : null}
     {bundle ? <label className="review-acknowledgement"><input type="checkbox" checked={noUninstaller} disabled={preparing || consumed || !plan} onChange={(event) => setNoUninstaller(event.target.checked)} />
       <span>{t("이 앱에 전용 제거 프로그램이 필요하지 않음을 확인했습니다.")}</span></label> : null}
     <label className="review-acknowledgement"><input type="checkbox" checked={acknowledged} disabled={preparing || consumed || !plan} onChange={(event) => setAcknowledged(event.target.checked)} />
       <span>{t(bundle ? "표시한 앱 본체만 이동하며, 설정과 문서는 남겨 둠을 확인했습니다." : "선택 데이터의 경로와 영향을 확인했으며, 해당 데이터만 이동합니다.")}</span></label>
     {running ? <p className="safety-dialog__intro" role="status"><LoaderCircle size={17} className="spin" aria-hidden="true" />{t("휴지통 이동을 처리하고 있습니다. 완료할 때까지 기다려 주세요.")}</p> : null}
     {result ? <div role="status"><ApplicationResult result={result} />{bundle && result.movedCount > 0 ? <p>{t("창을 닫으면 관련 데이터를 별도로 검토할 수 있습니다. 자동 선택하거나 삭제하지 않습니다.")}</p> : null}</div> : null}
-    {error ? <p className="safety-dialog__error" role="alert">{error}</p> : null}
+    {error ? <p className="safety-dialog__error" role="alert">{localizeNotice(error, t, appText)}</p> : null}
     <footer><button ref={cancelRef} type="button" className="secondary-button" disabled={running} onClick={onClose}>{t(consumed ? "닫기" : "취소")}</button>
       {!consumed ? <button type="button" className="trash-confirm-button" disabled={busy || preparing || !plan || !acknowledged || (bundle && !noUninstaller) || (!bundle && !plan?.relatedData.length)} onClick={() => void confirm()}>
         <Trash2 size={16} aria-hidden="true" />{t(bundle ? "앱 본체만 휴지통으로 이동" : "선택 데이터만 휴지통으로 이동")}

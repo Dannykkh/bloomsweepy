@@ -29,7 +29,7 @@ export function DockerManagementView({
   onStatusChange,
   onAskInChat,
 }: DockerManagementViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [preparingReview, setPreparingReview] = useState(false);
   const [preview, setPreview] = useState<DockerCleanupPreview | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
@@ -88,7 +88,7 @@ export function DockerManagementView({
             <strong id="docker-status-title">
               {loading ? t("Docker 사용량 확인 중") : ready ? t("Docker 연결됨") : t("Docker를 사용할 수 없음")}
             </strong>
-            <small>{status?.detail ?? t("Docker 설정을 확인하고 있습니다.")}</small>
+            <small>{status?.detail ? appText(status.detail) : t("Docker 설정을 확인하고 있습니다.")}</small>
             {status?.clientVersion || status?.serverVersion ? (
               <small>
                 CLI {status.clientVersion ?? t("확인 안 됨")} · Engine {status.serverVersion ?? t("확인 안 됨")}
@@ -147,13 +147,13 @@ export function DockerManagementView({
           <p className="docker-last-cleanup">
             {t("최근 Docker 정리 · {{date}} · {{message}}", {
               date: formatDate(status.lastCleanup.finishedAtUnixMs),
-              message: status.lastCleanup.message,
+              message: appText(status.lastCleanup.message),
             })}
           </p>
         ) : null}
 
-        {error ? <p className="docker-tool-error" role="alert">{error}</p> : null}
-        {reviewError ? <p className="docker-tool-error" role="alert">{reviewError}</p> : null}
+        {error ? <p className="docker-tool-error" role="alert">{appText(error)}</p> : null}
+        {reviewError ? <p className="docker-tool-error" role="alert">{appText(reviewError)}</p> : null}
       </section>
 
       <section className="docker-page-actions" aria-label={t("Docker 다음 작업")}>

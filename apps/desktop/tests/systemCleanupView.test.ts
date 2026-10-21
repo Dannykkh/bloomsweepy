@@ -96,7 +96,7 @@ function createHarness(initial: Record<string, unknown> = {}) {
     };
     if (id === "react/jsx-runtime") return require(id);
     if (id === "lucide-react") return new Proxy({}, { get: () => EmptyComponent });
-    if (id === "../i18n") return { useLanguage: () => ({ t: translate }) };
+    if (id === "../i18n") return { useLanguage: () => ({ t: translate, appText: (text: string) => text }) };
     if (id === "../lib/format") return { formatBytes: (value: number) => `${value}B`, formatCount: String, formatDate: String, formatDuration: (value: number) => `${value}ms` };
     if (id === "../lib/cleanupTree") return { cleanupReviewAcknowledgement };
     if (id === "../components/SafetyActionDialog") return { SafetyActionDialog: SafetyDialog };

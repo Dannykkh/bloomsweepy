@@ -19,7 +19,7 @@ export function ProcessTerminationDialog({
   onConfirm,
   onClose,
 }: ProcessTerminationDialogProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelButtonRef = useRef<HTMLButtonElement>(null);
   const [acknowledged, setAcknowledged] = useState(false);
@@ -120,7 +120,7 @@ export function ProcessTerminationDialog({
             {t("종료 요청 중…")}
           </div>
         ) : null}
-        {error ? <p className="safety-dialog__error" role="alert">{error}</p> : null}
+        {error ? <p className="safety-dialog__error" role="alert">{appText(error)}</p> : null}
 
         <footer>
           <button

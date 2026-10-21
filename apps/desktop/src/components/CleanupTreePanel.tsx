@@ -25,7 +25,7 @@ export function CleanupTreePanel({ tree, busy, error, result = null, progress = 
   onLoadChildren, onSelectionChange, onPrepare, onConfirm, onDismissPlan, onRefresh, onCancel,
   onOpen, onReveal,
 }: CleanupTreePanelProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [localBusy, setLocalBusy] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -171,7 +171,7 @@ export function CleanupTreePanel({ tree, busy, error, result = null, progress = 
         </div>
         <button type="button" className="secondary-button" disabled={locked} onClick={() => void run(onRefresh)}><RefreshCw size={16} aria-hidden="true" />{t("후보 다시 불러오기")}</button>
       </header>
-      {failure ? <p className="cleanup-tree__notice is-error" role="alert"><AlertTriangle size={18} aria-hidden="true" />{failure}</p> : null}
+      {failure ? <p className="cleanup-tree__notice is-error" role="alert"><AlertTriangle size={18} aria-hidden="true" />{appText(failure)}</p> : null}
       {locked ? <div className="cleanup-tree__branch-state" role="status">{t("확인 중…")}
         {onCancel ? <button type="button" className="text-button" onClick={onCancel}>{t("작업 중단 요청")}</button> : null}
       </div> : null}

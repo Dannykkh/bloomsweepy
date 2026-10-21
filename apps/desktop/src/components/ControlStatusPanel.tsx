@@ -128,7 +128,7 @@ export function ControlStatusPanel({
   inspectionAccessError,
   onToggleInspectionAccess,
 }: ControlStatusPanelProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const copy = connectionCopy(status, t);
   const operation = status.activeOperation;
   const pendingReview = status.pendingReview;
@@ -174,7 +174,7 @@ export function ControlStatusPanel({
 
         {status.lastError ? (
           <p className="control-status-panel__error" role="alert">
-            {t("로컬 CLI 요청 오류: {{detail}}", { detail: status.lastError })}
+            {t("로컬 CLI 요청 오류: {{detail}}", { detail: appText(status.lastError) })}
           </p>
         ) : null}
       </div>
@@ -252,7 +252,7 @@ export function ControlStatusPanel({
         <div className="control-permission">
           <div><strong>{t("시스템·앱 조회 허용")}</strong>
             <p id="control-inspection-description">{t("외부 AI에 CPU·메모리·작업·설치 앱의 제한된 목록 공개를 허용합니다. 실행·삭제 승인은 아닙니다.")}</p>
-            {inspectionAccessError ? <small role="alert">{inspectionAccessError}</small> : null}
+            {inspectionAccessError ? <small role="alert">{appText(inspectionAccessError)}</small> : null}
           </div>
           <label className="control-permission__scan-button"><input type="checkbox" checked={status.inspectionAllowed === true} disabled={!status.bridgeAvailable || permissionControlsLocked || updatingInspectionAccess || !onToggleInspectionAccess} aria-describedby="control-inspection-description" onChange={onToggleInspectionAccess} />{t("시스템·앱 조회 허용")}</label>
         </div>

@@ -31,7 +31,7 @@ import type {
   FileCatalogStatus,
   ScanUiState,
 } from "../types";
-import { useLanguage, type MessageKey } from "../i18n";
+import { useLanguage, type MessageKey, type MessageValues } from "../i18n";
 
 interface FastFileSearchViewProps {
   selectedRoot: string | null;
@@ -51,6 +51,7 @@ interface FastFileSearchViewProps {
 
 type KindFilter = "all" | "file" | "directory";
 type SearchState = "idle" | "searching" | "success" | "error";
+type LocalNotice = { key: MessageKey; values?: MessageValues };
 
 const kindFilters: Array<{ id: KindFilter; label: MessageKey }> = [
   { id: "all", label: "전체" },
@@ -87,7 +88,7 @@ export function FastFileSearchView({
   onCancelCatalog,
   onClearCatalog,
 }: FastFileSearchViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<KindFilter>("all");
   const [extensions, setExtensions] = useState("");
@@ -96,7 +97,7 @@ export function FastFileSearchView({
   const [searchState, setSearchState] = useState<SearchState>("idle");
   const [searchReport, setSearchReport] = useState<FileCatalogSearchReport | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [inspectionMessage, setInspectionMessage] = useState<string | null>(null);
+  const [inspectionMessage, setInspectionMessage] = useState<LocalNotice | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [showBuildProgress, setShowBuildProgress] = useState(false);
   const requestSequence = useRef(0);
@@ -165,7 +166,7 @@ export function FastFileSearchView({
         })
         .catch((reason: unknown) => {
           if (requestSequence.current !== sequence) return;
-          setSearchError(normalizeError(reason, t("알 수 없는 오류가 발생했습니다"), t));
+          setSearchError(normalizeError(reason, "알 수 없는 오류가 발생했습니다"));
           setSearchState("error");
         });
     }, 140);
@@ -179,16 +180,16 @@ export function FastFileSearchView({
       const outcome = await inspectFile(path, entryKind);
       setInspectionMessage(
         entryKind === "directory"
-          ? t("{{name}} 폴더의 위치를 표시했습니다.", { name })
+          ? { key: "{{name}} 폴더의 위치를 표시했습니다.", values: { name } }
           : outcome === "opened"
-            ? t("{{name}} 파일을 기본 앱으로 열었습니다.", { name })
-            : t("{{name}}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.", { name }),
+            ? { key: "{{name}} 파일을 기본 앱으로 열었습니다.", values: { name } }
+            : { key: "{{name}}은 직접 열도록 허용한 문서·미디어 형식이 아니라 폴더에서 위치만 표시했습니다.", values: { name } },
       );
     } catch (reason) {
-      setInspectionMessage(t("{{name}}을 열지 못했습니다: {{detail}}", {
+      setInspectionMessage({ key: "{{name}}을 열지 못했습니다: {{detail}}", values: {
         name,
-        detail: normalizeError(reason, t("알 수 없는 오류가 발생했습니다"), t),
-      }));
+        detail: normalizeError(reason, "알 수 없는 오류가 발생했습니다"),
+      } });
     }
   }
 
@@ -196,12 +197,12 @@ export function FastFileSearchView({
     setInspectionMessage(null);
     try {
       await revealPath(path);
-      setInspectionMessage(t("{{name}} 위치를 파일 탐색기에서 표시했습니다.", { name }));
+      setInspectionMessage({ key: "{{name}} 위치를 파일 탐색기에서 표시했습니다.", values: { name } });
     } catch (reason) {
-      setInspectionMessage(t("{{name}} 위치를 표시하지 못했습니다: {{detail}}", {
+      setInspectionMessage({ key: "{{name}} 위치를 표시하지 못했습니다: {{detail}}", values: {
         name,
-        detail: normalizeError(reason, t("알 수 없는 오류가 발생했습니다"), t),
-      }));
+        detail: normalizeError(reason, "알 수 없는 오류가 발생했습니다"),
+      } });
     }
   }
 
@@ -450,7 +451,7 @@ export function FastFileSearchView({
       {error ? (
         <section className="document-error" role="alert">
           <AlertTriangle size={18} aria-hidden="true" />
-          <div><strong>{t("파일 목록을 만들지 못했습니다")}</strong><p>{friendlySearchError(error, t)}</p></div>
+          <div><strong>{t("파일 목록을 만들지 못했습니다")}</strong><p>{friendlySearchError(error, t, appText)}</p></div>
         </section>
       ) : null}
 
@@ -476,7 +477,7 @@ export function FastFileSearchView({
                 {lastBuild.issues.slice(0, 20).map((issue, issueIndex) => (
                   <li key={`${issue.path ?? "unknown"}-${issueIndex}`}>
                     <strong title={issue.path ?? undefined}>{issue.path ?? t("경로 정보 없음")}</strong>
-                    <span>{issue.message}</span>
+                    <span>{appText(issue.message)}</span>
                   </li>
                 ))}
               </ul>
@@ -489,7 +490,7 @@ export function FastFileSearchView({
       {searchError ? (
         <section className="document-error" role="alert">
           <AlertTriangle size={18} aria-hidden="true" />
-          <div><strong>{t("검색 조건을 이해하지 못했습니다")}</strong><p>{friendlySearchError(searchError, t)}</p></div>
+          <div><strong>{t("검색 조건을 이해하지 못했습니다")}</strong><p>{friendlySearchError(searchError, t, appText)}</p></div>
         </section>
       ) : null}
 
@@ -561,7 +562,7 @@ export function FastFileSearchView({
             </div>
           )}
 
-          {inspectionMessage ? <p className="document-inspection-status" role="status" aria-live="polite">{inspectionMessage}</p> : null}
+          {inspectionMessage ? <p className="document-inspection-status" role="status" aria-live="polite">{localizeNotice(inspectionMessage, t, appText)}</p> : null}
         </section>
       ) : null}
 
@@ -602,13 +603,18 @@ function pathsEqual(left: string, right: string): boolean {
 
 type Translator = ReturnType<typeof useLanguage>["t"];
 
-function normalizeError(reason: unknown, fallback: string, t: Translator): string {
-  if (reason instanceof Error) return friendlySearchError(reason.message, t);
-  if (typeof reason === "string") return friendlySearchError(reason, t);
+function normalizeError(reason: unknown, fallback: string): string {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "string") return reason;
   return fallback;
 }
 
-function friendlySearchError(message: string, t: Translator): string {
+function localizeNotice(notice: LocalNotice, t: Translator, appText: (message: string) => string): string {
+  const values = notice.values;
+  return t(notice.key, values?.detail === undefined ? values : { ...values, detail: friendlySearchError(String(values.detail), t, appText) });
+}
+
+function friendlySearchError(message: string, t: Translator, appText: (message: string) => string): string {
   const detail = message
     .replace(/^invalid file search query:\s*/i, "")
     .replace(/^검색 조건이 올바르지 않습니다:\s*/, "")
@@ -640,5 +646,5 @@ function friendlySearchError(message: string, t: Translator): string {
   if (message !== detail) {
     return t("검색 조건을 확인하세요. 자세한 예시는 ‘검색을 더 정확하게 하는 법’에서 볼 수 있습니다.");
   }
-  return message;
+  return appText(message);
 }

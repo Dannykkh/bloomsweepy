@@ -11,7 +11,7 @@ import { StorageSectionNav } from "./components/StorageSectionNav";
 import { EmptyTrashControl } from "./components/EmptyTrashControl";
 import { CleanupTreePanel } from "./components/CleanupTreePanel";
 import type { CleanupTreeSource, CleanupTreeView } from "./types/cleanupTree";
-import { ApplicationsView } from "./views/ApplicationsView";
+import { ApplicationsView, type ApplicationStatusNotice } from "./views/ApplicationsView";
 import { MacManagementView } from "./views/MacManagementView";
 import { WindowsManagementView } from "./views/WindowsManagementView";
 import { AssistantAppToolReview, appToolView, type AppToolReviewCompletion } from "./components/AssistantAppToolCard";
@@ -124,11 +124,16 @@ import { findVolumeForPath } from "./lib/volumePath";
 import { DashboardView } from "./views/DashboardView";
 import { DockerManagementView } from "./views/DockerManagementView";
 import { PerformanceView } from "./views/PerformanceView";
-import { useLanguage } from "./i18n";
+import { useLanguage, type MessageKey } from "./i18n";
 
 interface AssistantLaunchRequest {
   id: number;
   target: "docker";
+}
+
+interface DashboardIssue {
+  message: MessageKey | null;
+  detail: string;
 }
 
 const storageViews = new Set<ViewId>([
@@ -157,7 +162,9 @@ const unavailableControlStatus: ControlStatus = {
 };
 
 function App() {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
+  const displayAppText = (value: string | null): string | null =>
+    value === null ? null : appText(value);
   const [activeView, setActiveView] = useState<ViewId>("dashboard");
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [system, setSystem] = useState<SystemOverview | null>(null);
@@ -214,11 +221,16 @@ function App() {
   const [actionHistory, setActionHistory] = useState<ActionHistoryReport | null>(null);
   const [recentFiles, setRecentFiles] = useState<FileCatalogRecentReport | null>(null);
   const [dashboardLoading, setDashboardLoading] = useState(true);
-  const [dashboardError, setDashboardError] = useState<string | null>(null);
+  const [dashboardIssues, setDashboardIssues] = useState<DashboardIssue[]>([]);
+  const dashboardError = dashboardIssues.length
+    ? dashboardIssues.map(({ message, detail }) => message
+      ? t(message, { detail: appText(detail) })
+      : appText(detail)).join(" · ")
+    : null;
   const [trashRunning, setTrashRunning] = useState(false);
   const [emptyTrashRunning, setEmptyTrashRunning] = useState(false);
   const [applicationRunning, setApplicationRunning] = useState(false);
-  const [applicationStatus, setApplicationStatus] = useState("");
+  const [applicationStatus, setApplicationStatus] = useState<ApplicationStatusNotice | null>(null);
   const [applicationsVisited, setApplicationsVisited] = useState(false);
   const [trashProgress, setTrashProgress] = useState<TrashProgress | null>(null);
   const [trashResult, setTrashResult] = useState<TrashOperationResult | null>(null);
@@ -255,9 +267,18 @@ function App() {
     useState<PendingCleanupPlanDetail | null>(null);
   const [pendingCleanupPlanLoading, setPendingCleanupPlanLoading] = useState(false);
   const [pendingCleanupPlanError, setPendingCleanupPlanError] = useState<string | null>(null);
-  const [backgroundScanTerminalAnnouncement, setBackgroundScanTerminalAnnouncement] =
-    useState("");
-  const [backgroundScanErrorAnnouncement, setBackgroundScanErrorAnnouncement] = useState("");
+  const [backgroundScanTerminalState, setBackgroundScanTerminalState] =
+    useState<"success" | "cancelled" | null>(null);
+  const [backgroundScanErrorDetail, setBackgroundScanErrorDetail] = useState<string | null>(null);
+  const backgroundScanTerminalAnnouncement = backgroundScanTerminalState === "success"
+    ? t("파일 검사가 완료됐습니다.")
+    : backgroundScanTerminalState === "cancelled" ? t("파일 검사를 취소했습니다.") : "";
+  const backgroundScanErrorAnnouncement = backgroundScanErrorDetail === null ? ""
+    : t("파일 검사를 완료하지 못했습니다. {{detail}}", {
+      detail: backgroundScanErrorDetail
+        ? appText(backgroundScanErrorDetail)
+        : t("오류 내용을 확인해 주세요."),
+    });
   const controlStatusRevision = useRef(0);
   const controlScanOperation = useRef<string | null>(null);
   const loadedScanGeneration = useRef(0);
@@ -292,27 +313,19 @@ function App() {
   useEffect(() => {
     if (activeView === "overview") {
       announcedScanState.current = scanState;
-      setBackgroundScanTerminalAnnouncement("");
-      setBackgroundScanErrorAnnouncement("");
+      setBackgroundScanTerminalState(null);
+      setBackgroundScanErrorDetail(null);
       return;
     }
 
     if (announcedScanState.current === scanState && scanState !== "error") return;
     announcedScanState.current = scanState;
-    setBackgroundScanTerminalAnnouncement(
-      scanState === "success"
-        ? t("파일 검사가 완료됐습니다.")
-        : scanState === "cancelled"
-          ? t("파일 검사를 취소했습니다.")
-          : "",
+    // Keep event state, not translated copy, so a language change can update the
+    // existing announcement without restarting a scan or subscribing again.
+    setBackgroundScanTerminalState(
+      scanState === "success" || scanState === "cancelled" ? scanState : null,
     );
-    setBackgroundScanErrorAnnouncement(
-      scanState === "error"
-        ? t("파일 검사를 완료하지 못했습니다. {{detail}}", {
-            detail: error ?? t("오류 내용을 확인해 주세요."),
-          })
-        : "",
-    );
+    setBackgroundScanErrorDetail(scanState === "error" ? error ?? "" : null);
   }, [activeView, error, scanState]);
 
   async function loadControlScanResult(
@@ -521,24 +534,24 @@ function App() {
     ]).then(([systemResult, historyResult, recentResult]) => {
       if (disposed) return;
 
-      const failures: string[] = [];
+      const failures: DashboardIssue[] = [];
       if (systemResult.status === "fulfilled") {
         setSystem(systemResult.value);
       } else {
-        failures.push(t("드라이브: {{detail}}", { detail: normalizeError(systemResult.reason) }));
+        failures.push({ message: "드라이브: {{detail}}", detail: normalizeError(systemResult.reason) });
       }
       if (historyResult.status === "fulfilled") {
         setActionHistory(historyResult.value);
       } else {
-        failures.push(t("최근 정리: {{detail}}", { detail: normalizeError(historyResult.reason) }));
+        failures.push({ message: "최근 정리: {{detail}}", detail: normalizeError(historyResult.reason) });
       }
       if (recentResult.status === "fulfilled") {
         setRecentFiles(recentResult.value);
       } else {
-        failures.push(t("최근 파일: {{detail}}", { detail: normalizeError(recentResult.reason) }));
+        failures.push({ message: "최근 파일: {{detail}}", detail: normalizeError(recentResult.reason) });
       }
 
-      setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
+      setDashboardIssues(failures);
       setDashboardLoading(false);
     });
 
@@ -744,32 +757,32 @@ function App() {
   async function refreshDashboard() {
     if (dashboardLoading || selectionBlocked) return;
     setDashboardLoading(true);
-    setDashboardError(null);
+    setDashboardIssues([]);
 
     const [systemResult, historyResult, recentResult] = await Promise.allSettled([
       getSystemOverview(),
       getActionHistory(),
       getRecentFileCatalogEntries(),
     ]);
-    const failures: string[] = [];
+    const failures: DashboardIssue[] = [];
 
     if (systemResult.status === "fulfilled") {
       setSystem(systemResult.value);
     } else {
-      failures.push(t("드라이브: {{detail}}", { detail: normalizeError(systemResult.reason) }));
+      failures.push({ message: "드라이브: {{detail}}", detail: normalizeError(systemResult.reason) });
     }
     if (historyResult.status === "fulfilled") {
       setActionHistory(historyResult.value);
     } else {
-      failures.push(t("최근 정리: {{detail}}", { detail: normalizeError(historyResult.reason) }));
+      failures.push({ message: "최근 정리: {{detail}}", detail: normalizeError(historyResult.reason) });
     }
     if (recentResult.status === "fulfilled") {
       setRecentFiles(recentResult.value);
     } else {
-      failures.push(t("최근 파일: {{detail}}", { detail: normalizeError(recentResult.reason) }));
+      failures.push({ message: "최근 파일: {{detail}}", detail: normalizeError(recentResult.reason) });
     }
 
-    setDashboardError(failures.length > 0 ? failures.join(" · ") : null);
+    setDashboardIssues(failures);
     setDashboardLoading(false);
   }
 
@@ -919,7 +932,7 @@ function App() {
       const plan = await getPendingCleanupPlan();
       if (!plan) {
         setPendingCleanupPlan(null);
-        setPendingCleanupPlanError(t("확인할 정리 계획이 없거나 확인 시간이 지났습니다."));
+        setPendingCleanupPlanError("확인할 정리 계획이 없거나 확인 시간이 지났습니다.");
         return;
       }
       setPendingCleanupPlan(plan);
@@ -1201,9 +1214,7 @@ function App() {
     try {
       await revealPath(path);
     } catch (reason) {
-      setDashboardError(
-        t("파일 위치를 열지 못했습니다. {{detail}}", { detail: normalizeError(reason) }),
-      );
+      setDashboardIssues([{ message: "파일 위치를 열지 못했습니다. {{detail}}", detail: normalizeError(reason) }]);
     }
   }
 
@@ -1609,12 +1620,10 @@ function App() {
       setFileCatalogProgress(null);
       try {
         setRecentFiles(await getRecentFileCatalogEntries());
-        if (options.stayOnView) setDashboardError(null);
+        if (options.stayOnView) setDashboardIssues([]);
       } catch (reason) {
         if (options.stayOnView) {
-          setDashboardError(
-            t("최근 파일을 읽지 못했습니다. {{detail}}", { detail: normalizeError(reason) }),
-          );
+          setDashboardIssues([{ message: "최근 파일을 읽지 못했습니다. {{detail}}", detail: normalizeError(reason) }]);
         }
       }
     } catch (reason) {
@@ -1627,7 +1636,7 @@ function App() {
         setFileCatalogError(message);
       }
       setFileCatalogProgress(null);
-      if (options.stayOnView) setDashboardError(message);
+      if (options.stayOnView) setDashboardIssues([{ message: null, detail: message }]);
     }
   }
 
@@ -1803,7 +1812,7 @@ function App() {
   const controlSettings: ControlStatusPanelProps = {
     status: controlStatus,
     updatingPermissionLifetime: permissionLifetimeUpdating,
-    permissionLifetimeError,
+    permissionLifetimeError: displayAppText(permissionLifetimeError),
     permissionControlsLocked: permissionLifetimeUpdating,
     permissionLifetimeLocked: selectionBlocked || controlAccessUpdating || controlScanAccessUpdating || controlCleanupAccessUpdating || inspectionUpdating,
     onPermissionLifetimeChange: lifetime => void changePermissionLifetime(lifetime),
@@ -1811,17 +1820,17 @@ function App() {
     onAssistantPermissionModeChange: mode => void changeAssistantPermissionMode(mode),
     canEnableSearch: Boolean(fileCatalog || documentIndex),
     updatingSearchAccess: controlAccessUpdating,
-    searchAccessError: controlAccessError,
+    searchAccessError: displayAppText(controlAccessError),
     onToggleSearchAccess: () => void toggleControlSearchAccess(),
-    scanAccessError: controlScanAccessError,
+    scanAccessError: displayAppText(controlScanAccessError),
     canEnableCleanup: controlStatus.bridgeAvailable && !selectionBlocked,
     cleanupAccessLocked: selectionBlocked,
     updatingCleanupAccess: controlCleanupAccessUpdating,
-    cleanupAccessError: controlCleanupAccessError,
+    cleanupAccessError: displayAppText(controlCleanupAccessError),
     onToggleCleanupAccess: () => void toggleControlCleanupAccess(),
     onReviewPending: () => void openPendingCleanupReview(),
     updatingInspectionAccess: inspectionUpdating,
-    inspectionAccessError: inspectionError,
+    inspectionAccessError: displayAppText(inspectionError),
     onToggleInspectionAccess: () => void toggleInspectionAccess(),
   };
 
@@ -1874,7 +1883,7 @@ function App() {
       ) : null}
       {!recoveryChecking && recoveryCheckError && !recoveryErrorDismissed ? (
         <RecoveryCheckNotice
-          error={recoveryCheckError}
+          error={displayAppText(recoveryCheckError)}
           onRetry={() => void retryActionRecovery()}
           onDismiss={() => setRecoveryErrorDismissed(true)}
         />
@@ -1887,7 +1896,7 @@ function App() {
         <RecoveryNotice
           report={recoveryReport}
           openingTrash={openingSystemTrash}
-          actionError={recoveryActionError}
+          actionError={displayAppText(recoveryActionError)}
           onOpenTrash={() => void showSystemTrash()}
           onDismiss={() => setRecoveryDismissed(true)}
         />
@@ -1898,11 +1907,11 @@ function App() {
           report={report}
           progress={progress}
           scanState={scanState}
-          scanError={error}
+          scanError={displayAppText(error)}
           cleanupReport={cleanupReport}
           cleanupProgress={cleanupProgress}
           cleanupState={cleanupScanState}
-          cleanupError={cleanupError}
+          cleanupError={displayAppText(cleanupError)}
           actionHistory={actionHistory}
           recentFiles={recentFiles}
           fileCatalog={fileCatalog}
@@ -1968,7 +1977,7 @@ function App() {
         />
         </div>
       ) : null}
-      <span className="sr-only" role="status" aria-live="polite">{applicationStatus}</span>
+      <span className="sr-only" role="status" aria-live="polite">{applicationStatus ? t(applicationStatus.key, applicationStatus.values) : ""}</span>
       {activeView === "overview" ? (
         <OverviewView
           platform={system?.platform ?? null}
@@ -1977,15 +1986,15 @@ function App() {
           report={report}
           progress={progress}
           state={scanState}
-          error={error}
+          error={displayAppText(error)}
           driveReport={driveReport}
           driveProgress={driveProgress}
           driveState={driveScanState}
-          driveError={driveError}
+          driveError={displayAppText(driveError)}
           directoryReport={directoryReport}
           directoryProgress={directoryProgress}
           directoryState={directoryScanState}
-          directoryError={directoryError}
+          directoryError={displayAppText(directoryError)}
           directoryBreadcrumbs={directoryBreadcrumbs}
           blocked={
             cleanupTreeBusy ||
@@ -2033,7 +2042,7 @@ function App() {
           lastBuild={fileCatalogBuild}
           progress={fileCatalogProgress}
           state={fileCatalogState}
-          error={fileCatalogError}
+          error={displayAppText(fileCatalogError)}
           stale={fileCatalogStale}
           blocked={
             recoveryChecking ||
@@ -2058,7 +2067,7 @@ function App() {
           lastBuild={documentBuild}
           progress={documentProgress}
           state={documentIndexState}
-          error={documentError}
+          error={displayAppText(documentError)}
           blocked={
             recoveryChecking ||
             trashRunning ||
@@ -2080,7 +2089,7 @@ function App() {
         <DockerManagementView
           status={dockerStatus}
           loading={dockerStatusLoading}
-          error={dockerStatusError}
+          error={displayAppText(dockerStatusError)}
           onRefresh={refreshDockerStatus}
           onStatusChange={setDockerStatus}
           onAskInChat={openDockerConversation}
@@ -2124,7 +2133,7 @@ function App() {
           {cleanupMode === "tree" ? <CleanupTreePanel
             tree={cleanupTree}
             busy={selectionBlocked}
-            error={cleanupTreeError ?? (trashResultSource === "cleanup-tree" ? trashError : null)}
+            error={displayAppText(cleanupTreeError ?? (trashResultSource === "cleanup-tree" ? trashError : null))}
             result={trashResultSource === "cleanup-tree" ? trashResult : null}
             progress={trashResultSource === "cleanup-tree" ? trashProgress : null}
             onLoadChildren={(parentId, offset) => changeCandidateTree((tree) => loadCleanupTreeChildren(tree.treeId, parentId, offset))}
@@ -2141,7 +2150,7 @@ function App() {
           report={cleanupReport}
           progress={cleanupProgress}
           state={cleanupScanState}
-          error={cleanupError}
+          error={displayAppText(cleanupError)}
           blocked={
             cleanupTreeBusy ||
             scanState === "scanning" ||
@@ -2156,7 +2165,7 @@ function App() {
           actionRunning={trashRunning && trashResultSource === "cleanup"}
           actionProgress={trashResultSource === "cleanup" ? trashProgress : null}
           actionResult={trashResultSource === "cleanup" ? trashResult : null}
-          actionError={trashResultSource === "cleanup" ? trashError : null}
+          actionError={displayAppText(trashResultSource === "cleanup" ? trashError : null)}
           onStart={() => void runCleanupScan()}
           onCancel={() => void stopCleanupScan()}
           onMoveToTrash={moveCleanupCandidates}
@@ -2171,7 +2180,7 @@ function App() {
           actionRunning={trashRunning && trashResultSource === "duplicates"}
           actionProgress={trashResultSource === "duplicates" ? trashProgress : null}
           actionResult={trashResultSource === "duplicates" ? trashResult : null}
-          actionError={trashResultSource === "duplicates" ? trashError : null}
+          actionError={displayAppText(trashResultSource === "duplicates" ? trashError : null)}
           onStartScan={() => void runScan()}
           onMoveToTrash={moveDuplicateFiles}
           onCancelAction={() => void stopTrashAction()}
@@ -2184,7 +2193,7 @@ function App() {
           dockerStatus={dockerStatus}
           dockerLoading={dockerStatusLoading}
           dockerChanging={dockerStatusChanging}
-          dockerError={dockerStatusError}
+          dockerError={displayAppText(dockerStatusError)}
           onConfigChange={(nextConfig) => void updateScanConfig(nextConfig)}
           onDockerEnabledChange={updateDockerEnabled}
           onOpenDocker={() => navigate("docker")}
@@ -2201,7 +2210,7 @@ function App() {
         reviewCount={pendingCleanupPlan?.reviewCount ?? 0}
         busy={trashRunning}
         progress={trashProgress}
-        error={pendingCleanupPlanError ?? trashError}
+        error={displayAppText(pendingCleanupPlanError ?? trashError)}
         intro={t("AI에는 종류와 용량 요약만 전달하고, 파일 이동은 앱에서 다시 확인합니다.")}
         items={(pendingCleanupPlan?.items ?? []).map((item) => ({
           path: displayPath(item.path),
@@ -2223,7 +2232,7 @@ function App() {
           <span>
             <strong>{t("최종 확인 대기")}</strong>
             <small>
-              {pendingCleanupPlanError ??
+              {displayAppText(pendingCleanupPlanError) ??
                 t("{{count}}개 · 앱에서 정확한 경로를 확인해야 실행됩니다.", {
                   count: controlStatus.pendingReview.itemCount,
                 })}
@@ -2317,7 +2326,7 @@ function App() {
     </AppShell>
     </div>
     {appToolReview ? <AssistantAppToolReview key={`${appToolReview.result.capability}-${appToolReview.result.capturedAtUnixMs}`} result={appToolReview.result} busy={selectionBlocked} onBusyChange={setApplicationRunning} onClose={closeAppToolReview} onCompleted={completedAppToolReview} /> : null}
-    {appToolNotice && !appToolReview ? <div className="scan-status-dock"><p role="status">{appToolNotice}</p><button type="button" onClick={() => setAppToolNotice(null)}>{t("닫기")}</button></div> : null}
+    {appToolNotice && !appToolReview ? <div className="scan-status-dock"><p role="status">{appText(appToolNotice)}</p><button type="button" onClick={() => setAppToolNotice(null)}>{t("닫기")}</button></div> : null}
   </>;
 }
 
@@ -2330,16 +2339,9 @@ function displayPath(path: string): string {
 function normalizeError(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
-  switch (document.documentElement.lang) {
-    case "ko":
-      return "알 수 없는 오류가 발생했습니다";
-    case "ja":
-      return "不明なエラーが発生しました";
-    case "zh-CN":
-      return "发生未知错误";
-    default:
-      return "An unknown error occurred";
-  }
+  // Store the app-owned catalog key, not whichever language happened to be
+  // active when an asynchronous operation rejected. Display localizes it.
+  return "알 수 없는 오류가 발생했습니다";
 }
 
 export default App;

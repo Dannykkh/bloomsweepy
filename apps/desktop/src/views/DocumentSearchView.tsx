@@ -29,7 +29,7 @@ import type {
   DocumentSearchReport,
   ScanUiState,
 } from "../types";
-import { useLanguage, type MessageKey } from "../i18n";
+import { useLanguage, type MessageKey, type MessageValues, type Translate } from "../i18n";
 
 interface DocumentSearchViewProps {
   selectedRoot: string | null;
@@ -46,6 +46,7 @@ interface DocumentSearchViewProps {
 
 type SearchState = "idle" | "searching" | "success" | "error";
 type DocumentFilter = "all" | "text" | "office" | "pdf";
+type LocalNotice = { key: MessageKey; values?: MessageValues };
 
 const textExtensions = [
   "txt",
@@ -122,13 +123,13 @@ export function DocumentSearchView({
   onStartIndex,
   onCancelIndex,
 }: DocumentSearchViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<DocumentFilter>("all");
   const [searchState, setSearchState] = useState<SearchState>("idle");
   const [searchReport, setSearchReport] = useState<DocumentSearchReport | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [inspectionMessage, setInspectionMessage] = useState<string | null>(null);
+  const [inspectionMessage, setInspectionMessage] = useState<LocalNotice | null>(null);
   const [showIndexProgress, setShowIndexProgress] = useState(false);
   const scopeChanged = Boolean(
     selectedRoot && index && !pathsEqual(selectedRoot, index.root),
@@ -172,7 +173,7 @@ export function DocumentSearchView({
       setSearchReport(report);
       setSearchState("success");
     } catch (reason) {
-      setSearchError(normalizeError(reason, t("알 수 없는 오류가 발생했습니다")));
+      setSearchError(normalizeError(reason, "알 수 없는 오류가 발생했습니다"));
       setSearchState("error");
     }
   }
@@ -183,14 +184,14 @@ export function DocumentSearchView({
       const outcome = await inspectFile(path);
       setInspectionMessage(
         outcome === "opened"
-          ? t("{{name}} 문서를 기본 앱으로 열었습니다.", { name })
-          : t("{{name}}은 직접 열도록 허용한 문서 형식이 아니라 폴더에서 위치만 표시했습니다.", { name }),
+          ? { key: "{{name}} 문서를 기본 앱으로 열었습니다.", values: { name } }
+          : { key: "{{name}}은 직접 열도록 허용한 문서 형식이 아니라 폴더에서 위치만 표시했습니다.", values: { name } },
       );
     } catch (reason) {
-      setInspectionMessage(t("{{name}} 문서를 열지 못했습니다: {{detail}}", {
+      setInspectionMessage({ key: "{{name}} 문서를 열지 못했습니다: {{detail}}", values: {
         name,
-        detail: normalizeError(reason, t("알 수 없는 오류가 발생했습니다")),
-      }));
+        detail: normalizeError(reason, "알 수 없는 오류가 발생했습니다"),
+      } });
     }
   }
 
@@ -198,12 +199,12 @@ export function DocumentSearchView({
     setInspectionMessage(null);
     try {
       await revealPath(path);
-      setInspectionMessage(t("{{name}} 위치를 파일 탐색기에서 표시했습니다.", { name }));
+      setInspectionMessage({ key: "{{name}} 위치를 파일 탐색기에서 표시했습니다.", values: { name } });
     } catch (reason) {
-      setInspectionMessage(t("{{name}} 위치를 표시하지 못했습니다: {{detail}}", {
+      setInspectionMessage({ key: "{{name}} 위치를 표시하지 못했습니다: {{detail}}", values: {
         name,
-        detail: normalizeError(reason, t("알 수 없는 오류가 발생했습니다")),
-      }));
+        detail: normalizeError(reason, "알 수 없는 오류가 발생했습니다"),
+      } });
     }
   }
 
@@ -364,7 +365,7 @@ export function DocumentSearchView({
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
             <strong>{t("문서를 검색할 수 있게 준비하지 못했습니다")}</strong>
-            <p>{error}</p>
+            <p>{appText(error)}</p>
           </div>
         </section>
       ) : null}
@@ -410,7 +411,7 @@ export function DocumentSearchView({
                 {lastBuild.issues.slice(0, 20).map((issue, issueIndex) => (
                   <li key={`${issue.path ?? "unknown"}-${issueIndex}`}>
                     <strong title={issue.path ?? undefined}>{issue.path ?? t("경로 정보 없음")}</strong>
-                    <span>{issue.message}</span>
+                    <span>{appText(issue.message)}</span>
                   </li>
                 ))}
               </ul>
@@ -427,7 +428,7 @@ export function DocumentSearchView({
           <AlertTriangle size={18} aria-hidden="true" />
           <div>
             <strong>{t("문서를 검색하지 못했습니다")}</strong>
-            <p>{searchError}</p>
+            <p>{appText(searchError)}</p>
           </div>
         </section>
       ) : null}
@@ -513,7 +514,7 @@ export function DocumentSearchView({
 
           {inspectionMessage ? (
             <p className="document-inspection-status" role="status" aria-live="polite">
-              {inspectionMessage}
+              {localizeNotice(inspectionMessage, t, appText)}
             </p>
           ) : null}
         </section>
@@ -553,4 +554,9 @@ function normalizeError(reason: unknown, fallback: string): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === "string") return reason;
   return fallback;
+}
+
+function localizeNotice(notice: LocalNotice, t: Translate, appText: (message: string) => string): string {
+  const values = notice.values;
+  return t(notice.key, values?.detail === undefined ? values : { ...values, detail: appText(String(values.detail)) });
 }

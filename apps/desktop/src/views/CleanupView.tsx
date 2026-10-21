@@ -90,12 +90,13 @@ export function CleanupView({
   onMoveToTrash,
   onCancelAction,
 }: CleanupViewProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [filter, setFilter] = useState<CleanupFilter>("all");
   const inspection = useFileInspectionActions({ scopeKey: report });
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogError, setDialogError] = useState<string | null>(null);
+  const trashError = dialogError ?? actionError;
   const scanning = state === "scanning";
 
   useEffect(() => {
@@ -148,7 +149,7 @@ export function CleanupView({
       });
       setDialogOpen(false);
     } catch (reason) {
-      setDialogError(normalizeError(reason, t("휴지통 이동을 완료하지 못했습니다")));
+      setDialogError(normalizeError(reason, "휴지통 이동을 완료하지 못했습니다"));
     }
   }
 
@@ -193,7 +194,7 @@ export function CleanupView({
           </strong>
           <p>
             {error
-              ? error
+              ? appText(error)
               : scanning
                 ? t("정리 후보 위치를 준비하고 있습니다")
                 : report
@@ -393,7 +394,7 @@ export function CleanupView({
                     </div>
                     <div className="cleanup-candidate__evidence">
                       {candidate.evidence.map((evidence) => (
-                        <span key={evidence}>{evidence}</span>
+                        <span key={evidence}>{appText(evidence)}</span>
                       ))}
                     </div>
                     <div className="cleanup-candidate__metric">
@@ -432,7 +433,7 @@ export function CleanupView({
                         <strong>{candidate.displayName}</strong>
                         <span title={candidate.registryPath}>{candidate.registryPath}</span>
                         {candidate.evidence.map((evidence) => (
-                          <small key={evidence}>{evidence}</small>
+                          <small key={evidence}>{appText(evidence)}</small>
                         ))}
                       </div>
                       <span>{candidate.registryScope === "machine" ? t("컴퓨터") : t("사용자")}</span>
@@ -449,7 +450,7 @@ export function CleanupView({
           {actionError ? (
             <div className="notice-panel trash-action-error" role="alert">
               <AlertTriangle size={18} aria-hidden="true" />
-              <p>{actionError} {t("기존 결과는 안전을 위해 폐기했습니다. 다시 스캔하세요.")}</p>
+              <p>{appText(actionError)} {t("기존 결과는 안전을 위해 폐기했습니다. 다시 스캔하세요.")}</p>
             </div>
           ) : null}
           <div className="empty-panel empty-panel--page">
@@ -471,7 +472,7 @@ export function CleanupView({
           : undefined}
         busy={actionRunning}
         progress={actionProgress}
-        error={dialogError ?? actionError}
+        error={trashError === null ? null : appText(trashError)}
         onConfirm={(reviewAcknowledged) => void confirmTrashMove(reviewAcknowledged)}
         onCancel={onCancelAction}
         onClose={() => setDialogOpen(false)}

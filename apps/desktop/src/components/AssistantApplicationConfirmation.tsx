@@ -7,7 +7,7 @@ import "./AssistantAppToolCard.css";
 export function AssistantApplicationConfirmation({ result, busy, onDecision }: {
   result: AppToolResult; busy: boolean; onDecision: (confirmed: boolean) => void;
 }) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const question = applicationTrashQuestion(result);
   if (!question) return null;
   const { plan, bundle } = question;
@@ -19,7 +19,7 @@ export function AssistantApplicationConfirmation({ result, busy, onDecision }: {
     <p>{t(bundle
       ? "앱 본체만 이동합니다. 설정과 문서는 남깁니다. 전용 제거 프로그램이 필요하면 아니오를 선택하세요."
       : "표시한 관련 데이터만 이동합니다. 환경설정이 초기화될 수 있습니다.")}</p>
-    {plan.warnings.length ? <details><summary>{t("주의사항")}</summary><ul>{plan.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details> : null}
+    {plan.warnings.length ? <details><summary>{t("주의사항")}</summary><ul>{plan.warnings.map((warning, index) => <li key={index}>{appText(warning)}</li>)}</ul></details> : null}
     <p>{t("실행 직전 대상 변경 여부를 다시 검사합니다. 휴지통에서 복원을 시도할 수 있습니다.")}</p>
     {busy ? <p role="status">{t("대상을 다시 확인하고 처리 중…")}</p> : null}
     <footer className="assistant-trash-question-actions">

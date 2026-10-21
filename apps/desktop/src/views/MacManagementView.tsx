@@ -23,7 +23,7 @@ const settingIcons: Record<string, LucideIcon> = {
 };
 
 export function MacManagementView() {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const tr = (key: MessageKey) => t(key);
   const [snapshot, setSnapshot] = useState<MacSettingsSnapshot | null>(null);
   const [drafts, setDrafts] = useState<Record<string, boolean>>({});
@@ -186,7 +186,7 @@ export function MacManagementView() {
       {busy ? <><RefreshCw size={16} aria-hidden="true" /><span>{busy === "refresh" ? tr("설정 상태를 읽고 있습니다. Mac 설정은 변경하지 않습니다.") : tr("설정 처리 중… 다른 변경은 완료 후 진행할 수 있습니다.")}</span></> : notice ? <><CheckCircle2 size={17} aria-hidden="true" /><span>{tr(notice)}</span></> : null}
     </div>
 
-    {error ? <div className="mac-management-error" role="alert"><AlertTriangle size={20} aria-hidden="true" /><div><strong>{tr("설정을 확인하거나 처리하지 못했습니다.")}</strong><p>{error}</p><p>{tr("현재 값이 달라졌을 수 있습니다. 상태를 새로 확인한 뒤 다시 선택하세요.")}</p></div></div> : null}
+    {error ? <div className="mac-management-error" role="alert"><AlertTriangle size={20} aria-hidden="true" /><div><strong>{tr("설정을 확인하거나 처리하지 못했습니다.")}</strong><p>{appText(error)}</p><p>{tr("현재 값이 달라졌을 수 있습니다. 상태를 새로 확인한 뒤 다시 선택하세요.")}</p></div></div> : null}
 
     {snapshot && !snapshot.supported ? <section className="mac-management-unsupported"><Info size={22} aria-hidden="true" /><div><h2>{tr("이 운영체제에서는 Finder 설정을 지원하지 않습니다.")}</h2><p>{tr("시스템 성능·앱 관리·공간 정리는 해당 운영체제 기능으로 이용할 수 있습니다.")}</p></div></section> : null}
 
@@ -198,7 +198,7 @@ export function MacManagementView() {
       <p className="mac-management-null-note">{tr("저장값 없음은 꺼짐이 아닙니다.")}</p>
     </div> : null}
 
-    {snapshot?.warnings.length ? <section className="mac-management-warnings" aria-labelledby="mac-warnings-title"><h2 id="mac-warnings-title"><AlertTriangle size={17} aria-hidden="true" />{tr("확인할 사항")} ({snapshot.warnings.length})</h2><ul>{snapshot.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></section> : null}
+    {snapshot?.warnings.length ? <section className="mac-management-warnings" aria-labelledby="mac-warnings-title"><h2 id="mac-warnings-title"><AlertTriangle size={17} aria-hidden="true" />{tr("확인할 사항")} ({snapshot.warnings.length})</h2><ul>{snapshot.warnings.map((warning, index) => <li key={index}>{appText(warning)}</li>)}</ul></section> : null}
 
     {snapshot?.supported ? <section className="mac-management-history" aria-labelledby="mac-history-title">
       <div className="mac-management-section-heading"><h2 id="mac-history-title" ref={historyHeading} tabIndex={-1}><History size={18} aria-hidden="true" />{tr("설정 변경 기록")}</h2><span>{tr("이 앱에서 변경한 항목만 표시합니다.")}</span></div>

@@ -39,27 +39,28 @@ export interface FileChangeReviewPanelProps {
   isAvailable?: boolean;
 }
 
+type ReviewNotice = { key: MessageKey; detail?: string };
+
 export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChangeReviewPanelProps = {}) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const available = isAvailable ?? isTauri();
   const id = useId();
   const [page, setPage] = useState<FileChangeReviewPage | null>(null);
   const [query, setQuery] = useState<FileChangeReviewQuery>({ offset: 0, filter: "review_needed" });
   const [loading, setLoading] = useState(available);
-  const [working, setWorking] = useState<string | null>(null);
+  const [working, setWorking] = useState<MessageKey | null>(null);
   const [showWorking, setShowWorking] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [announcement, setAnnouncement] = useState("");
+  const [failure, setFailure] = useState<ReviewNotice | null>(null);
+  const [announcement, setAnnouncement] = useState<ReviewNotice | null>(null);
   const [retry, setRetry] = useState(0);
   const mounted = useRef(false);
   const operation = useRef(false);
   const queryRef = useRef(query);
   const pageRef = useRef(page);
   const loaderRef = useRef<ReturnType<typeof createFileChangeReviewPageLoader> | null>(null);
-  const tRef = useRef(t);
   queryRef.current = query;
   pageRef.current = page;
-  tRef.current = t;
+  const renderNotice = (notice: ReviewNotice) => t(notice.key, { detail: notice.detail ? appText(notice.detail) : "" });
 
   function accept(next: FileChangeReviewPage) {
     if (!mounted.current || (pageRef.current && next.status.revision < pageRef.current.status.revision)) return;
@@ -92,7 +93,7 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
           const next = await loaderRef.current?.load(queryRef.current);
           if (!disposed && next) accept(next);
         } catch {
-          if (!disposed) setFailure(tRef.current("변경 파일 검토 상태를 불러오지 못했습니다. 다시 확인하세요."));
+          if (!disposed) setFailure({ key: "변경 파일 검토 상태를 불러오지 못했습니다. 다시 확인하세요." });
         } finally {
           if (!disposed) setLoading(false);
         }
@@ -109,27 +110,27 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
     return () => window.clearTimeout(timer);
   }, [loading, working]);
 
-  async function perform(label: string, action: () => Promise<unknown>, complete: string | (() => string)) {
+  async function perform(label: MessageKey, action: () => Promise<unknown>, complete: MessageKey | (() => MessageKey)) {
     if (!available || operation.current || !loaderRef.current) return;
     operation.current = true;
     const loader = loaderRef.current;
     loader.invalidate();
     setWorking(label);
     setFailure(null);
-    setAnnouncement(label);
+    setAnnouncement({ key: label });
     try {
       await action();
       const next = await loader.load(queryRef.current);
       if (!mounted.current || loader !== loaderRef.current) return;
       if (next) {
         accept(next);
-        setAnnouncement(next.status.error ? t("설정과 검사 상태를 확인하세요. {{detail}}", { detail: next.status.error })
-          : typeof complete === "function" ? complete() : complete);
+        setAnnouncement(next.status.error ? { key: "설정과 검사 상태를 확인하세요. {{detail}}", detail: next.status.error }
+          : { key: typeof complete === "function" ? complete() : complete });
       }
     } catch (reason) {
       if (!mounted.current || loader !== loaderRef.current) return;
       const detail = typeof reason === "string" ? reason : reason instanceof Error ? reason.message : "";
-      const message = t("변경 파일 검토 작업을 완료하지 못했습니다. 다시 확인하세요. {{detail}}", { detail: detail.slice(0, 400) });
+      const message: ReviewNotice = { key: "변경 파일 검토 작업을 완료하지 못했습니다. 다시 확인하세요. {{detail}}", detail: detail.slice(0, 400) };
       setFailure(message);
       setAnnouncement(message);
       // A rejected response does not establish the actual native configuration.
@@ -149,12 +150,12 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
   const translateLabel = (message: string) => t(message as MessageKey);
 
   function changeConfig(next: FileChangeReviewConfig) {
-    void perform(t("검토 설정 저장 중…"), () => api.setConfig(next), t("변경 파일 검토 설정을 저장했습니다."));
+    void perform("검토 설정 저장 중…", () => api.setConfig(next), "변경 파일 검토 설정을 저장했습니다.");
   }
 
   function chooseFolder() {
     let selected = false;
-    void perform(t("폴더 선택 중…"), async () => {
+    void perform("폴더 선택 중…", async () => {
       const root = await api.pickFolder();
       if (root && config) {
         queryRef.current = { ...queryRef.current, offset: 0 };
@@ -162,12 +163,12 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
         await api.setConfig({ ...config, root });
         selected = true;
       }
-    }, () => selected ? t("대상 폴더를 저장했습니다.") : t("폴더 선택을 취소했습니다."));
+    }, () => selected ? "대상 폴더를 저장했습니다." : "폴더 선택을 취소했습니다.");
   }
 
   function changeDisposition(entryId: string, reviewState: FileChangeReviewState) {
-    void perform(t("검토 상태 저장 중…"), () => api.setDisposition(entryId, reviewState),
-      reviewState === "skipped" ? t("이 변경 기록을 넘겼습니다. 안전 판정은 아닙니다.") : t("이 변경 기록을 다시 검토 목록에 넣었습니다."));
+    void perform("검토 상태 저장 중…", () => api.setDisposition(entryId, reviewState),
+      reviewState === "skipped" ? "이 변경 기록을 넘겼습니다. 안전 판정은 아닙니다." : "이 변경 기록을 다시 검토 목록에 넣었습니다.");
   }
 
   function changeFilter(filter: FileChangeReviewFilter) {
@@ -206,14 +207,14 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
         {[5, 15, 30].map((minutes) => <option key={minutes} value={minutes}>{t("{{minutes}}분", { minutes })}</option>)}
       </select>
       <button type="button" className="primary-button" disabled={disabled || !config?.enabled || !config.root || checking || status?.phase === "busy"}
-        onClick={() => void perform(t("변경 확인 요청 중…"), api.checkNow, t("변경 확인을 요청했습니다."))}>
+        onClick={() => void perform("변경 확인 요청 중…", api.checkNow, "변경 확인을 요청했습니다.")}>
         <RefreshCw size={16} aria-hidden="true" />{t("지금 확인")}
       </button>
     </div>
     {!available ? <p className="file-change-review__notice">{t("변경 파일 검토는 설치한 데스크톱 앱에서 사용할 수 있습니다.")}</p> : null}
-    {showWorking ? <p className="file-change-review__notice">{working ?? t("검토 상태 확인 중…")}</p> : null}
-    {failure ? <div className="file-change-review__error"><AlertTriangle size={18} aria-hidden="true" /><div><p>{failure}</p>
-      <button type="button" className="secondary-button" disabled={Boolean(working)} onClick={() => { setAnnouncement(t("검토 상태를 다시 확인합니다.")); setRetry((value) => value + 1); }}>{t("다시 확인")}</button>
+    {showWorking ? <p className="file-change-review__notice">{t(working ?? "검토 상태 확인 중…")}</p> : null}
+    {failure ? <div className="file-change-review__error"><AlertTriangle size={18} aria-hidden="true" /><div><p>{renderNotice(failure)}</p>
+      <button type="button" className="secondary-button" disabled={Boolean(working)} onClick={() => { setAnnouncement({ key: "검토 상태를 다시 확인합니다." }); setRetry((value) => value + 1); }}>{t("다시 확인")}</button>
     </div></div> : null}
     {status ? <>
       <dl className="file-change-review__status">
@@ -227,7 +228,7 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
       {status.phase === "busy" ? <p className="file-change-review__notice">{t("다른 검사가 진행 중입니다. 자원을 나눠 쓰지 않고 다음 주기에 다시 시도합니다.")}</p> : null}
       {status.phase === "incomplete" || status.phase === "error" || status.error ? <div className="file-change-review__error"><AlertTriangle size={18} aria-hidden="true" /><div>
         <strong>{t("검사 미완료")}</strong><p>{t("이전 완전 검사 결과를 유지합니다. 더 작은 로컬 폴더를 선택하거나 다시 확인하세요.")}</p>
-        {status.error ? <p className="file-change-review__detail">{status.error}</p> : null}
+        {status.error ? <p className="file-change-review__detail">{appText(status.error)}</p> : null}
       </div></div> : null}
       <div className="file-change-review__toolbar">
         <div className="file-change-review__filters" role="group" aria-label={t("변경 기록 필터")}>
@@ -269,6 +270,6 @@ export function FileChangeReviewPanel({ api = nativeApi, isAvailable }: FileChan
       <p>{t("검사당 10,000개 항목·경로 4 MiB·8초, 최근 기록 250개·1 MiB로 제한합니다. 한 번에 20개 기록을 표시합니다.")}</p>
       <p>{t("클라우드 전용 항목이나 읽을 수 없는 경로가 포함되면 검사가 미완료될 수 있습니다.")}</p>
     </details>
-    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement ? renderNotice(announcement) : ""}</span>
   </section>;
 }

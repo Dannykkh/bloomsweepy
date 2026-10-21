@@ -122,7 +122,7 @@ function createViewHarness(read = () => Promise.resolve(snapshot()), open = (id:
     };
     if (id === "react/jsx-runtime") return require(id);
     if (id === "lucide-react") return new Proxy({}, { get: () => () => null });
-    if (id === "../i18n") return { useLanguage: () => ({ t: (key: string, params?: Record<string, unknown>) => key.replace(/\{\{(\w+)\}\}/g, (_match, name) => String(params?.[name] ?? name)) }) };
+    if (id === "../i18n") return { useLanguage: () => ({ appText: (text: string) => text, t: (key: string, params?: Record<string, unknown>) => key.replace(/\{\{(\w+)\}\}/g, (_match, name) => String(params?.[name] ?? name)) }) };
     if (id === "../lib/format") return { formatDate: String };
     if (id === "../lib/windowsSettings") return {
       ...settings,

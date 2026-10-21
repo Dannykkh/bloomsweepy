@@ -33,7 +33,7 @@ const targetCopy: Record<WindowsSettingsTargetId, MessageKey> = {
 };
 
 export function WindowsManagementView({ onNavigate }: Props) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const [snapshot, setSnapshot] = useState<WindowsSettingsSnapshot | null>(null);
   const [busy, setBusy] = useState<string | null>("refresh");
   const [error, setError] = useState<string | null>(null);
@@ -160,7 +160,7 @@ export function WindowsManagementView({ onNavigate }: Props) {
       {busy ? <><RefreshCw size={17} aria-hidden="true" /><span>{busy === "refresh" ? t("Windows 설정값을 읽고 있습니다. 변경하지 않습니다.") : t("설정 화면 열기를 요청하고 있습니다.")}</span></> : notice ? <><CheckCircle2 size={17} aria-hidden="true" /><span>{t(notice)}</span></> : null}
     </div>
 
-    {error ? <div className="windows-management-error" role="alert"><AlertTriangle size={20} aria-hidden="true" /><div><strong>{t("Windows 설정을 확인하거나 열지 못했습니다.")}</strong><p>{error}</p>{stale ? <p>{t("표시된 값은 이전 조회 결과입니다. 상태를 새로 확인하세요.")}</p> : null}</div></div> : null}
+    {error ? <div className="windows-management-error" role="alert"><AlertTriangle size={20} aria-hidden="true" /><div><strong>{t("Windows 설정을 확인하거나 열지 못했습니다.")}</strong><p>{appText(error)}</p>{stale ? <p>{t("표시된 값은 이전 조회 결과입니다. 상태를 새로 확인하세요.")}</p> : null}</div></div> : null}
 
     {snapshot && !snapshot.supported ? <section className="windows-management-unsupported"><Info size={22} aria-hidden="true" /><div><h3>{t("이 운영체제에서는 Windows 설정을 지원하지 않습니다.")}</h3><p>{t("Mac에서는 맥 설정을 이용하세요. 다른 관리 기능은 해당 운영체제 기능으로 제공됩니다.")}</p></div></section> : null}
 
@@ -184,7 +184,7 @@ export function WindowsManagementView({ onNavigate }: Props) {
       </details>
     </> : null}
 
-    {snapshot?.warnings.length ? <details className="windows-management-warnings"><summary><AlertTriangle size={17} aria-hidden="true" />{t("확인할 사항")} ({snapshot.warnings.length})</summary><ul>{snapshot.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details> : null}
+    {snapshot?.warnings.length ? <details className="windows-management-warnings"><summary><AlertTriangle size={17} aria-hidden="true" />{t("확인할 사항")} ({snapshot.warnings.length})</summary><ul>{snapshot.warnings.map((warning, index) => <li key={index}>{appText(warning)}</li>)}</ul></details> : null}
 
     {onNavigate ? <section className="windows-management-connections" aria-label={t("다른 관리 기능")}><h3>{t("상태와 저장공간 관리")}</h3><div>{([{ view: "performance", label: "시스템 성능", icon: Activity }, { view: "applications", label: "앱 관리", icon: FolderCog }, { view: "cleanup", label: "공간 정리", icon: HardDrive }] as const).map(({ view, label, icon: Icon }) => <button type="button" className="windows-management-target" key={view} onClick={() => onNavigate(view)}><Icon size={20} aria-hidden="true" /><span>{t(label)}</span><ArrowUpRight size={17} aria-hidden="true" /></button>)}</div></section> : null}
   </div>;

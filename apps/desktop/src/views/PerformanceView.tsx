@@ -34,22 +34,24 @@ import type {
   TerminationPreview,
   TerminationPreviewOutcome,
 } from "../types";
-import { useLanguage, type Translate } from "../i18n";
+import { useLanguage, type MessageKey, type MessageValues, type Translate } from "../i18n";
+
+type PerformanceNotice = { key: MessageKey; values?: MessageValues };
 
 export function PerformanceView() {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const monitor = usePerformanceMonitor();
   const [sort, setSort] = useState<PerformanceSort>("cpu");
   const [preparingTargetId, setPreparingTargetId] = useState<string | null>(null);
   const [preview, setPreview] = useState<TerminationPreview | null>(null);
   const [terminationBusy, setTerminationBusy] = useState(false);
-  const [dialogError, setDialogError] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [dialogError, setDialogError] = useState<PerformanceNotice | null>(null);
+  const [actionMessage, setActionMessage] = useState<PerformanceNotice | null>(null);
+  const [actionError, setActionError] = useState<PerformanceNotice | null>(null);
   const [memoryCleanupBusy, setMemoryCleanupBusy] = useState(false);
   const [memoryCleanupResult, setMemoryCleanupResult] = useState<AppMemoryCleanupResult | null>(null);
-  const [memoryCleanupError, setMemoryCleanupError] = useState<string | null>(null);
-  const [refreshAnnouncement, setRefreshAnnouncement] = useState("");
+  const [memoryCleanupError, setMemoryCleanupError] = useState<PerformanceNotice | null>(null);
+  const [refreshAnnouncement, setRefreshAnnouncement] = useState<MessageKey | null>(null);
   const returnFocusRef = useRef<HTMLButtonElement | null>(null);
   const refreshButtonRef = useRef<HTMLButtonElement | null>(null);
   const wasRefreshingRef = useRef(false);
@@ -59,15 +61,19 @@ export function PerformanceView() {
     () => sortPerformanceProcesses(snapshot?.processes ?? [], sort),
     [snapshot?.processes, sort],
   );
+  const renderNotice = (notice: PerformanceNotice) => {
+    const values = notice.values;
+    return t(notice.key, values?.detail === undefined ? values : { ...values, detail: appText(String(values.detail)) });
+  };
 
   useEffect(() => {
     if (monitor.refreshing) {
-      setRefreshAnnouncement("");
+      setRefreshAnnouncement(null);
     } else if (wasRefreshingRef.current && !monitor.error) {
-      setRefreshAnnouncement(t("성능 상태를 새로 고쳤습니다."));
+      setRefreshAnnouncement("성능 상태를 새로 고쳤습니다.");
     }
     wasRefreshingRef.current = monitor.refreshing;
-  }, [monitor.error, monitor.refreshing, t]);
+  }, [monitor.error, monitor.refreshing]);
 
   async function prepareTermination(
     event: MouseEvent<HTMLButtonElement>,
@@ -87,11 +93,11 @@ export function PerformanceView() {
         setDialogError(null);
         setPreview(response.preview);
       } else {
-        setActionError(previewOutcomeMessage(response.outcome, t));
+        setActionError(previewOutcomeMessage(response.outcome));
         void monitor.refresh();
       }
     } catch (reason) {
-      setActionError(performanceActionError(reason, t));
+      setActionError(performanceActionError(reason));
     } finally {
       setPreparingTargetId(null);
     }
@@ -108,12 +114,12 @@ export function PerformanceView() {
         await monitor.refresh();
         setMemoryCleanupResult(result);
       } else if (result.outcome === "busy") {
-        setMemoryCleanupError(t("메모리 정리가 이미 진행 중입니다."));
+        setMemoryCleanupError({ key: "메모리 정리가 이미 진행 중입니다." });
       } else {
-        setMemoryCleanupError(t("이 플랫폼에서는 BroomSweepy 메모리 정리를 지원하지 않습니다."));
+        setMemoryCleanupError({ key: "이 플랫폼에서는 BroomSweepy 메모리 정리를 지원하지 않습니다." });
       }
     } catch (reason) {
-      setMemoryCleanupError(memoryCleanupActionError(reason, t));
+      setMemoryCleanupError(memoryCleanupActionError(reason));
     } finally {
       setMemoryCleanupBusy(false);
     }
@@ -131,7 +137,6 @@ export function PerformanceView() {
       const message = terminationOutcomeMessage(
         result.outcome,
         result.displayName ?? preview.displayName,
-        t,
       );
       setPreview(null);
       setDialogError(null);
@@ -140,7 +145,7 @@ export function PerformanceView() {
       await monitor.refresh();
       restoreDialogFocus();
     } catch (reason) {
-      setDialogError(performanceActionError(reason, t));
+      setDialogError(performanceActionError(reason));
     } finally {
       setTerminationBusy(false);
     }
@@ -187,7 +192,7 @@ export function PerformanceView() {
         </button>
       </section>
       <span className="sr-only" role="status" aria-live="polite">
-        {refreshAnnouncement}
+        {refreshAnnouncement ? t(refreshAnnouncement) : ""}
       </span>
 
       {monitor.error && !snapshot ? (
@@ -195,7 +200,7 @@ export function PerformanceView() {
           <AlertTriangle size={20} aria-hidden="true" />
           <div>
             <strong>{t("성능 상태를 확인하지 못했습니다")}</strong>
-            <p>{monitor.error}</p>
+            <p>{appText(monitor.error)}</p>
           </div>
           <button className="secondary-button" type="button" onClick={() => void monitor.refresh()}>
             {t("다시 시도")}
@@ -313,7 +318,7 @@ export function PerformanceView() {
                 {memoryCleanupError ? (
                   <p className="performance-memory-cleaner__result is-error" role="alert">
                     <AlertTriangle size={17} aria-hidden="true" />
-                    {memoryCleanupError}
+                    {renderNotice(memoryCleanupError)}
                   </p>
                 ) : null}
 
@@ -358,12 +363,12 @@ export function PerformanceView() {
 
             {actionMessage ? (
               <p className="performance-action-message" role="status">
-                <CheckCircle2 size={16} aria-hidden="true" />{actionMessage}
+                <CheckCircle2 size={16} aria-hidden="true" />{renderNotice(actionMessage)}
               </p>
             ) : null}
             {actionError ? (
               <p className="performance-action-error" role="alert">
-                <AlertTriangle size={16} aria-hidden="true" />{actionError}
+                <AlertTriangle size={16} aria-hidden="true" />{renderNotice(actionError)}
               </p>
             ) : null}
 
@@ -415,7 +420,7 @@ export function PerformanceView() {
       <ProcessTerminationDialog
         preview={preview}
         busy={terminationBusy}
-        error={dialogError}
+        error={dialogError ? renderNotice(dialogError) : null}
         onConfirm={() => void executeTermination()}
         onClose={closeDialog}
       />
@@ -498,47 +503,46 @@ function processStatus(process: PerformanceProcessUsage, t: Translate): string {
   }
 }
 
-function previewOutcomeMessage(outcome: TerminationPreviewOutcome, t: Translate): string {
+function previewOutcomeMessage(outcome: TerminationPreviewOutcome): PerformanceNotice {
   switch (outcome) {
     case "staleSnapshot":
-      return t("측정값이 오래되어 종료하지 않았습니다. 목록을 새로 고쳐 주세요.");
+      return { key: "측정값이 오래되어 종료하지 않았습니다. 목록을 새로 고쳐 주세요." };
     case "staleTarget":
-      return t("앱 대상이 바뀌어 종료하지 않았습니다. 목록을 새로 고쳐 주세요.");
+      return { key: "앱 대상이 바뀌어 종료하지 않았습니다. 목록을 새로 고쳐 주세요." };
     case "protectedTarget":
-      return t("보호된 앱은 종료할 수 없습니다.");
+      return { key: "보호된 앱은 종료할 수 없습니다." };
     case "unsupported":
-      return t("이 플랫폼에서는 앱 종료 요청을 지원하지 않습니다.");
+      return { key: "이 플랫폼에서는 앱 종료 요청을 지원하지 않습니다." };
     default:
-      return t("종료 확인을 준비하지 못했습니다.");
+      return { key: "종료 확인을 준비하지 못했습니다." };
   }
 }
 
 function terminationOutcomeMessage(
   outcome: TerminationOutcome,
   displayName: string,
-  t: Translate,
-): string {
+): PerformanceNotice {
   switch (outcome) {
     case "terminated":
-      return t("{{name}}이 종료됐습니다.", { name: displayName });
+      return { key: "{{name}}이 종료됐습니다.", values: { name: displayName } };
     case "requestSent":
-      return t("{{name}}에 정상 종료 요청을 보냈습니다. 저장 확인 창이 열려 있을 수 있습니다.", { name: displayName });
+      return { key: "{{name}}에 정상 종료 요청을 보냈습니다. 저장 확인 창이 열려 있을 수 있습니다.", values: { name: displayName } };
     case "requestRejected":
-      return t("{{name}}이 종료 요청을 받지 않았습니다.", { name: displayName });
+      return { key: "{{name}}이 종료 요청을 받지 않았습니다.", values: { name: displayName } };
     case "alreadyExited":
-      return t("앱이 이미 종료됐습니다.");
+      return { key: "앱이 이미 종료됐습니다." };
     case "staleTarget":
-      return t("앱 대상이 바뀌어 종료하지 않았습니다. 목록을 새로 고쳐 주세요.");
+      return { key: "앱 대상이 바뀌어 종료하지 않았습니다. 목록을 새로 고쳐 주세요." };
     case "protectedTarget":
-      return t("보호된 앱은 종료할 수 없습니다.");
+      return { key: "보호된 앱은 종료할 수 없습니다." };
     case "previewExpired":
-      return t("종료 확인이 만료됐습니다. 다시 선택해 주세요.");
+      return { key: "종료 확인이 만료됐습니다. 다시 선택해 주세요." };
     case "previewAlreadyUsed":
-      return t("이미 사용한 종료 확인입니다.");
+      return { key: "이미 사용한 종료 확인입니다." };
     case "acknowledgementRequired":
-      return t("저장하지 않은 작업 위험 확인이 필요합니다.");
+      return { key: "저장하지 않은 작업 위험 확인이 필요합니다." };
     case "unsupported":
-      return t("이 플랫폼에서는 앱 종료 요청을 지원하지 않습니다.");
+      return { key: "이 플랫폼에서는 앱 종료 요청을 지원하지 않습니다." };
   }
 }
 
@@ -546,13 +550,13 @@ function isTerminationFailure(outcome: TerminationOutcome): boolean {
   return outcome !== "terminated" && outcome !== "requestSent" && outcome !== "alreadyExited";
 }
 
-function performanceActionError(reason: unknown, t: Translate): string {
+function performanceActionError(reason: unknown): PerformanceNotice {
   const detail = reason instanceof Error
     ? reason.message
     : typeof reason === "string"
       ? reason
-      : t("알 수 없는 오류가 발생했습니다");
-  return t("성능 작업을 완료하지 못했습니다. {{detail}}", { detail });
+      : "알 수 없는 오류가 발생했습니다";
+  return { key: "성능 작업을 완료하지 못했습니다. {{detail}}", values: { detail } };
 }
 
 function memoryCleanupResultMessage(
@@ -567,11 +571,11 @@ function memoryCleanupResultMessage(
   return t("메모리 정리를 완료했습니다. 현재 반환 가능한 자체 메모리는 없습니다.");
 }
 
-function memoryCleanupActionError(reason: unknown, t: Translate): string {
+function memoryCleanupActionError(reason: unknown): PerformanceNotice {
   const detail = reason instanceof Error
     ? reason.message
     : typeof reason === "string"
       ? reason
-      : t("알 수 없는 오류가 발생했습니다");
-  return t("메모리 정리를 완료하지 못했습니다. {{detail}}", { detail });
+      : "알 수 없는 오류가 발생했습니다";
+  return { key: "메모리 정리를 완료하지 못했습니다. {{detail}}", values: { detail } };
 }

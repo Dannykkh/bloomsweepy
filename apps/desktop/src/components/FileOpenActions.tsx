@@ -1,10 +1,11 @@
 import { ExternalLink, FolderOpen, MapPin } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useLanguage } from "../i18n";
+import { useLanguage, type MessageKey } from "../i18n";
 import { createInspectionGate, inspectFile, revealFile, type FileInspectionOutcome } from "../lib/fileInspectionBridge";
 import "./FileOpenActions.css";
 
 type InspectionAction = "open" | "reveal";
+type InspectionNotice = { key: MessageKey; name: string; detail?: string };
 
 export function useFileInspectionActions({
   inspect = inspectFile,
@@ -15,13 +16,13 @@ export function useFileInspectionActions({
   reveal?: (path: string) => Promise<void>;
   scopeKey?: unknown;
 } = {}) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const gate = useRef(createInspectionGate());
   const mounted = useRef(true);
   const scopeRevision = useRef(0);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<InspectionNotice | null>(null);
+  const [error, setError] = useState<InspectionNotice | null>(null);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -42,28 +43,37 @@ export function useFileInspectionActions({
         const outcome = action === "reveal"
           ? (await reveal(path), "revealed")
           : await inspect(path);
-        if (mounted.current && revision === scopeRevision.current) setMessage(action === "reveal"
-          ? t("{{name}} 위치를 파일 탐색기에서 표시했습니다.", { name })
-          : outcome === "opened"
-            ? t("{{name}} 열기를 운영체제에 요청했습니다.", { name })
-            : t("{{name}}은 직접 열지 않고 파일 탐색기에서 위치만 표시했습니다.", { name }));
+        if (mounted.current && revision === scopeRevision.current) setMessage({
+          key: action === "reveal"
+            ? "{{name}} 위치를 파일 탐색기에서 표시했습니다."
+            : outcome === "opened"
+              ? "{{name}} 열기를 운영체제에 요청했습니다."
+              : "{{name}}은 직접 열지 않고 파일 탐색기에서 위치만 표시했습니다.",
+          name,
+        });
       } catch (reason) {
-        if (mounted.current && revision === scopeRevision.current) setError(t("{{name}} 열기 요청을 완료하지 못했습니다: {{detail}}", {
+        if (mounted.current && revision === scopeRevision.current) setError({
+          key: "{{name}} 열기 요청을 완료하지 못했습니다: {{detail}}",
           name,
           detail: reason instanceof Error ? reason.message : String(reason),
-        }));
+        });
       } finally {
         if (mounted.current) setBusy(false);
       }
     });
   }
 
-  return { run, busy, message, error };
+  const renderNotice = (notice: InspectionNotice | null) => notice ? t(notice.key, {
+    name: notice.name,
+    detail: notice.detail ? appText(notice.detail) : "",
+  }) : null;
+  return { run, busy, message: renderNotice(message), error: renderNotice(error) };
 }
 
 export function FileInspectionStatus({ message, error }: { message: string | null; error: string | null }) {
-  if (error) return <p className="file-open-status is-error" role="alert">{error}</p>;
-  if (message) return <p className="file-open-status" role="status">{message}</p>;
+  const { appText } = useLanguage();
+  if (error) return <p className="file-open-status is-error" role="alert">{appText(error)}</p>;
+  if (message) return <p className="file-open-status" role="status">{appText(message)}</p>;
   return null;
 }
 

@@ -9,7 +9,7 @@ interface TrashResultPanelProps {
 }
 
 export function TrashResultPanel({ result, onRescan }: TrashResultPanelProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const failed = result.items.filter((item) => item.status === "failed");
   const skipped = result.items.filter((item) => item.status === "skipped");
   const hasWarning = failed.length > 0 || skipped.length > 0 || !result.journalComplete;
@@ -44,7 +44,7 @@ export function TrashResultPanel({ result, onRescan }: TrashResultPanelProps) {
         <div className="trash-result__failures">
           <strong>{t("확인이 필요한 항목")}</strong>
           {failed.slice(0, 8).map((item) => (
-            <p key={item.path}><span title={item.path}>{item.path}</span><small>{item.message}</small></p>
+            <p key={item.path}><span title={item.path}>{item.path}</span><small>{item.message ? appText(item.message) : null}</small></p>
           ))}
         </div>
       ) : null}

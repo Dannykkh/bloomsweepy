@@ -9,6 +9,7 @@ import {
 } from "react";
 import { setFormattingLanguage } from "../lib/format";
 import { setApplicationLanguage } from "../lib/bridge";
+import { localizeAppText } from "../lib/localizeAppText";
 import {
   LANGUAGE_STORAGE_KEY,
   normalizeLanguagePreference,
@@ -1817,12 +1818,21 @@ export type Translate = (message: MessageKey, values?: MessageValues) => string;
 const japaneseMessages = japaneseCatalog as Record<MessageKey, string>;
 const chineseMessages = simplifiedChineseCatalog as Record<MessageKey, string>;
 
+// Only app-owned notices use this reverse lookup, never user data or chat text.
+const appMessageKeys = new Map<string, MessageKey>();
+for (const key of Object.keys(englishMessages) as MessageKey[]) {
+  for (const value of [key, englishMessages[key], japaneseMessages[key], chineseMessages[key]]) {
+    if (value && !appMessageKeys.has(value)) appMessageKeys.set(value, key);
+  }
+}
+
 interface LanguageContextValue {
   preference: LanguagePreference;
   language: ResolvedLanguage;
   storageError: boolean;
   setPreference: (preference: LanguagePreference) => void;
   t: (message: MessageKey, values?: MessageValues) => string;
+  appText: (message: string) => string;
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
@@ -1882,9 +1892,14 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
     [language],
   );
 
+  const appText = useCallback((message: string) => {
+    const key = appMessageKeys.get(message);
+    return key ? t(key) : localizeAppText(language, message);
+  }, [language, t]);
+
   const value = useMemo(
-    () => ({ preference, language, storageError, setPreference, t }),
-    [language, preference, setPreference, storageError, t],
+    () => ({ preference, language, storageError, setPreference, t, appText }),
+    [language, preference, setPreference, storageError, t, appText],
   );
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

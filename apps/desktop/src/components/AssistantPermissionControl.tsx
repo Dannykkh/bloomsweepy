@@ -24,7 +24,7 @@ export function AssistantPermissionControl({
   error,
   available = true,
 }: AssistantPermissionControlProps) {
-  const { t } = useLanguage();
+  const { t, appText } = useLanguage();
   const id = useId();
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -128,6 +128,6 @@ export function AssistantPermissionControl({
       </div>
       <p className="assistant-permission-control__scope">{t("영구 삭제·문서 내용 공개·OS 파일 접근·외부 MCP 권한은 별도입니다.")}</p>
     </div> : null}
-    {error ? <span id={`${id}-error`} className="assistant-permission-control__error" role="alert">{error}</span> : null}
+    {error ? <span id={`${id}-error`} className="assistant-permission-control__error" role="alert">{appText(error)}</span> : null}
   </div>;
 }
