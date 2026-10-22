@@ -13,7 +13,7 @@
 
 BroomSweepy is a project building a **conversational file management system** for Windows and macOS. Its goal is to make conversation the primary way to find files, scan folders, review candidates, refine conditions, confirm actions, and inspect results in one continuous workflow.
 
-**Rust + Tauri 2 + React is the primary project**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. The Swift source in `BroomSweepy/` remains a legacy reference implementation. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
+**Rust + Tauri 2 + React is the sole active application stack**, carrying forward the spacious cards, clear icons, and glass-inspired experience of the original SwiftUI app. Legacy Swift sources and the Xcode project are not part of the current working tree or build targets. Large-file analysis, verified duplicates, and document search run locally in Rust; existing browsing and scanning views remain usable without an AI connection. One installation supports English, Korean, Japanese, and Simplified Chinese; English is the first-run default. Change it under `Settings > Display language`.
 
 ## v1.8.1 — menu-bar and language patch · 2026-10-21
 
@@ -195,7 +195,8 @@ Requirements: Rust stable, Node.js 22+, and npm; WebView2 and MSVC Build Tools o
 - `apps/desktop/`: primary Tauri/React app
 - `crates/bloomsweepy-core/`: shared Rust analysis engine
 - `crates/bloomsweepy-control/`, `apps/bloomsweepy-mcp/`: local control protocol and CLI/MCP bridge
-- `BroomSweepy/`: legacy SwiftUI reference
+
+Historical Swift sources can be inspected or restored from the [preserved v1.8.1 tag](https://github.com/Dannykkh/bloomsweepy/tree/v1.8.1/BroomSweepy), rather than the current working tree.
 
 These features were implemented and partly checked in a local Apple Silicon development build. See the verification limits above. Windows installers are built in CI; native Windows runtime checks remain separate. Mac builds are ad-hoc signed and not Apple-notarized. See [Releases](https://github.com/Dannykkh/bloomsweepy/releases) for downloads and platform notes.
 

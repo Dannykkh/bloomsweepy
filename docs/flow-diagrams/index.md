@@ -7,11 +7,11 @@
 | 채팅 CLI 휴지통 검토 v3 | [cli-trash-review.mmd](cli-trash-review.mmd) | 현재 구현: MCP는 제한된 확인 계획만 요청하고 사용자가 앱에서 최종 확인하는 흐름 |
 | MCP 설치·연결 | [mcp-registration.mmd](mcp-registration.mmd) | 현재 구현: 설치 파일에 로컬 도구를 포함하고 Codex·Claude Code 공식 명령으로만 명시적 등록·해제 |
 | macOS 기능 정합화 | [macos-runtime-parity.mmd](macos-runtime-parity.mmd) | 메뉴 막대·알림 설정, 검토 전용 분기와 정리 후보→최종 확인→항목 동일성 재검사→휴지통 이동 흐름 |
-| macOS 빌드 검증 | [macos-build-verification.mmd](macos-build-verification.mmd) | Windows 사전 검사, macOS CI, Swift·Tauri 앱 빌드와 배포 서명 경계 |
+| macOS 빌드 검증 | [macos-build-verification.mmd](macos-build-verification.mmd) | Rust/Tauri 전용 CI·DMG, 별도 Windows CI와 수동 릴리스·미공증 경계 |
 | 데스크톱 상주 셸 | [desktop-resident-shell.mmd](desktop-resident-shell.mmd) | Windows 트레이 아이콘과 기존 macOS 메뉴 막대의 열기·숨기기·상태·종료 대응 |
 | 단순 용량 관리와 AI 도우미 분리 | [simple-storage-ai-helper-navigation.mmd](simple-storage-ai-helper-navigation.mmd) | 현재 구현: 3단계 용량 관리, 내부 결과 탭, 선택형 AI 도우미 |
 | 선택형 Docker 용량 관리 | [docker-cleanup-flow.mmd](docker-cleanup-flow.mmd) | 현재 구현: 기본 꺼짐, 조건부 전용 메뉴, 폴더 없는 Docker 대화, 앱 최종 확인, 고정된 비볼륨 정리 명령 |
-| macOS 정합화 검증표 | [macos-parity-verification.md](macos-parity-verification.md) | 세 도면의 구현 근거, 로컬 검증 결과와 실제 macOS에서 남은 확인 |
+| 과거 macOS 정합화 검증표 | [macos-parity-verification.md](macos-parity-verification.md) | 2026-09-01 Swift/Tauri 병행 시점 기록. 현재 Rust 전용 구현의 검증 결과가 아님 |
 
 ## 공통 경계
 

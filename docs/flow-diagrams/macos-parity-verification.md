@@ -1,5 +1,7 @@
 # macOS 기능 정합화 흐름 검증
 
+> 과거 기록: 아래 내용은 2026-09-01의 Swift/Tauri 병행 구현 기준이다. 2026-10-22부터 현재 Swift 소스와 빌드 경로는 제거했다. 과거 소스는 [v1.8.1 태그](https://github.com/Dannykkh/bloomsweepy/tree/v1.8.1/BroomSweepy)에 보존되며, 아래 행 번호·판정은 현재 Rust 기능 검증으로 전용하지 않는다. 현재 빌드 도면은 [macos-build-verification.mmd](macos-build-verification.mmd), 실제 릴리스·설치는 [v1.8.1 기록](../qa/release-1.8.1-verification.md)을 따른다.
+
 - 검증일: 2026-09-01
 - 대상 도면: `macos-runtime-parity.mmd`, `desktop-resident-shell.mmd`, `macos-build-verification.mmd`
 - 상태: `FULL`은 코드와 현재 환경의 검증 신호가 일치, `PARTIAL`은 구현됐지만 대상 운영체제 실행이 남음, `FUTURE`는 의도적으로 후속 범위

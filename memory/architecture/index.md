@@ -28,3 +28,4 @@
 - [024 — 읽을 수 있는 Glass](024-legible-status-glass.md): SUPERSEDED by025; Regular의 회색·무색·꼭짓점 소실을 사용자 지적으로 대체.
 - [025 — 컬러 유리 말풍선](025-colored-glass-bubble.md): background-only alpha0.82·full-opacity foreground·상단14pt beak·inactive 컬러 게이지, 실제 네이티브 미리보기 수락.
 - [026 — 렌더 시점 현지화](026-render-time-app-localization.md): 앱 소유 진단 appText·key+params 알림, 재조회 없는 언어 변경과 사용자 원문 보존.
+- [027 — Rust 전용 소스 트리](027-rust-only-source-tree.md): Swift 소스·CI 퇴역, 과거 태그·설계 기록·모든 Git 객체 보존.

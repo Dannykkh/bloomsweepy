@@ -24,7 +24,7 @@
 | cleanup-tree, child-exclusion, inherited-selection | [005](memory/architecture/005-cleanup-candidate-tree.md) |
 | claude-arm64, rosetta, startup-latency, macos-soak | [memory/gotchas.md](memory/gotchas.md) |
 | cloud-exclusion, jwalk, codex-common-flow, scan-safety | [memory/gotchas.md](memory/gotchas.md) |
-| release-1.6.0, release-1.6.1, release-1.7.0, screenshots, https-push, adhoc-dmg, tauri-config, windows-ci, private-api, stable-release, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
+| releases, https-push, adhoc-dmg, windows-ci, hdiutil-fallback, ci-artifacts | [memory/gotchas.md](memory/gotchas.md) |
 | native-glass, window-chrome | [007](memory/architecture/007-native-window-material.md) |
 | chat-workbench, timeline, retry | [008](memory/architecture/008-conversation-workbench.md) |
 | permissions, chat-access, webkit-popup | [009·010·015](memory/architecture/index.md) |
@@ -53,6 +53,7 @@
 | system-candidates, inline-size | [020](memory/architecture/020-system-candidate-width.md) |
 | macos-menu-bar, glass | [025](memory/architecture/025-colored-glass-bubble.md) |
 | i18n, app-text | [026](memory/architecture/026-render-time-app-localization.md) |
+| rust-only, swift-retirement | [027](memory/architecture/027-rust-only-source-tree.md) |
 
 ---
 
@@ -74,4 +75,4 @@
 ## meta/
 - **프로젝트**: BroomSweepy
 - **생성일**: 2026-09-04
-- **마지막 업데이트**: 2026-10-21
+- **마지막 업데이트**: 2026-10-22

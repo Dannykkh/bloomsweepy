@@ -13,7 +13,7 @@
 
 BroomSweepy는 Windows와 macOS용 **대화형 파일관리 시스템**을 만드는 프로젝트입니다. 대화를 주된 조작 방식으로 삼아, 파일 검색부터 검사·후보 검토·조건 조정·최종 확인·작업 결과 확인까지 한 흐름으로 이어가는 경험을 목표로 개발합니다.
 
-**Rust + Tauri 2 + React가 기본 프로젝트**이며, 기존 SwiftUI 앱의 시원한 카드·아이콘·글래스 UI 경험을 이어갑니다. `BroomSweepy/`의 Swift 소스는 레거시 참고 구현입니다. 큰 파일·검증된 중복 파일·문서 검색은 로컬 Rust 엔진으로 동작하며, 기존 탐색·검사 화면은 AI 연결 없이도 사용할 수 있습니다. 하나의 설치본에서 English·한국어·日本語·简体中文을 지원하며, 첫 실행 언어는 영어입니다. `Settings > Display language`에서 바꿀 수 있습니다.
+**현재 개발·빌드는 Rust + Tauri 2 + React로 통일**했으며, 기존 SwiftUI 앱의 시원한 카드·아이콘·글래스 UI 경험을 이어갑니다. 레거시 Swift 소스와 Xcode 프로젝트는 현재 작업 트리와 빌드 대상에 포함하지 않습니다. 큰 파일·검증된 중복 파일·문서 검색은 로컬 Rust 엔진으로 동작하며, 기존 탐색·검사 화면은 AI 연결 없이도 사용할 수 있습니다. 하나의 설치본에서 English·한국어·日本語·简体中文을 지원하며, 첫 실행 언어는 영어입니다. `Settings > Display language`에서 바꿀 수 있습니다.
 
 ## 15초 브랜드 필름
 
@@ -245,7 +245,8 @@ Rust stable, Node.js 22+, npm이 필요합니다. Windows는 WebView2와 MSVC Bu
 - `apps/desktop/`: 기본 Tauri/React 앱
 - `crates/bloomsweepy-core/`: 공용 Rust 분석 엔진
 - `crates/bloomsweepy-control/`, `apps/bloomsweepy-mcp/`: 로컬 제어 규격과 CLI/MCP 브리지
-- `BroomSweepy/`: 레거시 SwiftUI 참고 구현
+
+레거시 Swift 소스는 현재 작업 트리 대신 [보존된 v1.8.1 태그](https://github.com/Dannykkh/bloomsweepy/tree/v1.8.1/BroomSweepy)에서 참고하거나 복구할 수 있습니다.
 
 이번 기능은 Apple Silicon Mac 로컬 개발 빌드에서 구현과 일부 설치형 동작을 확인했습니다. 실제 검증 범위와 미검증 항목은 위 목록을 참고하세요. 최신 Windows 실행 검증은 별도이며 Windows 설치 파일은 Windows CI에서 빌드합니다. Mac 검증 빌드는 ad-hoc 서명이며 Apple 공증 완료를 의미하지 않습니다. 설치 파일과 플랫폼별 주의사항은 [릴리스](https://github.com/Dannykkh/bloomsweepy/releases)에서 확인하세요.
 

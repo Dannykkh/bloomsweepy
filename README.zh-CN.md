@@ -13,7 +13,7 @@
 
 BroomSweepy 是一个面向 Windows 和 macOS 的**对话式文件管理系统**开发项目。项目以对话为主要操作方式，目标是让文件搜索、扫描、候选项审核、条件调整、最终确认和结果查看在同一工作流程中连续完成。
 
-**Rust + Tauri 2 + React 是主项目**，延续了原 SwiftUI 应用宽敞的卡片、清晰的图标和玻璃质感界面。`BroomSweepy/` 中的 Swift 源码作为旧版参考实现保留。大文件分析、经过验证的重复文件和文档搜索由本地 Rust 引擎处理；现有的浏览与扫描界面无需连接 AI 也可使用。一个安装版本支持英语、韩语、日语和简体中文，首次启动默认英语，可在 `Settings > Display language` 中更改。
+**当前开发和构建统一使用 Rust + Tauri 2 + React**，延续了原 SwiftUI 应用宽敞的卡片、清晰的图标和玻璃质感界面。旧版 Swift 源码和 Xcode 项目不再包含在当前工作树或构建目标中。大文件分析、经过验证的重复文件和文档搜索由本地 Rust 引擎处理；现有的浏览与扫描界面无需连接 AI 也可使用。一个安装版本支持英语、韩语、日语和简体中文，首次启动默认英语，可在 `Settings > Display language` 中更改。
 
 ## v1.8.1 — 菜单栏与语言显示修复 · 2026-10-21
 
@@ -193,7 +193,8 @@ v1.8.0 对应源码中，LLM 选择发起性能、已安装应用、搜索、扫
 - `apps/desktop/`：主 Tauri/React 应用
 - `crates/bloomsweepy-core/`：共享 Rust 分析引擎
 - `crates/bloomsweepy-control/`、`apps/bloomsweepy-mcp/`：本地控制协议与 CLI/MCP 桥接
-- `BroomSweepy/`：旧版 SwiftUI 参考实现
+
+旧版 Swift 源码可从[保留的 v1.8.1 标签](https://github.com/Dannykkh/bloomsweepy/tree/v1.8.1/BroomSweepy)查看或恢复，不再位于当前工作树中。
 
 Apple Silicon Mac 本地开发构建的部分实测属于显示版本为 1.7.0 的验证历史，不能替代 v1.8.0 发布二进制的验证。当前源码自动回归范围及待验证项见上文。Windows 安装程序由 CI 构建，但不代表原生实机验证或本次 CI 已成功。此前的 Mac 验证构建采用 ad-hoc 签名，并非已经 Apple 公证。v1.8.0 构建、上传状态及平台注意事项请查看[发布页](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.0)。
 

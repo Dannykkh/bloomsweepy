@@ -10,7 +10,7 @@ config:
 flowchart TD
     Start([BroomSweepy 실행]) --> Platform{운영체제}
     Platform -->|Windows| Tray[시스템 트레이 아이콘 생성]
-    Platform -->|macOS 기존 Swift 앱| MenuBar[메뉴 막대 항목 생성]
+    Platform -->|macOS Rust/Tauri| MenuBar[네이티브 메뉴 막대 항목 생성]
 
     Tray --> WinStatus[트레이 메뉴에 검사 상태 표시]
     MenuBar --> MacStatus[메모리·CPU·디스크 상태 표시]
@@ -22,7 +22,7 @@ flowchart TD
     WinAction -->|종료| Shutdown[실행 중 작업 취소 요청과 제어 서버 종료]
 
     MacStatus --> MacAction{사용자 동작}
-    MacAction -->|BroomSweepy 열기| ShowMac[기존 창 표시 또는 새 창 열기]
+    MacAction -->|BroomSweepy 열기| ShowMac[기존 메인 창 복원]
     MacAction -->|창 닫기| KeepResident[메뉴 막대에서 계속 실행]
     KeepResident --> MacStatus
     MacAction -->|종료| Shutdown

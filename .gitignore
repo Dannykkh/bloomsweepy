@@ -39,5 +39,5 @@ build/
 # Windows
 Thumbs.db
 
-# Generated (xcodegen recreates)
+# Retired Swift project output (historical tags retain its sources)
 BroomSweepy.xcodeproj/

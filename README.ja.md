@@ -13,7 +13,7 @@
 
 BroomSweepyは、WindowsとmacOS向けの**対話型ファイル管理システム**を開発するプロジェクトです。会話を主な操作方法として、ファイル検索からスキャン、候補の検討、条件の調整、最終確認、実行結果の確認までを一つの流れで進められる体験を目指しています。
 
-**Rust + Tauri 2 + Reactがメインプロジェクト**となり、従来のSwiftUIアプリの広々としたカード、分かりやすいアイコン、ガラス調のUIを受け継ぎます。`BroomSweepy/`のSwiftソースは従来版の参考実装です。大容量ファイル、内容を検証した重複ファイル、文書検索はローカルのRustエンジンで処理し、既存の閲覧・スキャン画面はAI接続なしでも利用できます。1つのアプリで英語・韓国語・日本語・簡体字中国語に対応し、初回は英語で表示します。`Settings > Display language`で変更できます。
+**現行の開発・ビルドはRust + Tauri 2 + Reactに統一**し、従来のSwiftUIアプリの広々としたカード、分かりやすいアイコン、ガラス調のUIを受け継ぎます。旧SwiftソースとXcodeプロジェクトは、現在の作業ツリーやビルド対象に含めません。大容量ファイル、内容を検証した重複ファイル、文書検索はローカルのRustエンジンで処理し、既存の閲覧・スキャン画面はAI接続なしでも利用できます。1つのアプリで英語・韓国語・日本語・簡体字中国語に対応し、初回は英語で表示します。`Settings > Display language`で変更できます。
 
 ## v1.8.1 — メニューバーと言語表示の修正 · 2026-10-21
 
@@ -201,7 +201,8 @@ Rust stable、Node.js 22+、npmが必要です。WindowsではWebView2とMSVC Bu
 - `apps/desktop/`: メインのTauri/Reactアプリ
 - `crates/bloomsweepy-core/`: 共通Rust分析エンジン
 - `crates/bloomsweepy-control/`, `apps/bloomsweepy-mcp/`: ローカル制御規格とCLI/MCPブリッジ
-- `BroomSweepy/`: 従来のSwiftUI参考実装
+
+旧Swiftソースの参照・復元には、現在の作業ツリーではなく[保存済みのv1.8.1タグ](https://github.com/Dannykkh/bloomsweepy/tree/v1.8.1/BroomSweepy)を利用できます。
 
 Apple Silicon Macのローカル開発ビルドで行った一部の実測は、表示1.7.0の検証履歴です。v1.8.0の対象ソースの自動回帰と、配布バイナリの検証は区別します。検証範囲と未検証項目は上記を参照してください。WindowsインストーラーはCIで作成しますが、実機検証や今回のCI成功を意味しません。従来のMac検証ビルドはad-hoc署名で、Appleの公証済みではありません。v1.8.0のビルド・アップロードの状態と注意事項は[リリース](https://github.com/Dannykkh/bloomsweepy/releases/tag/v1.8.0)で確認してください。
 
